@@ -2,7 +2,7 @@
 
 Dernière mise à jour : 2026-09-06 (soir)
 
-## Phase actuelle : 1 · Fondations — T-001 en cours
+## Phase actuelle : 1 · Fondations — T-001 fait, T-002 en cours
 
 ### Fait (phase 0 terminée)
 - 4 rapports de recherche livrés (`research/01..04`, ~10 700 lignes) + tokens de design (`02b`).
@@ -16,11 +16,13 @@ Dernière mise à jour : 2026-09-06 (soir)
 - Repo GitHub : https://github.com/opmvpc/mini-disk
 
 ### En cours
-- T-001 : base/, build.bat, runner de tests, fenêtre noire < 8 KB (agent Opus, prompt `prompts/I-001`).
+- T-002 : fenêtre Win32 complète, événements, boucle à la demande, 0 % CPU (agent Opus, prompt `prompts/I-002`).
+
+### Fait en phase 1
+- T-001 livré et reviewé : `base/`, `build.bat` (7 cibles), 125 checks, exe release **7 168 octets**, imports kernel32+user32. Voir P-003 (TLS sans CRT).
 
 ### Prochain pas
-1. Review de T-001 (grille ADR-012 §review), mesure taille, CI verte, commit.
-2. T-002 (fenêtre Win32 complète, 0 % CPU) puis T-003 (WGL + quad SDF).
+1. Review de T-002, puis T-003 (WGL + quad SDF).
 
 ### Action utilisateur requise
 - Zadig → WinUSB sur "Net MD Walkman" avant la phase 3.
@@ -28,5 +30,5 @@ Dernière mise à jour : 2026-09-06 (soir)
 ## KPI
 | Métrique | Valeur | Date |
 |----------|--------|------|
-| Taille exe release | 1 536 o (smoke, fenêtre vide) | 2026-09-06 |
+| Taille exe release | 7 168 o (T-001 : base + fenêtre noire) | 2026-09-06 |
 | Budget CI (`SIZE_BUDGET_KB`) | 100 KB (phase 1) | 2026-09-06 |

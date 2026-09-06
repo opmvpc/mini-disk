@@ -5,6 +5,8 @@ Checks: >
   performance-*,
   readability-misleading-indentation,
   -bugprone-easily-swappable-parameters,
-  -bugprone-narrowing-conversions
+  -bugprone-narrowing-conversions,
+  -bugprone-suspicious-include
 WarningsAsErrors: '*'
 HeaderFilterRegex: '^.*[\/]src[\/].*$'
+# bugprone-suspicious-include : le unity build (ADR-002) inclut volontairement les .c
