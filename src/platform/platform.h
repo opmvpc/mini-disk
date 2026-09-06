@@ -154,6 +154,54 @@ b32  os_event_next(OsEvent *out);   // 0 when the queue is empty
 void os_request_redraw(void);       // thread safe
 b32  os_redraw_requested(void);
 
+// --- fonts -----------------------------------------------------------------
+// The rasterizer is the system's (DirectWrite on Windows): no font is shipped
+// with the exe, and Unicode fallback is free (ADR-006). ui/ only sees this.
+typedef struct OsFont { u64 v; } OsFont;  // v == 0 : no such font
+
+typedef struct OsFontMetrics {
+    f32 ascent, descent;   // both positive, physical pixels
+    f32 line_gap;
+    f32 x_height, cap_height;
+    f32 digit_advance;     // widest of '0'..'9': the tabular figure cell
+} OsFontMetrics;
+
+// Placement of one rasterized glyph relative to the pen: the destination rect
+// is (floor(pen_x) + offset_x, baseline_y + offset_y, + width, + height).
+typedef struct OsGlyphMetrics {
+    f32 advance;
+    i32 offset_x, offset_y;
+    u32 width, height;
+} OsGlyphMetrics;
+
+// Coverage buffers handed to os_font_rasterize are this big, which no UI glyph
+// comes close to (a 32 px kanji is 34 x 34).
+#define OS_GLYPH_MAX_DIM 256
+
+b32  os_font_init(void);      // 0 when the system has no rasterizer at all
+void os_font_shutdown(void);
+
+// `size_px` is already scaled for the DPI and rounded by the caller.
+OsFont os_font_open(String8 family, f32 size_px, u32 weight);  // weight 100..900
+// Drops every open font, fallbacks included. A DPI change rebuilds them all,
+// so closing them one by one would leave the fallback faces behind.
+void os_font_close_all(void);
+u32    os_font_id(OsFont font);  // small dense id, meant for cache keys
+OsFontMetrics os_font_metrics(OsFont font);
+
+// Glyph for `codepoint`, resolved through the system fallback: `*out_font` is
+// the font that actually carries it, `font` itself for the common case. Returns
+// 0 (the tofu glyph) when nothing on the machine has it.
+u32 os_font_glyph_index(OsFont font, u32 codepoint, OsFont *out_font);
+f32 os_font_advance(OsFont font, u32 glyph);
+f32 os_font_kern(OsFont font, u32 left_glyph, u32 right_glyph);
+
+// Grayscale coverage, one byte per pixel, tightly packed (stride == width).
+// `subpixel_x` is the fractional pen position, in [0, 1). Returns 0 when the
+// glyph has no ink (space): the metrics are still filled in.
+b32 os_font_rasterize(OsFont font, u32 glyph, f32 subpixel_x, u8 *out, u64 out_capacity,
+                      OsGlyphMetrics *out_metrics);
+
 // --- clipboard and cursor --------------------------------------------------
 String8 os_clipboard_get(Arena *arena);   // size 0 when there is no text
 b32     os_clipboard_set(String8 text);

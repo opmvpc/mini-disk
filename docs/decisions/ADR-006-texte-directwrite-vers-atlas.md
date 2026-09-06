@@ -20,3 +20,9 @@ une police CJK coûte 4-8 MB, incompatible avec l'objectif < 1 MB.
 ## Alternatives rejetées
 - stb_truetype + Inter subsetée : ~25-40 KB pour le latin, mais le japonais est impossible sous 1 MB.
 - msdfgen/SDF : qualité médiocre aux petites tailles, coût atlas.
+
+## Amendement (T-005, 2026-09-06)
+`DWRITE_TEXTURE_ALIASED_1x1` ne fournit une texture que pour du texte crénelé ; on demande donc
+`CLEARTYPE_3x1` en `NATURAL_SYMMETRIC` et on moyenne les trois sous-échantillons en un octet de
+couverture (comme Skia/WebRender en mode grayscale). Fallback via `IDWriteFontFallback` (pas de liste
+codée en dur). Voir P-006.

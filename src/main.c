@@ -11,6 +11,8 @@
 #include "ui/r_atlas.h"
 #include "ui/r_raster.h"
 #include "ui/r_icons.h"
+#include "ui/ui_font.h"
+#include "ui/ui_text.h"
 
 #if BUILD_NO_CRT
 #include "base/base_crt_stubs.c"
@@ -24,6 +26,7 @@
 #include "platform/win32/win32_platform.c"
 #include "platform/win32/win32_window.c"
 #include "platform/win32/win32_gl.c"
+#include "platform/win32/win32_font_dwrite.c"
 
 #include "ui/gl_loader.c"
 #include "ui/r_atlas.c"
@@ -31,5 +34,7 @@
 #include "ui/r_icons.c"
 #include "ui/r_core.c"
 #include "ui/r_gl.c"
+#include "ui/ui_font.c"
+#include "ui/ui_text.c"
 
 #include "app/app.c"

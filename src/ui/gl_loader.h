@@ -137,6 +137,7 @@ typedef void(GL_CALL *GLDEBUGPROC)(GLenum source, GLenum type, GLuint id, GLenum
     X(void, glDeleteProgram, (GLuint program))                                                    \
     X(GLint, glGetUniformLocation, (GLuint program, const GLchar *name))                          \
     X(void, glUniform1i, (GLint location, GLint v0))                                              \
+    X(void, glUniform1f, (GLint location, GLfloat v0))                                            \
     X(void, glUniform2f, (GLint location, GLfloat v0, GLfloat v1))                                \
     X(void, glGetIntegerv, (GLenum name, GLint * params))                                         \
     X(const GLubyte *, glGetStringi, (GLenum name, GLuint index))                                 \

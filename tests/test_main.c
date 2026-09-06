@@ -11,6 +11,8 @@
 #include "../src/ui/r_atlas.h"
 #include "../src/ui/r_raster.h"
 #include "../src/ui/r_icons.h"
+#include "../src/ui/ui_font.h"
+#include "../src/ui/ui_text.h"
 
 #include "../src/base/base_arena.c"
 #include "../src/base/base_string.c"
@@ -22,6 +24,9 @@
 #include "../src/ui/r_raster.c"
 #include "../src/ui/r_icons.c"
 #include "../src/ui/r_core.c"
+#include "../src/platform/win32/win32_font_dwrite.c"
+#include "../src/ui/ui_font.c"
+#include "../src/ui/ui_text.c"
 
 typedef struct TestState {
     Arena *arena;         // per test case arena, reset between cases
@@ -68,6 +73,7 @@ static void test_check(b32 condition, const char *expression, i32 line) {
 #include "test_base.c"
 #include "test_events.c"
 #include "test_render.c"
+#include "test_text.c"
 
 int main(void) {
     os_init();
@@ -77,6 +83,7 @@ int main(void) {
     test_base_run_all();
     test_events_run_all();
     test_render_run_all();
+    test_text_run_all();
 
     test_report("%llu case(s), %llu check(s), %llu failure(s)\n", test_state.cases,
                 test_state.checks, test_state.failures);

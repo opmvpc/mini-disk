@@ -2,7 +2,7 @@
 
 Dernière mise à jour : 2026-09-06 (soir)
 
-## Phase actuelle : 1 · Fondations — T-001..T-004 faits, T-005 en cours
+## Phase actuelle : 1 · Fondations — T-001..T-005 faits
 
 ### Fait (phase 0 terminée)
 - 4 rapports de recherche livrés (`research/01..04`, ~10 700 lignes) + tokens de design (`02b`).
@@ -16,9 +16,14 @@ Dernière mise à jour : 2026-09-06 (soir)
 - Repo GitHub : https://github.com/opmvpc/mini-disk
 
 ### En cours
-- T-005 : texte DirectWrite → atlas, cache de glyphes, japonais par fallback (agent Opus, prompt `prompts/I-005`).
+- Rien : T-005 attend sa review.
 
 ### Fait en phase 1 (suite)
+- T-005 livré et reviewé : DirectWrite → atlas R8, fallback système (japonais, katakana half-width), caches glyphes/mesure, ellipsis, chiffres tabulaires, 63 ns/glyphe à chaud, 1 143 checks, exe 54 272 o. P-006 (vtables COM en C).
+- T-005 livré : DirectWrite chargé dynamiquement (vtables COM à la main), fallback système par
+  `IDWriteFontFallback` (japonais et katakana demi-chasse), cache de glyphes (police, glyphe, quart
+  de pixel) et cache de mesure, ellipsis, chiffres tabulaires, gamma du texte dans le shader,
+  **1 143 checks**, exe 54 272 o, imports kernel32+user32, 46,9 ms de CPU sur 12 s au repos. P-006.
 - T-004 livré et reviewé : file de commandes, batches (texture, clip, 16k quads), VBO persistant triple-buffered + fences, atlas skyline, rastériseur à couverture exacte, 8 icônes, **8 draw calls pour 2 200 quads**, 1 080 checks, exe 45 568 o.
 
 ### Fait en phase 1
@@ -27,7 +32,7 @@ Dernière mise à jour : 2026-09-06 (soir)
 - T-001 livré et reviewé : `base/`, `build.bat` (7 cibles), 125 checks, exe release **7 168 octets**, imports kernel32+user32. Voir P-003 (TLS sans CRT).
 
 ### Prochain pas
-1. Review de T-005, puis T-006 (ui_core), T-007 (widgets), T-008 (jobs + overlay, fin de phase 1).
+1. Review de T-006, puis T-007 (widgets), T-008 (jobs + overlay, fin de phase 1).
 2. P-005 : identifier la source du CPU résiduel (0,5 %) avec l'overlay de T-008.
 
 ### Action utilisateur requise
@@ -36,5 +41,5 @@ Dernière mise à jour : 2026-09-06 (soir)
 ## KPI
 | Métrique | Valeur | Date |
 |----------|--------|------|
-| Taille exe release | 45 568 o (T-004 : batches + atlas + icônes) | 2026-09-06 |
+| Taille exe release | 54 272 o (T-005 : texte DirectWrite) | 2026-09-06 |
 | Budget CI (`SIZE_BUDGET_KB`) | 100 KB (phase 1) | 2026-09-06 |

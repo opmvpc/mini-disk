@@ -101,6 +101,7 @@ typedef struct R_GlState {
     GLuint atlas;
     GLint u_viewport;
     GLint u_atlas;
+    GLint u_text_gamma;
 
     b32 persistent;             // ARB_buffer_storage available
     R_Vertex *mapped;           // the whole buffer, R_GL_REGIONS regions
@@ -169,6 +170,7 @@ static b32 r_gl_build_program(void) {
     r_gl.program = program;
     r_gl.u_viewport = glGetUniformLocation(program, "u_viewport");
     r_gl.u_atlas = glGetUniformLocation(program, "u_atlas");
+    r_gl.u_text_gamma = glGetUniformLocation(program, "u_text_gamma");
     return 1;
 }
 
@@ -381,6 +383,7 @@ void r_backend_draw(const R_Frame *frame) {
         glUseProgram(r_gl.program);
         glUniform2f(r_gl.u_viewport, frame->viewport.x, frame->viewport.y);
         glUniform1i(r_gl.u_atlas, 0);
+        glUniform1f(r_gl.u_text_gamma, R_TEXT_GAMMA);
         glActiveTexture(GL_TEXTURE0);
         glBindVertexArray(r_gl.vao);
         glBindBuffer(GL_ARRAY_BUFFER, r_gl.vbo);

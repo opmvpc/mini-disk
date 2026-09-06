@@ -11,6 +11,8 @@
 #include "../src/ui/r_atlas.h"
 #include "../src/ui/r_raster.h"
 #include "../src/ui/r_icons.h"
+#include "../src/ui/ui_font.h"
+#include "../src/ui/ui_text.h"
 
 #include "../src/base/base_arena.c"
 #include "../src/base/base_string.c"
@@ -21,6 +23,9 @@
 #include "../src/ui/r_raster.c"
 #include "../src/ui/r_icons.c"
 #include "../src/ui/r_core.c"
+#include "../src/platform/win32/win32_font_dwrite.c"
+#include "../src/ui/ui_font.c"
+#include "../src/ui/ui_text.c"
 
 // The renderer benches measure r_core and r_atlas, not the driver: the back end
 // is a stub, exactly as in the tests.
@@ -157,6 +162,78 @@ static BenchResult bench_atlas_skyline(void) {
     return result;
 }
 
+// Warm glyph cache lookups: the cost the UI actually pays every frame once the
+// first one has rasterized everything. Each pass walks a mixed Latin and
+// Japanese line of 32 codepoints through the fallback map, the glyph cache and
+// the quad emission, and allocates nothing.
+static BenchResult bench_text_glyph_cache(void) {
+    u32 iterations = 20000;
+    Arena *text_arena = arena_alloc(MB(64));
+    r_atlas_init(text_arena);
+    if (!os_font_init() || !ui_fonts_build(1.0f)) {
+        os_debug_print(str8_lit("  text: no system font, bench skipped\n"));
+        BenchResult skipped;
+        skipped.name = "ui_text glyph cache (skipped)";
+        skipped.cycles = 0;
+        skipped.micros = 0;
+        skipped.bytes = 0;
+        return skipped;
+    }
+    ui_text_init(text_arena);
+    OsFont font = ui_font(UI_FontStyle_Ui);
+    // The Japanese part is spelled out in escapes so the source stays pure
+    // ASCII whatever code page the compiler assumes.
+    String8 line = str8_lit("Utada Hikaru - First Love \xE5\xAE\x87\xE5\xA4\x9A\xE7\x94\xB0");
+
+    // Warm up: after this every glyph, every variant and every fallback
+    // answer is cached, which is the steady state of a running UI.
+    Arena *warm_arena = arena_alloc(MB(16));
+    for (u32 i = 0; i < 2; i += 1) {
+        r_begin_frame(warm_arena, 1920.0f, 1080.0f, 1.0f);
+        ui_text_draw(font, line, v2(20.0f + 0.5f * (f32)i, 40.0f), 0xFFFFFFFFu, 0);
+        r_end_frame();
+        arena_clear(warm_arena);
+    }
+    arena_release(warm_arena);
+    UI_TextStats before = ui_text_stats();
+
+    // Drawing, not ui_text_width: a measurement of the same string twice is a
+    // hit in the string cache and would time a hash instead of the glyph path.
+    Arena *frame_arena = arena_alloc(MB(64));
+    u64 start_us = os_time_now_us();
+    u64 start_cycles = __rdtsc();
+    f32 total = 0.0f;
+    for (u32 i = 0; i < iterations; i += 1) {
+        r_begin_frame(frame_arena, 1920.0f, 1080.0f, 1.0f);
+        // A fractional x on every other pass, so both the aligned and the
+        // quarter pixel variants are exercised, exactly as scrolling does.
+        total += ui_text_draw(font, line, v2(20.0f + 0.5f * (f32)(i & 1), 40.0f), 0xFFFFFFFFu, 0);
+        r_end_frame();
+        arena_clear(frame_arena);
+    }
+    u64 end_cycles = __rdtsc();
+    u64 end_us = os_time_now_us();
+    UI_TextStats after = ui_text_stats();
+    AssertAlways(total > 0.0f);
+    AssertAlways(after.rasterizations == before.rasterizations);  // nothing new
+
+    u64 lookups = after.glyph_hits - before.glyph_hits;
+    ArenaTemp scratch = scratch_begin(0, 0);
+    os_debug_print(str8f(scratch.arena, "  text: %llu glyph lookups, %llu ns each\n", lookups,
+                         lookups ? ((end_us - start_us) * 1000 / lookups) : 0));
+    scratch_end(scratch);
+    os_font_shutdown();
+    arena_release(frame_arena);
+    arena_release(text_arena);
+
+    BenchResult result;
+    result.name = "ui_text glyph cache 20k lines";
+    result.cycles = end_cycles - start_cycles;
+    result.micros = end_us - start_us;
+    result.bytes = lookups;  // one "byte" per lookup: the MB/s column reads as M lookups/s
+    return result;
+}
+
 int main(void) {
     os_init();
     bench_arena = arena_alloc(GB(1));
@@ -164,5 +241,6 @@ int main(void) {
     bench_print(bench_mem_copy());
     bench_print(bench_batch_build());
     bench_print(bench_atlas_skyline());
+    bench_print(bench_text_glyph_cache());
     return 0;
 }

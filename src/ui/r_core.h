@@ -50,6 +50,10 @@ typedef struct R_Batch {
     Rect clip;  // screen pixels, top left origin
 } R_Batch;
 
+// Coverage exponent applied to the R8 atlas in the fragment shader. 1/1.2 is
+// the value that matches the system rendering of light text on dark panels.
+#define R_TEXT_GAMMA (1.0f / 1.2f)
+
 #define R_MAX_QUADS       32768  // per frame, sized with the VBO regions
 #define R_MAX_BATCH_QUADS 16384  // 65 536 vertices: the u16 index ceiling
 #define R_MAX_CLIP_DEPTH  32
