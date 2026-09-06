@@ -2,7 +2,7 @@
 
 Dernière mise à jour : 2026-09-07
 
-## Phase actuelle : 2 · Bibliothèque — T-009..T-012, T-015 faits, T-013 en cours
+## Phase actuelle : 2 · Bibliothèque — T-009..T-013, T-015 faits, T-014 en cours (dernier de la phase)
 
 ### Fait (phase 0 terminée)
 - 4 rapports de recherche livrés (`research/01..04`, ~10 700 lignes) + tokens de design (`02b`).
@@ -16,9 +16,25 @@ Dernière mise à jour : 2026-09-07
 - Repo GitHub : https://github.com/opmvpc/mini-disk
 
 ### En cours
-- T-013 : vue Bibliothèque complète (colonnes redimensionnables, états vide/scan/aucun résultat, app_state, prefs) (prompt `prompts/I-013`).
+- T-014 : drag & drop Explorateur (IDropTarget), pochettes WIC, panneau détail, fin de phase 2 (prompt `prompts/I-014`).
 
 ### Fait en phase 2
+- T-013 livré : vue Bibliothèque réelle (la démo factice de 100 000 pistes est supprimée) — huit colonnes
+  `#` / Titre / Artiste / Album / Durée / Format (badge codec + kHz) / Année / Ajouté, en-têtes triables
+  avec indicateur, largeurs redimensionnables à la poignée et **persistées**, largeurs calculées une fois
+  par frame et partagées par l'en-tête et les lignes (rien n'est jamais rogné ; sous 1024 dp les colonnes
+  partent dans l'ordre Ajouté → Année → Format → Album → Durée, research/02 §8.7), menu de visibilité au
+  clic droit sur l'en-tête, navigateur **Artiste | Album** repliable, **Ctrl+F** focalise la recherche et
+  **Échap** l'efface, compteur « N / total », liste **sans aucune copie** (les lignes lisent les `TrackId`
+  de `LibSearch` puis le SoA), sélection multiple, Ctrl+A, Entrée = ajout au plan, menu contextuel, états
+  **vide** (gros bouton + dépôt de dossier), **scan** (barre de progression de 2 dp) et **aucun résultat** ;
+  `app_state.{h,c}` sépare l'état de la boucle, `prefs.{h,c}` écrit `minidisk.prefs` (texte, écriture
+  atomique, mode portable) et `strings.h` porte les 48 chaînes FR/EN (ADR-011 D10). **P-008 résolu** : la
+  box conteneur des trois panneaux n'avait pas de clé, son `rect` était nul, et les splitters n'avaient
+  donc **jamais** borné — les trois panneaux tiennent maintenant jusqu'à **1024 × 640 logique**.
+  **Clic de tri sur 100 000 pistes : 36,45 ms**, recherche 4,06 ms, 7 cas de test ajoutés
+  (111 cas / 1 875 checks), **exe 207 872 o**, imports kernel32+user32, **46,9 à 78,1 ms de CPU sur 12 s au
+  repos**. Captures : `build/demo.png`, `build/demo_empty.png`.
 - T-012 livré : index triés par colonne (titre, artiste, album, durée, date d'ajout) en fusion stable
   sur des paires `(clé u64, id)`, clés normalisées (casse, accents repliés par deux tables plates de
   384 o couvrant latin-1 et latin ext-A, articles optionnels), navigateur **Artiste → Album** avec
@@ -108,15 +124,18 @@ Dernière mise à jour : 2026-09-07
 ## KPI — phase 2 en cours (même machine)
 | Métrique | Valeur | Cible | Date |
 |----------|--------|-------|------|
-| Taille exe release | **187 392 o**, marge 37 888 o sous la cible de T-012 | < 220 KB (CI 250 KB) | 2026-09-07 |
+| Taille exe release | **207 872 o**, marge 37 888 o sous la cible de T-013 | < 240 KB (CI 250 KB) | 2026-09-07 |
 | Scan bibliothèque | 50 000 fichiers / 500 dossiers : **168 ms à froid**, **63 ms à chaud** (7 workers) | < 2 s / < 300 ms | 2026-09-06 |
 | Mémoire bibliothèque | **74 o/piste** → 7,4 MB pour 100 000 pistes (hors chaînes), 0 allocation par piste | < 40 MB | 2026-09-06 |
 | Annulation du scan | < 100 ms (test) | < 100 ms | 2026-09-06 |
 | Lecture des tags | **2,13 µs/fichier** (parsing), 2 lectures de 64 Ko par fichier | < 3 s / 10 000 | 2026-09-06 |
 | Scan + tags, 50 000 fichiers | **2,38 s à froid**, **73 ms à chaud** (0 fichier ouvert au rescan) | < 3 s / 10 000 | 2026-09-06 |
 | Fuzz des parseurs | 22 vecteurs x 10 000 mutations, **0 crash, 0 rapport ASan** | 0 | 2026-09-06 |
-| Tests | **104 cas, 1 780 checks**, 0 échec (ASan) | verts | 2026-09-07 |
+| Tests | **111 cas, 1 875 checks**, 0 échec (ASan) | verts | 2026-09-07 |
 | Tri de la bibliothèque | 100 000 pistes par artiste : **22,8 ms** (fusion stable sur clés normalisées) | < 30 ms | 2026-09-07 |
 | Recherche incrémentale | « the » sur 100 000 pistes : **4,09 ms** ; raffinée « the b » : **0,978 ms**, 0 allocation | < 5 ms / < 1 ms | 2026-09-07 |
 | Cache `library.mdlib` | 100 000 pistes, fichier de 12,04 Mo : **chargé en 26,9 ms**, écrit en 53 ms | < 50 ms | 2026-09-07 |
-| CPU au repos, 12 s, après un scan | **15,6 ms** (78,1 / 62,5 / 15,6 sur 3 mesures) | 0 % | 2026-09-06 |
+| Clic de tri (en-tête), 100 000 pistes | **36,45 ms** : ordre construit + 100 000 ids réémis dans la liste | < 50 ms perçu | 2026-09-07 |
+| Trois panneaux visibles | jusqu'à **1024 × 640 logique** (biblio 597 px, plan 357, disque 300 à 125 %) | 1024 x 640 | 2026-09-07 |
+| Préférences | fichier de 789 o, aller-retour sérialisation + parsing en 13 µs, écriture atomique | — | 2026-09-07 |
+| CPU au repos, 12 s, après un scan | **46,9 et 78,1 ms** sur deux mesures, soit 0,4 à 0,65 % d'un cœur (0,05 à 0,08 % des 8 threads) — même résidu de thread pilote GL qu'en T-008 (P-005) | 0 % | 2026-09-07 |

@@ -30,7 +30,9 @@ REM --- common flags ----------------------------------------------------------
 REM  4201 anonymous struct/union (C11, used by V2)   4100 unused parameter
 REM  4189 unused local                               4505 unreferenced static function
 set WARN=/W4 /wd4201 /wd4189 /wd4100 /wd4505
-set COMMON=/nologo /std:c11 /Zi /Isrc /FC /diagnostics:column %WARN%
+REM  /utf-8 : les chaines UI de src/app/strings.h sont en UTF-8 dans la source et
+REM  doivent le rester dans l'executable (sinon MSVC les relit en codepage ANSI).
+set COMMON=/nologo /std:c11 /utf-8 /Zi /Isrc /FC /diagnostics:column %WARN%
 set DEFS=/DUNICODE /D_UNICODE /DWIN32_LEAN_AND_MEAN /DNOMINMAX
 set REL_CL=/DBUILD_DEBUG=0 /DBUILD_NO_CRT=1 /O2 /Oi /Gy /Gw /GS- /Gs9999999 /GR- /EHa- /GL
 set DBG_CL=/DBUILD_DEBUG=1 /DBUILD_NO_CRT=0 /Od /MTd /fsanitize=address

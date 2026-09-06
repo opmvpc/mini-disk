@@ -96,6 +96,10 @@ String8 os_known_folder(Arena *arena, OsKnownFolder folder);  // size 0 when unk
 // parses it; nothing below app/ ever looks at it.
 String8 os_command_line(Arena *arena);
 
+// The folder holding the exe, no trailing separator. Portable mode (ADR-010)
+// looks for its marker there and writes its files next to it.
+String8 os_exe_dir(Arena *arena);
+
 // --- time and threads ------------------------------------------------------
 u64 os_time_now_us(void);      // monotonic, microseconds
 void os_sleep_us(u64 us);
@@ -249,8 +253,25 @@ typedef struct OsWindow { u64 v; } OsWindow;
 
 #define OS_TIMEOUT_INFINITE U64_MAX
 
+// Created hidden: the caller restores the saved placement, draws its first
+// frame, then calls os_window_show. `width` and `height` are logical (dp).
 OsWindow os_window_create(String8 title, u32 width, u32 height);
+void     os_window_show(OsWindow window, b32 maximized);
 void     os_window_destroy(OsWindow window);
+
+// Restore rectangle and maximized state, the pair the preferences store: the
+// rectangle is the *restored* one even while the window is maximized, which is
+// what makes un-maximizing land back where the user left it.
+typedef struct OsWindowPlacement {
+    i32 x, y;
+    u32 width, height;  // physical pixels, outer rectangle
+    b32 maximized;
+} OsWindowPlacement;
+
+void os_window_get_placement(OsWindow window, OsWindowPlacement *out);
+// Moves the restored rectangle; does not show the window. Off screen positions
+// are pulled back onto the nearest monitor's work area.
+void os_window_set_placement(OsWindow window, const OsWindowPlacement *placement);
 V2       os_window_get_size(OsWindow window);      // client size, physical pixels
 f32      os_window_dpi_scale(OsWindow window);
 void     os_window_set_title(OsWindow window, String8 title);

@@ -629,13 +629,71 @@ OsWindow os_window_create(String8 title, u32 width, u32 height) {
     state->client_width = (u32)(client.right - client.left);
     state->client_height = (u32)(client.bottom - client.top);
 
-    ShowWindow(window, SW_SHOW);
     os_request_redraw();
 
     OsWindow result;
     result.v = (u64)window;
     return result;
 }
+
+// NOLINTBEGIN(performance-no-int-to-ptr) OsWindow carries the HWND as a u64,
+// which is the whole point of the opaque handle (platform.h).
+void os_window_show(OsWindow window, b32 maximized) {
+    ShowWindow((HWND)window.v, maximized ? SW_SHOWMAXIMIZED : SW_SHOW);
+    os_request_redraw();
+}
+
+void os_window_get_placement(OsWindow window, OsWindowPlacement *out) {
+    WINDOWPLACEMENT placement;
+    StructZero(&placement);
+    placement.length = sizeof(placement);
+    GetWindowPlacement((HWND)window.v, &placement);
+    RECT rect = placement.rcNormalPosition;
+    out->x = rect.left;
+    out->y = rect.top;
+    out->width = (u32)(rect.right - rect.left);
+    out->height = (u32)(rect.bottom - rect.top);
+    out->maximized = (placement.showCmd == SW_SHOWMAXIMIZED) ||
+                     (IsZoomed((HWND)window.v) ? 1 : 0);
+}
+
+void os_window_set_placement(OsWindow window, const OsWindowPlacement *placement) {
+    WINDOWPLACEMENT wp;
+    StructZero(&wp);
+    wp.length = sizeof(wp);
+    GetWindowPlacement((HWND)window.v, &wp);
+    RECT rect;
+    rect.left = placement->x;
+    rect.top = placement->y;
+    rect.right = placement->x + (LONG)placement->width;
+    rect.bottom = placement->y + (LONG)placement->height;
+    // A window larger than the screen it opens on is a window whose right hand
+    // panel nobody ever sees: the size is clamped to the work area, the
+    // position is left to Win32 (rcNormalPosition is pulled back on its own).
+    HMONITOR monitor = MonitorFromRect(&rect, MONITOR_DEFAULTTONEAREST);
+    MONITORINFO monitor_info;
+    StructZero(&monitor_info);
+    monitor_info.cbSize = sizeof(monitor_info);
+    if (GetMonitorInfoW(monitor, &monitor_info)) {
+        LONG max_width = monitor_info.rcWork.right - monitor_info.rcWork.left;
+        LONG max_height = monitor_info.rcWork.bottom - monitor_info.rcWork.top;
+        if (rect.right - rect.left > max_width) { rect.right = rect.left + max_width; }
+        if (rect.bottom - rect.top > max_height) { rect.bottom = rect.top + max_height; }
+    }
+    wp.rcNormalPosition = rect;
+    // Recording a rectangle must not show a window that is still hidden, nor
+    // hide one that is already up: the show state is left exactly as it is.
+    if (!IsWindowVisible((HWND)window.v)) { wp.showCmd = SW_HIDE; }
+    // Win32 clamps rcNormalPosition to the nearest monitor's work area for us,
+    // so a window saved on a screen that is gone comes back on a screen we have.
+    SetWindowPlacement((HWND)window.v, &wp);
+    RECT client;
+    GetClientRect((HWND)window.v, &client);
+    win32_window_state.client_width = (u32)(client.right - client.left);
+    win32_window_state.client_height = (u32)(client.bottom - client.top);
+}
+
+// NOLINTEND(performance-no-int-to-ptr)
 
 void os_window_destroy(OsWindow window) {
     Win32WindowState *state = &win32_window_state;

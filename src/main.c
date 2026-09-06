@@ -25,6 +25,9 @@
 #include "ui/ui_core.h"
 #include "ui/ui_widgets.h"
 #include "ui/ui_debug_overlay.h"
+#include "app/strings.h"
+#include "app/prefs.h"
+#include "app/app_state.h"
 
 #if BUILD_NO_CRT
 #include "base/base_crt_stubs.c"
@@ -69,4 +72,7 @@
 #include "ui/ui_widgets.c"
 #include "ui/ui_debug_overlay.c"
 
+#include "app/prefs.c"
+#include "app/app_state.c"
+#include "app/view_library.c"
 #include "app/app.c"

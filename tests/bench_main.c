@@ -14,6 +14,7 @@
 #include "../src/core/library/lib_index.h"
 #include "../src/core/library/lib_search.h"
 #include "../src/core/library/lib_cache.h"
+#include "../src/app/prefs.h"
 #include "../src/ui/r_core.h"
 #include "../src/ui/r_backend.h"
 #include "../src/ui/r_atlas.h"
@@ -52,6 +53,7 @@
 #include "../src/core/library/lib_index.c"
 #include "../src/core/library/lib_search.c"
 #include "../src/core/library/lib_cache.c"
+#include "../src/app/prefs.c"
 
 // The renderer benches measure r_core and r_atlas, not the driver: the back end
 // is a stub, exactly as in the tests.
@@ -984,6 +986,77 @@ static BenchResult bench_library_cache(void) {
     return result;
 }
 
+
+// --- T-013 ------------------------------------------------------------------
+// What a click on a column header really costs: the order is built for a column
+// nobody asked for yet, then the whole library is emitted into the buffer the
+// list reads. This is the "< 50 ms perceived" of the ticket, end to end.
+static BenchResult bench_view_sort_click(void) {
+    u64 best_us = U64_MAX;
+    u64 best_cycles = 0;
+    u32 rows = 0;
+    for (u32 pass = 0; pass < 3; pass += 1) {
+        lib_index_build(&bench_index, &bench_library, bench_index_arena, 1);
+        lib_search_invalidate(&bench_search);
+        lib_search_set_filter(&bench_search, LIB_FILTER_ANY, LIB_FILTER_ANY);
+        u64 start_cycles = __rdtsc();
+        u64 start_us = os_time_now_us();
+        lib_search_set_order(&bench_search, LibSort_Album, 1);
+        lib_search_run(&bench_search, &bench_index, str8(0, 0));
+        u64 end_us = os_time_now_us();
+        u64 end_cycles = __rdtsc();
+        rows = bench_search.result_count;
+        if (end_us - start_us < best_us) {
+            best_us = end_us - start_us;
+            best_cycles = end_cycles - start_cycles;
+        }
+    }
+    AssertAlways(rows == BENCH_LIB_COUNT);
+    bench_line("sort click 100k, descending, list rebound (target < 50 ms)", best_us, best_cycles,
+               rows, "rows");
+
+    BenchResult result;
+    result.name = "library sort click 100k";
+    result.cycles = best_cycles;
+    result.micros = best_us;
+    result.bytes = (u64)BENCH_LIB_COUNT * LIB_BYTES_PER_TRACK;
+    return result;
+}
+
+// The preferences are read once at start up and written once at exit, so this
+// only has to be far away from anything a user could notice.
+static BenchResult bench_prefs_round_trip(void) {
+    u32 iterations = 20000;
+    Prefs prefs;
+    prefs_defaults(&prefs);
+    prefs_add_folder(&prefs, str8_lit("C:\music"));
+    prefs_add_folder(&prefs, str8_lit("D:\archives\flac"));
+    ArenaTemp scratch = scratch_begin(0, 0);
+    u64 bytes = 0;
+    u64 start_cycles = __rdtsc();
+    u64 start_us = os_time_now_us();
+    for (u32 i = 0; i < iterations; i += 1) {
+        ArenaTemp inner = arena_temp_begin(scratch.arena);
+        String8 text = prefs_serialize(scratch.arena, &prefs);
+        Prefs read;
+        AssertAlways(prefs_parse(&read, text) && read.folder_count == 2);
+        bytes += text.size;
+        arena_temp_end(inner);
+    }
+    u64 end_us = os_time_now_us();
+    u64 end_cycles = __rdtsc();
+    scratch_end(scratch);
+    bench_line("prefs serialize + parse", (end_us - start_us) / iterations, 0, bytes / iterations,
+               "bytes per file");
+
+    BenchResult result;
+    result.name = "prefs round trip x20000";
+    result.cycles = end_cycles - start_cycles;
+    result.micros = end_us - start_us;
+    result.bytes = bytes;
+    return result;
+}
+
 int main(void) {
     os_init();
     bench_arena = arena_alloc(GB(1));
@@ -1003,5 +1076,7 @@ int main(void) {
     bench_print(bench_index_search());
     bench_print(bench_index_search_refined());
     bench_print(bench_library_cache());
+    bench_print(bench_view_sort_click());
+    bench_print(bench_prefs_round_trip());
     return 0;
 }

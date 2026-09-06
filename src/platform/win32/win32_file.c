@@ -263,3 +263,19 @@ String8 os_known_folder(Arena *arena, OsKnownFolder folder) {
     }
     return result;
 }
+
+// The folder the exe sits in, without the trailing separator: where the
+// portable mode looks for its marker and writes its files (ADR-010).
+String8 os_exe_dir(Arena *arena) {
+    WCHAR buffer[OS_PATH_MAX];
+    DWORD size = GetModuleFileNameW(0, buffer, OS_PATH_MAX);
+    if (size == 0 || size >= OS_PATH_MAX) { return str8(0, 0); }
+    String16 text;
+    text.str = (u16 *)buffer;
+    text.size = size;
+    ArenaTemp scratch = scratch_begin(&arena, 1);
+    String8 path = str8_from_str16(scratch.arena, text);
+    String8 result = str8_copy(arena, os_path_parent(path));
+    scratch_end(scratch);
+    return result;
+}

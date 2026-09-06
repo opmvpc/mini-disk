@@ -1,0 +1,655 @@
+// view_library.c - the library panel: a search field, a collapsible
+// Artist | Album browser, a header row whose columns sort and resize, and a
+// virtualized list bound to the sorted index (T-013, research/02 s8.3, s10).
+//
+// The list holds no data of its own. `app_rows()` is the search's own buffer of
+// track ids, in the current sort order; a row reads the fields it draws out of
+// the SoA and forgets them. 100 000 rows therefore cost the ids and the thirty
+// boxes that are on screen.
+#include "app_state.h"
+
+// --- cells, shared by the three panels ---------------------------------------
+static String8 app_duration(u32 seconds) {
+    return str8f(ui_frame_arena(), "%u:%02u", seconds / 60, seconds % 60);
+}
+
+md_inline f32 app_cell_padding(void) { return ui_dp(ui_theme()->space[UI_Space_8]); }
+
+// One cell of a row: a single box, whatever the alignment.
+static void app_cell(UI_Size width, String8 text, u32 color, u32 text_flags, UI_TextAlign align) {
+    UI_PrefWidth(width)
+    UI_PrefHeight(ui_pct(1.0f, 1.0f))
+    UI_TextColor(color)
+    UI_TextFlags(text_flags)
+    UI_TextAlign((u32)align)
+    UI_TextPadding(app_cell_padding()) {
+        UI_Box *box = ui_build_box_from_key(UI_DrawText, 0);
+        box->display_string = text;
+    }
+}
+
+// Durations, indices, years and counters: right aligned, tabular figures, so
+// the digits line up down the column (research/02 s10.3).
+static void app_cell_number(f32 width, String8 text, u32 color) {
+    app_cell(ui_px(width, 1.0f), text, color, UI_TextFlag_TabularNumbers, UI_TextAlign_Right);
+}
+
+// A panel: a titled column with its own background.
+static UI_Box *app_panel_begin(String8 id, UI_Size width, String8 title, String8 subtitle) {
+    const UI_Theme *theme = ui_theme();
+    UI_Box *panel = 0;
+    UI_PrefWidth(width)
+    UI_PrefHeight(ui_pct(1.0f, 1.0f))
+    UI_ChildLayoutAxis(Axis2_Y)
+    UI_BgColor(theme->panel) {
+        panel = ui_build_box(UI_DrawBackground | UI_Clip, id);
+    }
+    ui_push_parent(panel);
+
+    UI_PrefWidth(ui_pct(1.0f, 0.0f))
+    UI_PrefHeight(ui_px(ui_dp(theme->row_comfortable), 1.0f))
+    UI_ChildLayoutAxis(Axis2_X) {
+        UI_Box *header = ui_build_box_from_key(0, 0);
+        UI_Parent(header) UI_TextPadding(ui_dp(theme->space[UI_Space_12])) {
+            ui_label_styled(UI_FontStyle_Emphasis, theme->fg_primary, title);
+            ui_spacer(ui_pct(1.0f, 0.0f));
+            ui_label_styled(UI_FontStyle_Caption, theme->fg_muted, subtitle);
+        }
+    }
+    ui_separator();
+    return panel;
+}
+
+md_inline void app_panel_end(void) { ui_pop_parent(); }
+
+// --- the column model ---------------------------------------------------------
+StaticAssert(Str_ColumnTitle == Str_ColumnIndex + AppColumn_Title, app_column_strings_aligned);
+StaticAssert(Str_ColumnAdded == Str_ColumnIndex + AppColumn_Added, app_column_strings_complete);
+
+#define APP_COLUMN_NOT_SORTABLE U32_MAX
+
+static u32 app_column_sort(AppColumn column) {
+    switch (column) {
+        case AppColumn_Title:    return LibSort_Title;
+        case AppColumn_Artist:   return LibSort_Artist;
+        case AppColumn_Album:    return LibSort_Album;
+        case AppColumn_Duration: return LibSort_Duration;
+        case AppColumn_Added:    return LibSort_Added;
+        default:                 return APP_COLUMN_NOT_SORTABLE;
+    }
+}
+
+// Title takes whatever is left; every other column is the width the user gave
+// it. That is why only the others carry a resize grip.
+md_inline b32 app_column_flexible(AppColumn column) { return column == AppColumn_Title; }
+
+md_inline UI_Size app_column_width(AppColumn column) {
+    return ui_px(app.column_px[column], 1.0f);
+}
+
+md_inline UI_TextAlign app_column_align(AppColumn column) {
+    b32 right = (column == AppColumn_Index || column == AppColumn_Duration ||
+                 column == AppColumn_Year || column == AppColumn_Added);
+    return right ? UI_TextAlign_Right : UI_TextAlign_Left;
+}
+
+// The column drawn at `slot` of the header row; AppColumn_COUNT when the
+// preferences left that slot empty, which prefs_parse already made impossible.
+static AppColumn app_column_at(u32 slot) {
+    for (u32 i = 0; i < AppColumn_COUNT; i += 1) {
+        if (app.prefs.columns[i].order == slot) { return (AppColumn)i; }
+    }
+    return AppColumn_COUNT;
+}
+
+// A title narrower than this says nothing, so it is the one width the panel
+// refuses to give away.
+#define APP_TITLE_MIN_DP 120.0f
+
+// When the panel is too narrow for every column, columns leave in this order.
+// It is the reverse of how much they say about a track, and it is what
+// research/02 s8.7 asks for (Album goes first under 1400 px). The preferences
+// are not touched: this is the panel being narrow, not the user hiding a column.
+static const AppColumn app_column_drop_order[] = {
+    AppColumn_Added, AppColumn_Year, AppColumn_Format, AppColumn_Album, AppColumn_Duration,
+    AppColumn_Index,
+};
+
+// What each column really gets this frame. The widths the user dragged are used
+// as they are while the panel is wide enough for them; when it is not, columns
+// are dropped from the right of that list, and only then does the rest shrink.
+static void app_columns_measure(f32 panel_width) {
+    f32 available = max_f32(panel_width - ui_dp(ui_theme()->scrollbar_width), 0.0f);
+    f32 title_min = ui_dp(APP_TITLE_MIN_DP);
+    f32 fixed = 0.0f;
+    for (u32 i = 0; i < AppColumn_COUNT; i += 1) {
+        b32 counts = app.prefs.columns[i].visible && !app_column_flexible((AppColumn)i);
+        app.column_px[i] = counts ? ui_dp(app.prefs.columns[i].width) : 0.0f;
+        fixed += app.column_px[i];
+    }
+    for (u32 i = 0; i < ArrayCount(app_column_drop_order) && available - fixed < title_min;
+         i += 1) {
+        AppColumn column = app_column_drop_order[i];
+        fixed -= app.column_px[column];
+        app.column_px[column] = 0.0f;
+    }
+    f32 title = available - fixed;
+    if (title < title_min && fixed > 0.0f) {
+        f32 factor = max_f32(available - title_min, 0.0f) / fixed;
+        for (u32 i = 0; i < AppColumn_COUNT; i += 1) { app.column_px[i] *= factor; }
+        title = title_min;
+    }
+    app.column_px[AppColumn_Title] = title;
+}
+
+// One header: clickable when the index can sort on it, and carrying a grip on
+// its right edge that drags its width. The width lands in the preferences, so
+// it is still there at the next launch.
+static void app_column_header(AppColumn column) {
+    const UI_Theme *theme = ui_theme();
+    u32 sort = app_column_sort(column);
+    b32 sortable = app.index_ready && sort != APP_COLUMN_NOT_SORTABLE;
+    b32 active = sortable && app.prefs.sort_column == sort;
+    String8 label = app_str((Str)(Str_ColumnIndex + column));
+    if (active) {
+        label = str8f(ui_frame_arena(), "%S %s", label,
+                      app.prefs.sort_desc ? "\xE2\x96\xBE" : "\xE2\x96\xB4");
+    }
+
+    UI_Box *box = 0;
+    UI_Font(ui_font(UI_FontStyle_Caption))
+    UI_PrefWidth(app_column_width(column))
+    UI_PrefHeight(ui_pct(1.0f, 1.0f))
+    UI_TextColor(active ? theme->fg_primary : theme->fg_disabled)
+    UI_TextAlign((u32)app_column_align(column))
+    UI_TextPadding(app_cell_padding()) {
+        box = ui_build_box(UI_DrawText | UI_Clickable,
+                           str8f(ui_frame_arena(), "###head%u", column));
+        box->display_string = label;
+    }
+    UI_Signal head = ui_signal(box);
+    if (sortable && head.clicked) { app_sort_by(sort); }
+    // Right click anywhere on the header row: which columns are shown.
+    if (head.right_clicked) { ui_context_menu_open(&app.header_menu, ui_mouse(), 0); }
+    if (app_column_flexible(column)) { return; }
+
+    // The grip floats over the right edge of the header, so the header row and
+    // the list rows keep exactly the same cell widths.
+    f32 grip = ui_dp(6.0f);
+    UI_Box *handle = 0;
+    UI_Parent(box)
+    UI_FixedX(rect_width(box->rect) - grip * 0.5f)
+    UI_FixedY(0.0f)
+    UI_PrefWidth(ui_px(grip, 1.0f))
+    UI_PrefHeight(ui_pct(1.0f, 1.0f))
+    UI_BgColor(theme->border_hover)
+    UI_CornerRadius(0.0f) {
+        handle = ui_build_box(UI_Clickable | UI_FloatingX | UI_FloatingY,
+                              str8f(ui_frame_arena(), "###grip%u", column));
+    }
+    UI_Signal signal = ui_signal(handle);
+    if (signal.hovering || signal.dragging) {
+        ui_cursor_request(OsCursor_ResizeH);
+        handle->flags |= UI_DrawBackground;
+    }
+    if (signal.pressed) {
+        app.header_drag = (u32)column + 1;
+        app.header_drag_origin = app.prefs.columns[column].width;
+    }
+    if (signal.dragging && app.header_drag == (u32)column + 1) {
+        f32 width = app.header_drag_origin + signal.drag_delta.x / ui_dpi_scale();
+        app.prefs.columns[column].width = clamp_f32(width, PREFS_COLUMN_MIN, PREFS_COLUMN_MAX);
+        app.prefs_dirty = 1;
+    }
+    if (signal.double_clicked) { app.header_drag = 0; }
+}
+
+// --- one row of the list -------------------------------------------------------
+static const char *app_codec_names[LibCodec_COUNT] = {
+    "", "MP3", "FLAC", "WAV", "AIFF", "OGG", "M4A", "AAC", "ALAC", "WMA", "OPUS",
+};
+
+// A codec badge, "FLAC 44.1": the only place the row leaves the text baseline.
+static void app_cell_format(f32 width, u8 codec, u32 sample_rate) {
+    const UI_Theme *theme = ui_theme();
+    if (codec == (u8)LibCodec_Unknown) {
+        app_cell(ui_px(width, 1.0f), str8_lit(""), theme->fg_muted, 0, UI_TextAlign_Left);
+        return;
+    }
+    String8 text = (sample_rate != 0)
+                       ? str8f(ui_frame_arena(), "%s %u.%u", app_codec_names[codec],
+                               sample_rate / 1000, (sample_rate % 1000) / 100)
+                       : str8_cstr(app_codec_names[codec]);
+    f32 badge_height = ui_dp(15.0f);
+    f32 row_height = ui_dp(theme->row_compact);
+    UI_PrefWidth(ui_px(width, 1.0f))
+    UI_PrefHeight(ui_pct(1.0f, 1.0f)) {
+        UI_Box *cell = ui_build_box_from_key(0, 0);
+        UI_Parent(cell)
+        UI_Font(ui_font(UI_FontStyle_Caption))
+        UI_FixedX(ui_dp(theme->space[UI_Space_6]))
+        UI_FixedY(round_f32((row_height - badge_height) * 0.5f))
+        UI_PrefWidth(ui_px(width - ui_dp(theme->space[UI_Space_12]), 1.0f))
+        UI_PrefHeight(ui_px(badge_height, 1.0f))
+        UI_BgColor(theme->control)
+        UI_TextColor(theme->fg_secondary)
+        UI_TextAlign(UI_TextAlign_Center)
+        UI_TextPadding(0.0f)
+        UI_CornerRadius(ui_dp(3.0f)) {
+            UI_Box *badge = ui_build_box_from_key(
+                UI_FloatingX | UI_FloatingY | UI_DrawBackground | UI_DrawText, 0);
+            badge->display_string = text;
+        }
+    }
+}
+
+// Unix microseconds -> "2026-09-07". Civil calendar from days, no CRT, no table.
+static String8 app_date(u64 mtime_us) {
+    if (mtime_us == 0) { return str8_lit(""); }
+    i64 z = (i64)(mtime_us / 86400000000ull) + 719468;
+    i64 era = (z >= 0 ? z : z - 146096) / 146097;
+    i64 day_of_era = z - era * 146097;
+    i64 year_of_era =
+        (day_of_era - day_of_era / 1460 + day_of_era / 36524 - day_of_era / 146096) / 365;
+    i64 year = year_of_era + era * 400;
+    i64 day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    i64 mp = (5 * day_of_year + 2) / 153;
+    i64 day = day_of_year - (153 * mp + 2) / 5 + 1;
+    i64 month = mp + ((mp < 10) ? 3 : -9);
+    if (month <= 2) { year += 1; }
+    return str8f(ui_frame_arena(), "%u-%02u-%02u", (u32)year, (u32)month, (u32)day);
+}
+
+static void app_library_row(u64 row, TrackId id, b32 selected) {
+    const UI_Theme *theme = ui_theme();
+    AppTrack track = app_track(id);
+    u32 secondary = selected ? theme->fg_primary : theme->fg_secondary;
+    for (u32 slot = 0; slot < AppColumn_COUNT; slot += 1) {
+        AppColumn column = app_column_at(slot);
+        if (app.column_px[column] <= 0.0f) { continue; }
+        UI_Size width = app_column_width(column);
+        switch (column) {
+            case AppColumn_Index: {
+                app_cell(width, str8f(ui_frame_arena(), "%llu", row + 1), theme->fg_muted,
+                         UI_TextFlag_TabularNumbers, UI_TextAlign_Right);
+            } break;
+            case AppColumn_Title: {
+                app_cell(width, track.title, theme->fg_primary, 0, UI_TextAlign_Left);
+            } break;
+            case AppColumn_Artist: {
+                app_cell(width, track.artist, secondary, 0, UI_TextAlign_Left);
+            } break;
+            case AppColumn_Album: {
+                app_cell(width, track.album, secondary, 0, UI_TextAlign_Left);
+            } break;
+            case AppColumn_Duration: {
+                app_cell(width, app_duration(track.duration_s), secondary,
+                         UI_TextFlag_TabularNumbers, UI_TextAlign_Right);
+            } break;
+            case AppColumn_Format: {
+                app_cell_format(app.column_px[column], track.codec, track.sample_rate);
+            } break;
+            case AppColumn_Year: {
+                String8 year = track.year ? str8f(ui_frame_arena(), "%u", track.year)
+                                          : str8_lit("");
+                app_cell(width, year, secondary, UI_TextFlag_TabularNumbers, UI_TextAlign_Right);
+            } break;
+            case AppColumn_Added: {
+                app_cell(width, app_date(track.mtime_us), theme->fg_muted,
+                         UI_TextFlag_TabularNumbers, UI_TextAlign_Right);
+            } break;
+            default: break;
+        }
+    }
+}
+
+// --- the Artist -> Album column browser -----------------------------------------
+typedef struct AppBrowserClick {
+    b32 hit;
+    u32 group;  // LIB_GROUP_ALL when the "everything" row was clicked
+} AppBrowserClick;
+
+// One column: a virtualized list whose row 0 stands for "no filter", then one
+// row per group with the number of tracks behind it.
+static AppBrowserClick app_browser_column(UI_List *list, String8 id, String8 title,
+                                          String8 all_label, u32 all_count,
+                                          const LibGroup *groups, u32 count, u32 selected) {
+    const UI_Theme *theme = ui_theme();
+    AppBrowserClick result;
+    result.hit = 0;
+    result.group = LIB_GROUP_ALL;
+    f32 row_height = ui_dp(theme->row_compact);
+    f32 count_width = ui_dp(56.0f);
+    list->cursor = (selected == LIB_GROUP_ALL) ? 0 : selected + 1;
+    list->has_cursor = 1;
+
+    UI_PrefWidth(ui_pct(0.5f, 0.0f))
+    UI_PrefHeight(ui_pct(1.0f, 1.0f))
+    UI_ChildLayoutAxis(Axis2_Y) {
+        UI_Box *column = ui_build_box(0, id);
+        UI_Parent(column) {
+            UI_PrefWidth(ui_pct(1.0f, 0.0f))
+            UI_PrefHeight(ui_px(row_height, 1.0f))
+            UI_ChildLayoutAxis(Axis2_X)
+            UI_BgColor(theme->panel) {
+                UI_Box *head = ui_build_box_from_key(UI_DrawBackground, 0);
+                UI_Parent(head)
+                UI_Font(ui_font(UI_FontStyle_Caption)) {
+                    app_cell(ui_pct(1.0f, 0.0f), title, theme->fg_disabled, 0, UI_TextAlign_Left);
+                }
+            }
+            ui_separator();
+            ui_list_begin(list, (u64)count + 1, row_height);
+            UI_ListEachRow(list, i) {
+                UI_Signal signal = ui_list_row_begin(list, i);
+                b32 selected_row = ui_list_selected(list, i);
+                u32 color = selected_row ? theme->fg_primary : theme->fg_secondary;
+                String8 name = all_label;
+                u32 tracks = all_count;
+                if (i != 0) {
+                    name = lib_string(&app.library.strings, groups[i - 1].name);
+                    tracks = groups[i - 1].count;
+                    if (name.size == 0) { name = app_str(Str_BrowserUnnamed); }
+                }
+                app_cell(ui_pct(1.0f, 0.0f), name, color, 0, UI_TextAlign_Left);
+                app_cell_number(count_width, str8f(ui_frame_arena(), "%u", tracks),
+                                theme->fg_muted);
+                ui_list_row_end(list);
+                if (signal.clicked) {
+                    result.hit = 1;
+                    result.group = (i == 0) ? LIB_GROUP_ALL : (u32)(i - 1);
+                }
+            }
+            ui_list_end(list);
+        }
+    }
+    return result;
+}
+
+static void app_browser_panel(void) {
+    const UI_Theme *theme = ui_theme();
+    LibBrowser *browser = &app.browser;
+
+    // The collapse bar stays even when the columns are folded away: it is the
+    // only way back, and it says which filter is still applied.
+    UI_PrefWidth(ui_pct(1.0f, 0.0f))
+    UI_PrefHeight(ui_px(ui_dp(theme->row_standard), 1.0f))
+    UI_ChildLayoutAxis(Axis2_X)
+    UI_BgColor(theme->panel) {
+        UI_Box *bar = ui_build_box_from_key(UI_DrawBackground, 0);
+        UI_Parent(bar) {
+            ui_spacer(ui_px(ui_dp(theme->space[UI_Space_4]), 1.0f));
+            UI_PrefHeight(ui_px(ui_dp(theme->row_compact), 1.0f)) {
+                R_Icon icon = app.prefs.browser_collapsed ? R_Icon_ChevronRight : R_Icon_ChevronDown;
+                if (ui_button_icon(icon, str8_lit("###browsertoggle")).clicked) {
+                    app.prefs.browser_collapsed = !app.prefs.browser_collapsed;
+                    app.prefs_dirty = 1;
+                }
+                ui_tooltip(app_str(app.prefs.browser_collapsed ? Str_BrowserExpand
+                                                               : Str_BrowserCollapse));
+            }
+            UI_Font(ui_font(UI_FontStyle_Caption))
+            UI_TextPadding(app_cell_padding()) {
+                String8 label = str8f(ui_frame_arena(), "%S | %S", app_str(Str_BrowserArtists),
+                                      app_str(Str_BrowserAlbums));
+                ui_label_styled(UI_FontStyle_Caption, theme->fg_disabled, label);
+            }
+        }
+    }
+    ui_separator();
+    if (app.prefs.browser_collapsed) { return; }
+
+    // "every album" counts the tracks of the artist column's selection, which
+    // is the whole library when no artist is picked.
+    u32 album_total = (browser->selected_artist < browser->artist_count)
+                          ? browser->artists[browser->selected_artist].count
+                          : app.index.live_count;
+    UI_PrefWidth(ui_pct(1.0f, 0.0f))
+    UI_PrefHeight(ui_px(ui_dp(150.0f), 0.0f))
+    UI_ChildLayoutAxis(Axis2_X)
+    UI_BgColor(theme->surface) {
+        UI_Box *row = ui_build_box(UI_DrawBackground | UI_Clip, str8_lit("###browser"));
+        UI_Parent(row) {
+            AppBrowserClick artist = app_browser_column(
+                &app.artist_list, str8_lit("###artists"), app_str(Str_BrowserArtists),
+                app_str(Str_BrowserAllArtists), app.index.live_count, browser->artists,
+                browser->artist_count, browser->selected_artist);
+            ui_separator();
+            AppBrowserClick album = app_browser_column(
+                &app.album_list, str8_lit("###albums"), app_str(Str_BrowserAlbums),
+                app_str(Str_BrowserAllAlbums), album_total, browser->albums,
+                browser->album_count, browser->selected_album);
+            if (artist.hit) {
+                lib_browser_select_artist(browser, &app.index, artist.group);
+                app_filter();
+            } else if (album.hit) {
+                lib_browser_select_album(browser, album.group);
+                app_filter();
+            }
+        }
+    }
+    ui_separator();
+}
+
+// --- the three states that are not a list ----------------------------------------
+// A centred stack of text with one action underneath: the shape every empty
+// state of the app takes (research/02 s8.5.4 - an empty state always proposes).
+static void app_centered_begin(UI_Box **out_body) {
+    UI_PrefWidth(ui_pct(1.0f, 0.0f))
+    UI_PrefHeight(ui_pct(1.0f, 0.0f))
+    UI_ChildLayoutAxis(Axis2_Y)
+    UI_BgColor(ui_theme()->surface) {
+        *out_body = ui_build_box_from_key(UI_DrawBackground | UI_Clip, 0);
+    }
+    ui_push_parent(*out_body);
+    ui_spacer(ui_pct(0.34f, 0.0f));
+}
+
+static void app_centered_line(UI_FontStyle style, u32 color, String8 text) {
+    const UI_Theme *theme = ui_theme();
+    UI_PrefWidth(ui_pct(1.0f, 0.0f))
+    UI_PrefHeight(ui_px(ui_dp(theme->row_standard), 1.0f))
+    UI_TextAlign(UI_TextAlign_Center)
+    UI_Font(ui_font(style))
+    UI_TextColor(color)
+    UI_TextPadding(ui_dp(theme->space[UI_Space_12])) {
+        UI_Box *box = ui_build_box_from_key(UI_DrawText, 0);
+        box->display_string = text;
+    }
+}
+
+static void app_library_empty_state(void) {
+    const UI_Theme *theme = ui_theme();
+    UI_Box *body = 0;
+    app_centered_begin(&body);
+    app_centered_line(UI_FontStyle_Heading, theme->fg_primary, app_str(Str_LibraryEmptyTitle));
+    app_centered_line(UI_FontStyle_Ui, theme->fg_secondary, app_str(Str_LibraryEmptyBody));
+    app_centered_line(UI_FontStyle_Ui, theme->fg_secondary, app_str(Str_LibraryEmptyBody2));
+    ui_spacer(ui_px(ui_dp(theme->space[UI_Space_16]), 1.0f));
+
+    // The action, big enough to be the obvious thing to do in an empty panel.
+    UI_PrefWidth(ui_pct(1.0f, 0.0f))
+    UI_PrefHeight(ui_px(ui_dp(theme->row_comfortable), 1.0f))
+    UI_ChildLayoutAxis(Axis2_X) {
+        UI_Box *row = ui_build_box_from_key(0, 0);
+        UI_Parent(row) {
+            ui_spacer(ui_pct(1.0f, 0.0f));
+            UI_PrefHeight(ui_px(ui_dp(36.0f), 1.0f))
+            UI_Font(ui_font(UI_FontStyle_Emphasis)) {
+                if (ui_button_primary(str8f(ui_frame_arena(), "%S###addfolder",
+                                            app_str(Str_LibraryEmptyAction)))
+                        .clicked) {
+                    app_scan_start();
+                }
+            }
+            ui_spacer(ui_pct(1.0f, 0.0f));
+        }
+    }
+    ui_spacer(ui_px(ui_dp(theme->space[UI_Space_12]), 1.0f));
+    app_centered_line(UI_FontStyle_Caption, theme->fg_muted, app_str(Str_LibraryEmptyDrop));
+    ui_pop_parent();
+}
+
+static void app_library_no_results(void) {
+    const UI_Theme *theme = ui_theme();
+    UI_Box *body = 0;
+    app_centered_begin(&body);
+    String8 title = str8f(ui_frame_arena(), app_str_c(Str_LibraryNoResultTitle),
+                          str8(app.query, app.query_size));
+    app_centered_line(UI_FontStyle_Emphasis, theme->fg_primary, title);
+    app_centered_line(UI_FontStyle_Ui, theme->fg_muted, app_str(Str_LibraryNoResultBody));
+    ui_pop_parent();
+}
+
+// A 2 dp bar at the top of the list while a scan runs: it says "something is
+// happening here" without taking a pixel from the rows (research/02 s8.5.4).
+static void app_scan_progress(void) {
+    const UI_Theme *theme = ui_theme();
+    f32 fraction = (app.scan_dirs_total != 0)
+                       ? (f32)app.scan_dirs_done / (f32)app.scan_dirs_total
+                       : 0.0f;
+    UI_PrefWidth(ui_pct(1.0f, 0.0f))
+    UI_PrefHeight(ui_px(ui_dp(theme->space[UI_Space_2]), 1.0f))
+    UI_ChildLayoutAxis(Axis2_X)
+    UI_BgColor(theme->control)
+    UI_CornerRadius(0.0f) {
+        UI_Box *track = ui_build_box_from_key(UI_DrawBackground, 0);
+        UI_Parent(track)
+        UI_PrefWidth(ui_pct(clamp_f32(fraction, 0.02f, 1.0f), 1.0f))
+        UI_PrefHeight(ui_pct(1.0f, 1.0f))
+        UI_BgColor(theme->accent) {
+            ui_build_box_from_key(UI_DrawBackground, 0);
+        }
+    }
+}
+
+// --- the panel -------------------------------------------------------------------
+void app_library_panel(f32 width) {
+    const UI_Theme *theme = ui_theme();
+    UI_List *list = &app.list;
+
+    // Ctrl+F focuses the field, Escape empties it. Read before the field is
+    // built, so a clear takes effect in the very frame it was asked for.
+    b32 focus_search = 0;
+    for (u32 i = 0; i < ui_key_event_count(); i += 1) {
+        UI_KeyEvent event = ui_key_event(i);
+        if (event.key == OsKey_F && (event.modifiers & OsMod_Ctrl)) { focus_search = 1; }
+    }
+    if (ui_escape_pressed() && app.query_size != 0) {
+        ui_text_input_init(&app.search, str8_lit(""));
+        app_query_set(str8(0, 0));
+    }
+
+    app_columns_measure(width);
+    String8 subtitle =
+        app.scan_active
+            ? str8f(ui_frame_arena(), app_str_c(Str_LibraryScanning), app.scan_files,
+                    app.scan_dirs_done, app.scan_dirs_total)
+            : str8f(ui_frame_arena(), app_str_c(Str_LibraryCount), app_row_count(),
+                    app_track_count());
+    app_panel_begin(str8_lit("###library"), ui_px(width, 1.0f), app_str(Str_LibraryTitle),
+                    subtitle);
+
+    UI_PrefWidth(ui_pct(1.0f, 0.0f))
+    UI_PrefHeight(ui_px(ui_dp(theme->row_comfortable), 1.0f))
+    UI_ChildLayoutAxis(Axis2_X) {
+        UI_Box *bar = ui_build_box_from_key(0, 0);
+        UI_Parent(bar) {
+            ui_spacer(ui_px(ui_dp(theme->space[UI_Space_8]), 1.0f));
+            UI_PrefHeight(ui_px(ui_dp(theme->row_standard), 1.0f)) {
+                UI_Signal signal =
+                    ui_text_input(&app.search, app_str(Str_LibrarySearchPlaceholder));
+                if (focus_search) {
+                    ui_set_focus(signal.box->key, 1);
+                    ui_text_input_select_all(&app.search);
+                }
+            }
+            ui_spacer(ui_px(ui_dp(theme->space[UI_Space_8]), 1.0f));
+        }
+    }
+    if (app.search.changed) { app_query_set(ui_text_input_string(&app.search)); }
+    ui_separator();
+
+    b32 empty = (app.library.live_count == 0 && !app.scan_active);
+    if (!empty) { app_browser_panel(); }
+
+    if (empty) {
+        app_library_empty_state();
+        app_panel_end();
+        return;
+    }
+
+    // Column headers, in the order the preferences remember.
+    UI_PrefWidth(ui_pct(1.0f, 0.0f))
+    UI_PrefHeight(ui_px(ui_dp(theme->row_compact), 1.0f))
+    UI_ChildLayoutAxis(Axis2_X)
+    UI_BgColor(theme->panel) {
+        UI_Box *header = ui_build_box_from_key(UI_DrawBackground, 0);
+        UI_Parent(header) {
+            for (u32 slot = 0; slot < AppColumn_COUNT; slot += 1) {
+                AppColumn column = app_column_at(slot);
+                if (app.column_px[column] > 0.0f) { app_column_header(column); }
+            }
+        }
+    }
+    ui_separator();
+    if (app.scan_active) { app_scan_progress(); }
+
+    if (app_row_count() == 0 && app.query_size != 0) {
+        app_library_no_results();
+        app_panel_end();
+        return;
+    }
+
+    // The list itself: only the visible rows become boxes.
+    const u32 *rows = app_rows();
+    ui_list_begin(list, app_row_count(), ui_dp(theme->row_compact));
+    UI_ListEachRow(list, i) {
+        ui_list_row_begin(list, i);
+        app_library_row(i, rows[i], ui_list_selected(list, i));
+        ui_list_row_end(list);
+    }
+    ui_list_end(list);
+
+    if (list->context) { ui_context_menu_open(&app.menu, list->context_pos, list->context_row); }
+    if (list->activated) { app_plan_add_selection(); }
+    app_panel_end();
+}
+
+// Which columns the list shows. Title is not in the list: a library row with no
+// title is not a row, and the width model gives it whatever is left anyway.
+static void app_header_menu(void) {
+    if (!ui_context_menu_begin(&app.header_menu)) { return; }
+    for (u32 slot = 0; slot < AppColumn_COUNT; slot += 1) {
+        AppColumn column = app_column_at(slot);
+        if (app_column_flexible(column)) { continue; }
+        String8 label = str8f(ui_frame_arena(), "%s %S",
+                              app.prefs.columns[column].visible ? "â" : "Â ",
+                              app_str((Str)(Str_ColumnIndex + column)));
+        if (ui_context_menu_item(&app.header_menu, label)) {
+            app.prefs.columns[column].visible = !app.prefs.columns[column].visible;
+            app.prefs_dirty = 1;
+        }
+    }
+    ui_context_menu_end(&app.header_menu);
+}
+
+void app_library_context_menu(void) {
+    app_header_menu();
+    if (!ui_context_menu_begin(&app.menu)) { return; }
+    u64 row = app.menu.payload;
+    if (ui_context_menu_item(&app.menu, app_str(Str_MenuAddSelection))) {
+        app_plan_add_selection();
+    }
+    if (ui_context_menu_item(&app.menu, app_str(Str_MenuAddTrack))) {
+        if (row < app_row_count()) { app_plan_add(app_rows()[row]); }
+    }
+    ui_context_menu_separator(&app.menu);
+    if (ui_context_menu_item(&app.menu, app_str(Str_MenuSelectAll))) {
+        ui_list_select_all(&app.list);
+    }
+    if (ui_context_menu_item(&app.menu, app_str(Str_MenuSelectNone))) {
+        ui_list_select_clear(&app.list);
+    }
+    ui_context_menu_end(&app.menu);
+}

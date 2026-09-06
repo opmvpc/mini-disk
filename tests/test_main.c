@@ -25,6 +25,7 @@
 #include "../src/ui/ui_core.h"
 #include "../src/ui/ui_widgets.h"
 #include "../src/ui/ui_debug_overlay.h"
+#include "../src/app/prefs.h"
 
 #include "../src/base/base_arena.c"
 #include "../src/base/base_string.c"
@@ -57,6 +58,7 @@
 #include "../src/core/library/lib_index.c"
 #include "../src/core/library/lib_search.c"
 #include "../src/core/library/lib_cache.c"
+#include "../src/app/prefs.c"
 
 typedef struct TestState {
     Arena *arena;         // per test case arena, reset between cases
@@ -110,6 +112,7 @@ static void test_check(b32 condition, const char *expression, i32 line) {
 #include "test_library.c"
 #include "test_tags.c"
 #include "test_index.c"
+#include "test_prefs.c"
 
 int main(void) {
     os_init();
@@ -126,6 +129,7 @@ int main(void) {
     test_library_run_all();
     test_tags_run_all();
     test_index_run_all();
+    test_prefs_run_all();
 
     test_report("%llu case(s), %llu check(s), %llu failure(s)\n", test_state.cases,
                 test_state.checks, test_state.failures);
