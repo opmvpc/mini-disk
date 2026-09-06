@@ -48,6 +48,9 @@ u64 ui_text_next_run(OsFont font, String8 text, u64 offset, UI_TextRun *out_run)
 
 f32 ui_text_width(OsFont font, String8 text, u32 flags);
 f32 ui_text_line_height(OsFont font);
+// Distance from the top of the line box to the baseline: ui_core centres text
+// vertically in a box without ever touching platform.h.
+f32 ui_text_ascent(OsFont font);
 
 // Baseline positioning, physical pixels. Returns the advance width drawn.
 f32 ui_text_draw(OsFont font, String8 text, V2 baseline, u32 color, u32 flags);

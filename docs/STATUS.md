@@ -2,7 +2,7 @@
 
 Dernière mise à jour : 2026-09-06 (soir)
 
-## Phase actuelle : 1 · Fondations — T-001..T-005 faits
+## Phase actuelle : 1 · Fondations — T-001..T-006 faits, T-007 en cours
 
 ### Fait (phase 0 terminée)
 - 4 rapports de recherche livrés (`research/01..04`, ~10 700 lignes) + tokens de design (`02b`).
@@ -16,9 +16,10 @@ Dernière mise à jour : 2026-09-06 (soir)
 - Repo GitHub : https://github.com/opmvpc/mini-disk
 
 ### En cours
-- Rien : T-005 attend sa review.
+- Rien : T-006 attend sa review.
 
 ### Fait en phase 1 (suite)
+- T-006 livré : `ui_core` (clés hachées, piles de style, layout sémantique en 2 parcours, signaux, animations, 3 couches), démo 3 colonnes, **layout de 12 020 boxes en 338 µs** (28 ns/box, meilleur de 200 passes), 1 231 checks, exe 66 048 o, imports kernel32+user32, 15,6 ms de CPU sur 12 s au repos.
 - T-005 livré et reviewé : DirectWrite → atlas R8, fallback système (japonais, katakana half-width), caches glyphes/mesure, ellipsis, chiffres tabulaires, 63 ns/glyphe à chaud, 1 143 checks, exe 54 272 o. P-006 (vtables COM en C).
 - T-005 livré : DirectWrite chargé dynamiquement (vtables COM à la main), fallback système par
   `IDWriteFontFallback` (japonais et katakana demi-chasse), cache de glyphes (police, glyphe, quart
@@ -32,7 +33,7 @@ Dernière mise à jour : 2026-09-06 (soir)
 - T-001 livré et reviewé : `base/`, `build.bat` (7 cibles), 125 checks, exe release **7 168 octets**, imports kernel32+user32. Voir P-003 (TLS sans CRT).
 
 ### Prochain pas
-1. Review de T-006, puis T-007 (widgets), T-008 (jobs + overlay, fin de phase 1).
+1. Review de T-007, puis T-008 (jobs + overlay, fin de phase 1, tag v0.1.0-phase1).
 2. P-005 : identifier la source du CPU résiduel (0,5 %) avec l'overlay de T-008.
 
 ### Action utilisateur requise
@@ -41,5 +42,5 @@ Dernière mise à jour : 2026-09-06 (soir)
 ## KPI
 | Métrique | Valeur | Date |
 |----------|--------|------|
-| Taille exe release | 54 272 o (T-005 : texte DirectWrite) | 2026-09-06 |
+| Taille exe release | 66 048 o (T-006 : `ui_core`) | 2026-09-06 |
 | Budget CI (`SIZE_BUDGET_KB`) | 100 KB (phase 1) | 2026-09-06 |

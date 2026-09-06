@@ -211,6 +211,11 @@ f32 ui_text_line_height(OsFont font) {
     return round_f32(metrics.ascent + metrics.descent + metrics.line_gap);
 }
 
+f32 ui_text_ascent(OsFont font) {
+    OsFontMetrics metrics = os_font_metrics(font);
+    return round_f32(metrics.ascent);
+}
+
 // --- drawing ---------------------------------------------------------------
 
 f32 ui_text_draw(OsFont font, String8 text, V2 baseline, u32 color, u32 flags) {

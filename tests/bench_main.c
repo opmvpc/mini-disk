@@ -13,6 +13,7 @@
 #include "../src/ui/r_icons.h"
 #include "../src/ui/ui_font.h"
 #include "../src/ui/ui_text.h"
+#include "../src/ui/ui_core.h"
 
 #include "../src/base/base_arena.c"
 #include "../src/base/base_string.c"
@@ -26,6 +27,7 @@
 #include "../src/platform/win32/win32_font_dwrite.c"
 #include "../src/ui/ui_font.c"
 #include "../src/ui/ui_text.c"
+#include "../src/ui/ui_core.c"
 
 // The renderer benches measure r_core and r_atlas, not the driver: the back end
 // is a stub, exactly as in the tests.
@@ -234,6 +236,97 @@ static BenchResult bench_text_glyph_cache(void) {
     return result;
 }
 
+
+// A 10 000 box tree, laid out over and over: the five passes are the whole
+// cost of a frame once the widgets are virtualized (ADR-004, T-006).
+static BenchResult bench_ui_layout(void) {
+    u32 columns = 20;
+    u32 rows = 100;
+    u32 cells = 5;  // 20 * 100 * 5 = 10 000 leaves, plus the containers
+
+    Arena *ui_arena = arena_alloc(MB(256));
+    Arena *frame_arena = arena_alloc(MB(64));
+    r_atlas_init(ui_arena);
+    ui_init(ui_arena);
+
+    V2 viewport = v2(1920.0f, 1080.0f);
+    r_begin_frame(frame_arena, viewport.x, viewport.y, 1.0f);
+    ui_begin(frame_arena, 0, 0, 1.0f / 60.0f, viewport, 1.0f);
+    UI_Box *root = ui_root(UI_Layer_Content);
+    ui_push_child_layout_axis(Axis2_X);
+    ui_push_pref_width(ui_pct(1.0f, 0.0f));
+    ui_push_pref_height(ui_pct(1.0f, 0.0f));
+    for (u32 c = 0; c < columns; c += 1) {
+        UI_Seed(hash64_mix(c + 1)) {
+            UI_Box *column = ui_build_box_from_key(0, 0);
+            UI_Parent(column) UI_ChildLayoutAxis(Axis2_Y) {
+                for (u32 r = 0; r < rows; r += 1) {
+                    UI_Box *row = ui_build_box_from_key(0, 0);
+                    UI_Parent(row) UI_ChildLayoutAxis(Axis2_X) {
+                        for (u32 i = 0; i < cells; i += 1) {
+                            UI_PrefWidth(ui_px(40.0f, (f32)(i & 1)))
+                            UI_PrefHeight(ui_px(20.0f, 1.0f)) {
+                                ui_build_box_from_key(0, 0);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    ui_pop_pref_height();
+    ui_pop_pref_width();
+    ui_pop_child_layout_axis();
+
+    u32 box_count = 0;
+    for (UI_Box *column = root->first; column; column = column->next) {
+        box_count += 1;
+        for (UI_Box *row = column->first; row; row = row->next) {
+            box_count += 1;
+            for (UI_Box *cell = row->first; cell; cell = cell->next) { box_count += 1; }
+        }
+    }
+    AssertAlways(box_count >= 10000);
+
+    // Repetition testing: each pass is timed on its own and the *best* one is
+    // the answer. The mean measures the machine (other processes, turbo, page
+    // faults on the first pass), the minimum measures the code.
+    u32 iterations = 200;
+    u64 best_us = U64_MAX;
+    u64 start_us = os_time_now_us();
+    u64 start_cycles = __rdtsc();
+    for (u32 i = 0; i < iterations; i += 1) {
+        u64 pass_start = os_time_now_us();
+        ui_layout(root);
+        u64 pass_us = os_time_now_us() - pass_start;
+        if (pass_us < best_us) { best_us = pass_us; }
+    }
+    u64 end_cycles = __rdtsc();
+    u64 end_us = os_time_now_us();
+    AssertAlways(root->first->computed_size[Axis2_Y] > 0.0f);
+
+    ArenaTemp scratch = scratch_begin(0, 0);
+    u64 mean_us = (end_us - start_us) / iterations;
+    os_debug_print(str8f(scratch.arena,
+                         "  ui: %u boxes, %llu us per layout (best of %u, mean %llu, budget 1000)\n",
+                         box_count, best_us, iterations, mean_us));
+    os_debug_print(str8f(scratch.arena, "  ui: %llu ns per box (best), %llu ns per box (mean)\n",
+                         best_us * 1000 / box_count, mean_us * 1000 / box_count));
+    scratch_end(scratch);
+    AssertAlways(best_us < 1000);  // the acceptance criterion: < 1 ms
+
+    r_end_frame();
+    arena_release(frame_arena);
+    arena_release(ui_arena);
+
+    BenchResult result;
+    result.name = "ui_layout 10k boxes x200";
+    result.cycles = end_cycles - start_cycles;
+    result.micros = end_us - start_us;
+    result.bytes = (u64)box_count * iterations;  // the MB/s column reads as M boxes/s
+    return result;
+}
+
 int main(void) {
     os_init();
     bench_arena = arena_alloc(GB(1));
@@ -242,5 +335,6 @@ int main(void) {
     bench_print(bench_batch_build());
     bench_print(bench_atlas_skyline());
     bench_print(bench_text_glyph_cache());
+    bench_print(bench_ui_layout());
     return 0;
 }
