@@ -12,9 +12,9 @@ ont un fichier `T-NNN-*.md` ; les suivants sont des lignes à détailler au mome
 | [T-003](T-003-wgl-gl33-quad-sdf.md) | Contexte WGL GL 3.3 core + loader + `r_gl` : quad SDF arrondi anti-aliasé | doing |
 | [T-004](T-004-r-core-batches-atlas.md) | `r_core` : batches, VBO dynamique, scissor, atlas R8 + packing skyline | todo |
 | [T-005](T-005-texte-directwrite.md) | `win32_font_dwrite` + `ui_text` : cache de glyphes, mesure, "Hello 世界" | todo |
-| T-006 | `ui_core` : UI_Box, clés, piles, layout 5 passes, signaux, animations | todo |
-| T-007 | `ui_theme` (tokens 02b) + widgets : bouton, label, champ texte, liste virtualisée 100k lignes, splitter | todo |
-| T-008 | `base_jobs` (thread pool) + overlay debug F11 (fps, draw calls, mémoire arènes) | todo |
+| [T-006](T-006-ui-core.md) | `ui_core` : UI_Box, clés, piles, layout 5 passes, signaux, animations | todo |
+| [T-007](T-007-theme-et-widgets.md) | `ui_theme` (tokens 02b) + widgets : bouton, label, champ texte, liste virtualisée 100k lignes, splitter | todo |
+| [T-008](T-008-jobs-et-overlay-debug.md) | `base_jobs` (thread pool) + overlay debug F11 (fps, draw calls, mémoire arènes) | todo |
 
 ## Phase 2 — Bibliothèque
 T-010 scan récursif multi-thread · T-011 tags ID3/Vorbis/MP4/APE · T-012 index SoA + string table ·
