@@ -1,0 +1,10 @@
+Checks: >
+  -*,
+  bugprone-*,
+  clang-analyzer-*,
+  performance-*,
+  readability-misleading-indentation,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-narrowing-conversions
+WarningsAsErrors: '*'
+HeaderFilterRegex: '^.*[\/]src[\/].*$'

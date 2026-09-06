@@ -1,6 +1,6 @@
 # Analyse du projet — minidisk
 
-> Statut : **draft v0.1** (2026-09-06). Sera consolidé quand les 4 rapports de `research/` seront intégrés
+> Statut : **v1.0** (2026-09-06). Les rapports research/01..04 sont intégrés via les ADR-001..012 ; les marqueurs `[R-xx]` renvoient aux rapports pour le détail.
 > (sections marquées `[R-xx]` = à compléter/valider avec le rapport correspondant).
 
 ## 1. Vision
@@ -21,7 +21,7 @@ On mesure tout (taille exe, temps de démarrage, temps de scan bibliothèque, d�
 | Fait | Valeur | Source |
 |------|--------|--------|
 | Device branché | `USB\VID_054C&PID_0084` "Net MD Walkman", classe FF/00/00 | `Get-PnpDevice` |
-| Modèle | `[R-01]` à confirmer via la table des PIDs | research/01 |
+| Modèle | **Sony MZ-N505**, SoC CXD2677 Type-R, firmware R1.3/1.4 | research/01 §1 |
 | Driver | Absent (ProblemCode 28) → WinUSB via Zadig requis | problems/P-001 |
 | Génération | NetMD (pas Hi-MD) → upload SP (PCM → ATRAC1 sur le device), LP2/LP4 (ATRAC3 encodé côté hôte) | `[R-01]` |
 | Capacité 80 min | 80 min SP / 160 min LP2 / 320 min LP4, 254 pistes max, budget de caractères TOC | `[R-01]` |

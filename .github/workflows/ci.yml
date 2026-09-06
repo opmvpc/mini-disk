@@ -1,0 +1,90 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+# Toute la chaîne tourne sur windows-latest : MSVC (VS 2022 Enterprise) et le Windows SDK y sont
+# préinstallés, on n'installe rien. build.bat est l'unique point d'entrée (ADR-002) ; la CI ne fait
+# que l'appeler et vérifier ses sorties. Si ça marche ici, ça marche sur n'importe quel poste.
+
+jobs:
+  check:
+    name: Règles de dépendance + analyse statique
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: build.bat check (grep des interdictions core/ -> windows.h, gl, malloc)
+        shell: cmd
+        run: build.bat check
+      - name: build.bat analyze (/W4 /WX /analyze + clang-tidy sur l'unity build)
+        shell: cmd
+        run: build.bat analyze
+
+  test:
+    name: Tests (debug + ASan)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: build.bat test
+        shell: cmd
+        run: build.bat test
+
+  release-build:
+    name: Build release + budget taille
+    runs-on: windows-latest
+    needs: [check, test]
+    steps:
+      - uses: actions/checkout@v4
+      - name: build.bat release
+        shell: cmd
+        run: build.bat release
+      - name: Budget taille (ADR-002, jalons research/03 annexe A)
+        shell: pwsh
+        run: |
+          $exe = Get-Item build\minidisk.exe
+          $kb = [math]::Round($exe.Length / 1KB, 1)
+          "minidisk.exe : $kb Ko"
+          "## Taille exe : $kb Ko" >> $env:GITHUB_STEP_SUMMARY
+          $budget = [int](Get-Content SIZE_BUDGET_KB)
+          if ($exe.Length -gt $budget * 1KB) { throw "budget $budget Ko dépassé ($kb Ko)" }
+      - name: Smoke run (l'exe démarre et s'arrête proprement)
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath build\minidisk.exe -ArgumentList "--selftest" -PassThru -Wait
+          if ($p.ExitCode -ne 0) { throw "selftest exit code $($p.ExitCode)" }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: minidisk-windows-x64
+          path: |
+            build/minidisk.exe
+            build/minidisk.pdb
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [release-build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: minidisk-windows-x64
+          path: dist
+      - name: Créer la release et attacher l'exe (rejouable sur re-run)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          tag="${GITHUB_REF_NAME}"
+          cd dist && zip -9 "../minidisk-${tag}-windows-x64.zip" minidisk.exe && cd ..
+          notes="$(awk -v tag="$tag" '/^## /{p=($2==tag)} p' CHANGELOG.md 2>/dev/null || true)"
+          [ -n "$notes" ] || notes="Release $tag"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" "minidisk-${tag}-windows-x64.zip" dist/minidisk.exe --clobber
+          else
+            gh release create "$tag" "minidisk-${tag}-windows-x64.zip" dist/minidisk.exe --title "minidisk $tag" --notes "$notes"
+          fi

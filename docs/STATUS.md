@@ -1,32 +1,32 @@
 # STATUS — où on en est
 
-Dernière mise à jour : 2026-09-06
+Dernière mise à jour : 2026-09-06 (soir)
 
-## Phase actuelle : 0 · Recherche & analyse (en pause, quota consommé)
+## Phase actuelle : 1 · Fondations — T-001 en cours
 
-### Fait
-- Device identifié : `USB\VID_054C&PID_0084` NetMD, driver absent → voir `problems/P-001`.
-- Toolchain validée : MSVC 14.44 + SDK 26100, exe no-CRT de 1 536 octets (`tools/smoke`).
-- Structure docs (README, CONVENTIONS, decisions/, tickets/, problems/, research/, prompts/).
-- `00-analyse-projet.md` draft v0.1 : vision, architecture 3 couches, modules, 8 phases, risques.
-- `research/02b-design-tokens.md` : tokens de densité et palette sombre (seul rapport ayant abouti).
+### Fait (phase 0 terminée)
+- 4 rapports de recherche livrés (`research/01..04`, ~10 700 lignes) + tokens de design (`02b`).
+- Device identifié : **Sony MZ-N505** (PID 0084, Type-R). Driver WinUSB à installer via Zadig (P-001).
+- ADR-001..012 acceptés (`decisions/README.md`) : architecture 3 couches, no-CRT, GL 3.3, UI Fleury,
+  renderer SDF, texte DirectWrite, codecs + DSP, WinUSB rejouable, ATRAC3 clean-room, persistance binaire,
+  décisions produit D1-D10, qualité (tests / analyse statique / zéro défensif).
+- CI GitHub Actions (`.github/workflows/ci.yml`) : check → test → release-build (budget taille,
+  `--selftest`) → release sur tag `v*`. **Rouge tant que T-001 n'a pas livré `build.bat`.**
+- Backlog phases 1-8 (`tickets/BACKLOG.md`), T-001 détaillé.
+- Repo GitHub : https://github.com/opmvpc/mini-disk
 
-### Incident
-- `problems/P-002` : les 4 recherches Opus ont explosé en 20 agents et consommé le quota. Rapports R-01..R-04
-  **non produits**. Nouvelle procédure : un agent à la fois, sans sous-agents, Sonnet pour la recherche.
+### En cours
+- T-001 : base/, build.bat, runner de tests, fenêtre noire < 8 KB (agent Opus, prompt `prompts/I-001`).
 
-### Prochain pas (quand le quota est revenu)
-1. Refaire les recherches R-01 (protocole NetMD) et R-04 (ATRAC3) en mode économe : Fable lit lui-même
-   netmd-js / libnetmd / atracdenc avec WebFetch ciblé, ou un seul agent Sonnet borné (≤ 25 tool calls).
-2. R-02 UX et R-03 stack : Fable rédige directement depuis ses connaissances + quelques fetchs ciblés.
-3. Écrire ADR-001 (toolchain no-CRT), ADR-002 (architecture 3 couches), ADR-003 (UI immediate/retained),
-   ADR-004 (texte : DirectWrite vers atlas vs stb_truetype), ADR-005 (ATRAC3 : port C d'atracdenc).
-4. Remplir `tickets/BACKLOG.md` pour la phase 1 (fondations), puis lancer le premier ticket.
+### Prochain pas
+1. Review de T-001 (grille ADR-012 §review), mesure taille, CI verte, commit.
+2. T-002 (fenêtre Win32 complète, 0 % CPU) puis T-003 (WGL + quad SDF).
 
 ### Action utilisateur requise
-- Installer le driver WinUSB sur le "Net MD Walkman" avec Zadig avant la phase 3 (voir P-001).
+- Zadig → WinUSB sur "Net MD Walkman" avant la phase 3.
 
 ## KPI
 | Métrique | Valeur | Date |
 |----------|--------|------|
 | Taille exe release | 1 536 o (smoke, fenêtre vide) | 2026-09-06 |
+| Budget CI (`SIZE_BUDGET_KB`) | 100 KB (phase 1) | 2026-09-06 |

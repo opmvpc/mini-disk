@@ -34,3 +34,12 @@
 - Rendu : 1 shader, 1 VBO dynamique, < 10 draw calls/frame, rendu à la demande (0 % CPU au repos).
 - Décodage/transcodage : job system sur N-1 threads, buffers réutilisés, SIMD SSE2 baseline.
 - USB : thread dédié, file de commandes, l'UI ne bloque jamais.
+
+## Programmation non défensive (ADR-012)
+- Valider **aux frontières uniquement** (fichiers, tags, réponses USB, saisie, args). En aval, les structs
+  sont canoniques et le code leur fait confiance.
+- Pas de `if (!ptr)` dans les APIs internes, pas de re-validation, pas de codes d'erreur pour l'impossible.
+  Un état interne invalide = bug = `Assert` (debug) ou `AssertAlways` (invariant qui protège des données).
+- Les erreurs du domaine (device absent, disque plein, fichier illisible) sont des valeurs de retour typées.
+- Chaque ticket livre ses tests ; chaque bug corrigé ajoute un test de non-régression.
+- `build.bat check` et `build.bat analyze` doivent être verts avant tout commit sur `main`.
