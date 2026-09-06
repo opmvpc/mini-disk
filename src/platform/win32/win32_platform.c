@@ -110,6 +110,8 @@ u64 os_time_now_us(void) {
     return (ticks / frequency) * 1000000ull + ((ticks % frequency) * 1000000ull) / frequency;
 }
 
+void os_sleep_us(u64 us) { Sleep((DWORD)((us + 999) / 1000)); }
+
 u32 os_thread_current_id(void) { return GetCurrentThreadId(); }
 
 // --- diagnostics -----------------------------------------------------------
@@ -128,44 +130,9 @@ void os_debug_print(String8 s) {
 
 #if !BUILD_TEST && !BUILD_BENCH
 
-// --- black window ----------------------------------------------------------
-
-static LRESULT CALLBACK win32_window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
-    switch (message) {
-        case WM_DESTROY: PostQuitMessage(0); return 0;
-        case WM_CLOSE: DestroyWindow(window); return 0;
-        case WM_KEYDOWN: {
-            if (wparam == VK_ESCAPE) {
-                DestroyWindow(window);
-                return 0;
-            }
-        } break;
-        default: break;
-    }
-    return DefWindowProcW(window, message, wparam, lparam);
-}
-
-static void win32_window_run(void) {
-    WNDCLASSW window_class;
-    StructZero(&window_class);
-    window_class.lpfnWndProc = win32_window_proc;
-    window_class.hInstance = win32_state.instance;
-    window_class.hCursor = LoadCursorW(0, (LPCWSTR)IDC_ARROW);
-    // System colour brush passed as a small integer: black background without
-    // pulling gdi32 in for CreateSolidBrush. NOLINTNEXTLINE(performance-no-int-to-ptr)
-    window_class.hbrBackground = (HBRUSH)(COLOR_WINDOWTEXT + 1);
-    window_class.lpszClassName = L"minidisk_window";
-    RegisterClassW(&window_class);
-    HWND window = CreateWindowExW(0, window_class.lpszClassName, L"minidisk",
-                                  WS_OVERLAPPEDWINDOW | WS_VISIBLE, CW_USEDEFAULT, CW_USEDEFAULT,
-                                  1024, 640, 0, 0, win32_state.instance, 0);
-    Unused(window);
-    MSG message;
-    while (GetMessageW(&message, 0, 0, 0) > 0) {
-        TranslateMessage(&message);
-        DispatchMessageW(&message);
-    }
-}
+// The window lives in win32_window.c and the demo loop in app/app.c; both are
+// included after this file by the unity build (src/main.c).
+static void app_run(void);
 
 // --- self test (--selftest): boot the base layer without opening a window ---
 
@@ -207,7 +174,7 @@ static i32 minidisk_main(void) {
     if (win32_command_line_has((const u16 *)GetCommandLineW(), str8_lit("--selftest"))) {
         return win32_selftest();
     }
-    win32_window_run();
+    app_run();
     return 0;
 }
 

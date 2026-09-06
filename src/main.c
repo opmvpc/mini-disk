@@ -16,3 +16,5 @@
 #include "base/base_hash.c"
 
 #include "platform/win32/win32_platform.c"
+#include "platform/win32/win32_window.c"
+#include "app/app.c"

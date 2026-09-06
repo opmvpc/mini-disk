@@ -12,6 +12,7 @@
 #include "../src/base/base_math.c"
 #include "../src/base/base_hash.c"
 #include "../src/platform/win32/win32_platform.c"
+#include "../src/platform/win32/win32_window.c"
 
 typedef struct TestState {
     Arena *arena;         // per test case arena, reset between cases
@@ -56,6 +57,7 @@ static void test_check(b32 condition, const char *expression, i32 line) {
     } while (0)
 
 #include "test_base.c"
+#include "test_events.c"
 
 int main(void) {
     os_init();
@@ -63,6 +65,7 @@ int main(void) {
     test_report("minidisk tests\n");
 
     test_base_run_all();
+    test_events_run_all();
 
     test_report("%llu case(s), %llu check(s), %llu failure(s)\n", test_state.cases,
                 test_state.checks, test_state.failures);

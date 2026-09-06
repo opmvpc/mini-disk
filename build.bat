@@ -36,7 +36,8 @@ set REL_CL=/DBUILD_DEBUG=0 /DBUILD_NO_CRT=1 /O2 /Oi /Gy /GS- /Gs9999999 /GR- /EH
 set DBG_CL=/DBUILD_DEBUG=1 /DBUILD_NO_CRT=0 /Od /MTd /fsanitize=address
 set REL_LINK=/LTCG /INCREMENTAL:NO /NODEFAULTLIB /ENTRY:entry_point /SUBSYSTEM:WINDOWS ^
  /OPT:REF /OPT:ICF /MERGE:.rdata=.text /MERGE:.pdata=.text /STACK:0x100000,0x10000 ^
- /DYNAMICBASE /NXCOMPAT /HIGHENTROPYVA /PDBALTPATH:%%_PDB%%
+ /DYNAMICBASE /NXCOMPAT /HIGHENTROPYVA /PDBALTPATH:%%_PDB%% ^
+ /MANIFEST:EMBED /MANIFESTINPUT:src\app.manifest
 
 if "%MODE%"=="release" goto :release
 if "%MODE%"=="debug"   goto :debug
@@ -62,6 +63,7 @@ echo [debug] build...
 cl %COMMON% %DEFS% %DBG_CL% /c src\third_party.c /Fobuild\third_party_debug.obj /Fdbuild\minidisk_debug.pdb || exit /b 1
 cl %COMMON% %DEFS% %DBG_CL% src\main.c /Fobuild\main_debug.obj /Fdbuild\minidisk_debug.pdb ^
    /link /INCREMENTAL:NO /SUBSYSTEM:WINDOWS /ENTRY:wWinMainCRTStartup ^
+   /MANIFEST:EMBED /MANIFESTINPUT:src\app.manifest ^
    /OUT:build\minidisk_debug.exe build\third_party_debug.obj ^
    kernel32.lib user32.lib || exit /b 1
 REM  ASan est toujours dynamique chez MSVC : sans cette DLL a cote, l'exe debug
