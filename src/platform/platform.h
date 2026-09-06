@@ -26,6 +26,50 @@ u64 os_time_now_us(void);      // monotonic, microseconds
 void os_sleep_us(u64 us);
 u32 os_thread_current_id(void);
 
+// --- atomics ---------------------------------------------------------------
+// Macros over the MSVC interlocked intrinsics, which are all full barriers -
+// which is what every one of our uses wants. `inc`/`dec` return the new value,
+// `add` the previous one, `cas` the value that was found (== expected: swapped).
+#define os_atomic_load_u32(p)     ((u32)_InterlockedOr((volatile long *)(p), 0))
+#define os_atomic_store_u32(p, v) ((void)_InterlockedExchange((volatile long *)(p), (long)(v)))
+#define os_atomic_add_u32(p, v)   ((u32)_InterlockedExchangeAdd((volatile long *)(p), (long)(v)))
+#define os_atomic_inc_u32(p)      ((u32)_InterlockedIncrement((volatile long *)(p)))
+#define os_atomic_dec_u32(p)      ((u32)_InterlockedDecrement((volatile long *)(p)))
+#define os_atomic_cas_u32(p, expected, desired)                          \
+    ((u32)_InterlockedCompareExchange((volatile long *)(p), (long)(desired), \
+                                      (long)(expected)))
+#define os_atomic_load_u64(p)     ((u64)_InterlockedOr64((volatile __int64 *)(p), 0))
+#define os_atomic_add_u64(p, v)                                          \
+    ((u64)_InterlockedExchangeAdd64((volatile __int64 *)(p), (__int64)(v)))
+#define os_atomic_inc_u64(p)      ((u64)_InterlockedIncrement64((volatile __int64 *)(p)))
+// The hint that tells the core we are in a spin loop: shortens the memory order
+// violation penalty and lets a hyperthread sibling have the pipeline.
+#define os_cpu_pause()            _mm_pause()
+
+// --- threads, semaphores, mutexes ------------------------------------------
+typedef struct OsThread { u64 v; } OsThread;
+typedef struct OsSemaphore { u64 v; } OsSemaphore;
+typedef struct OsMutex { void *v; } OsMutex;  // an SRWLOCK is one pointer
+
+typedef void OsThreadProc(void *data);
+
+u32      os_cpu_count(void);   // logical cores
+// The thread starts immediately; `name` is what the debugger and the profiler
+// show. A thread that used a scratch arena calls scratch_thread_release itself.
+OsThread os_thread_create(OsThreadProc *proc, void *data, String8 name);
+void     os_thread_join(OsThread thread);
+void     os_thread_set_name(String8 name);  // names the calling thread
+void     os_thread_yield(void);
+
+OsSemaphore os_semaphore_create(u32 initial_count, u32 max_count);
+void        os_semaphore_destroy(OsSemaphore semaphore);
+void        os_semaphore_wait(OsSemaphore semaphore);  // blocks, 0 % cpu
+void        os_semaphore_signal(OsSemaphore semaphore, u32 count);
+
+void os_mutex_init(OsMutex *mutex);
+void os_mutex_lock(OsMutex *mutex);
+void os_mutex_unlock(OsMutex *mutex);
+
 // --- keys ------------------------------------------------------------------
 // Positional: derived from the hardware scancode, so OsKey_Q is the key at the
 // physical Q position whatever the layout says. OsEvent also carries the raw
@@ -209,5 +253,21 @@ void    os_cursor_set(OsCursor cursor);
 
 // --- diagnostics -----------------------------------------------------------
 void os_debug_print(String8 s);
+
+// Counters the debug overlay reads to answer P-005: how often the loop really
+// wakes up at rest, and which messages the window proc is handed meanwhile.
+// `messages` counts every call into the window proc, `dispatched` only the ones
+// that came off the queue: the difference is what other threads send us.
+#define OS_MESSAGE_TOP_COUNT 5
+typedef struct OsEventCounters {
+    u64 pump_calls;
+    u64 wakeups;
+    u64 messages;
+    u64 dispatched;
+    u32 top_message[OS_MESSAGE_TOP_COUNT];  // most seen message ids, descending
+    u64 top_count[OS_MESSAGE_TOP_COUNT];
+} OsEventCounters;
+
+void os_event_counters(OsEventCounters *out);
 
 #endif // PLATFORM_H

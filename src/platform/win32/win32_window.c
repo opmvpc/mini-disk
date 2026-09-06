@@ -321,11 +321,66 @@ static void win32_push_char(WPARAM wparam) {
     os_request_redraw();
 }
 
+// --- diagnostics counters (P-005) ------------------------------------------
+// Plain increments, no atomics: a window proc only ever runs on the thread that
+// created the window, whether the message was posted or sent from elsewhere.
+// That is exactly the point - `messages` minus `dispatched` is what other
+// threads send us behind the back of the message queue.
+#define WIN32_MESSAGE_TABLE_SIZE 1024
+
+typedef struct Win32Counters {
+    u64 pump_calls;
+    u64 wakeups;
+    u64 messages;
+    u64 dispatched;
+    u64 by_message[WIN32_MESSAGE_TABLE_SIZE];
+    u64 above_table;
+} Win32Counters;
+
+global Win32Counters win32_counters;
+
+static void win32_count_message(UINT message) {
+    win32_counters.messages += 1;
+    if (message < WIN32_MESSAGE_TABLE_SIZE) {
+        win32_counters.by_message[message] += 1;
+    } else {
+        win32_counters.above_table += 1;
+    }
+}
+
+void os_event_counters(OsEventCounters *out) {
+    StructZero(out);
+    out->pump_calls = win32_counters.pump_calls;
+    out->wakeups = win32_counters.wakeups;
+    out->messages = win32_counters.messages;
+    out->dispatched = win32_counters.dispatched;
+    // Selection sort of five out of a thousand: cheaper than any structure we
+    // would have to keep up to date on every single message.
+    for (u32 rank = 0; rank < OS_MESSAGE_TOP_COUNT; rank += 1) {
+        u64 best_count = 0;
+        u32 best_id = 0;
+        for (u32 id = 0; id < WIN32_MESSAGE_TABLE_SIZE; id += 1) {
+            u64 count = win32_counters.by_message[id];
+            b32 taken = 0;
+            for (u32 i = 0; i < rank; i += 1) {
+                if (out->top_message[i] == id) { taken = 1; }
+            }
+            if (!taken && count > best_count) {
+                best_count = count;
+                best_id = id;
+            }
+        }
+        out->top_message[rank] = best_id;
+        out->top_count[rank] = best_count;
+    }
+}
+
 // --- window proc -----------------------------------------------------------
 
 static LRESULT CALLBACK win32_window_proc(HWND window, UINT message, WPARAM wparam,
                                           LPARAM lparam) {
     Win32WindowState *state = &win32_window_state;
+    win32_count_message(message);
     switch (message) {
         case WM_CLOSE: {
             OsEvent event = win32_event_make(OsEvent_Close);
@@ -615,6 +670,7 @@ void os_window_set_title(OsWindow window, String8 title) {
 
 void os_events_pump(b32 blocking, u64 timeout_us) {
     Win32WindowState *state = &win32_window_state;
+    win32_counters.pump_calls += 1;
     if (blocking) {
         DWORD timeout = INFINITE;
         if (timeout_us != OS_TIMEOUT_INFINITE) {
@@ -624,9 +680,11 @@ void os_events_pump(b32 blocking, u64 timeout_us) {
         HANDLE handles[1];
         handles[0] = state->wake_event;
         MsgWaitForMultipleObjectsEx(1, handles, timeout, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
+        win32_counters.wakeups += 1;
     }
     MSG message;
     while (PeekMessageW(&message, 0, 0, 0, PM_REMOVE)) {
+        win32_counters.dispatched += 1;
         if (message.message == WM_QUIT) {
             OsEvent event = win32_event_make(OsEvent_Close);
             win32_event_push(&event);

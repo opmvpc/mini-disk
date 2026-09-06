@@ -535,6 +535,8 @@ static void app_run(void) {
     Arena *permanent = arena_alloc(MB(256));
     Arena *frame_arena = arena_alloc(MB(64));
     os_events_set_frame_arena(frame_arena);
+    jobs_init(0);  // one worker per logical core minus this thread
+    ui_debug_overlay_set_arenas(permanent, frame_arena);
     OsWindow window = os_window_create(str8_lit("minidisk"), 1200, 720);
 
     if (!os_gl_init(window) || !r_init(permanent)) {
@@ -562,6 +564,9 @@ static void app_run(void) {
         OsEvent event;
         while (os_event_next(&event)) {
             if (event.kind == OsEvent_Close) { running = 0; }
+            if (event.kind == OsEvent_KeyDown && event.key == OsKey_F11) {
+                ui_debug_overlay_toggle();
+            }
             if (event.kind == OsEvent_DpiChanged) {
                 r_atlas_reset();
                 ui_text_reset();
@@ -587,13 +592,16 @@ static void app_run(void) {
             r_clear(ui_theme()->canvas);
             ui_begin(frame_arena, events, event_count, dt, size, scale);
             app_build_ui(scale);
+            ui_debug_overlay_build();
             ui_widgets_end_frame();
             ui_end();
             r_end_frame();
+            ui_debug_overlay_end_frame();
         }
         arena_clear(frame_arena);
     }
 
+    jobs_shutdown();
     os_font_shutdown();
     r_shutdown();
     os_gl_shutdown();

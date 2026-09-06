@@ -6,6 +6,7 @@
 #include "../src/base/base_math.h"
 #include "../src/base/base_hash.h"
 #include "../src/platform/platform.h"
+#include "../src/base/base_jobs.h"
 #include "../src/ui/r_core.h"
 #include "../src/ui/r_backend.h"
 #include "../src/ui/r_atlas.h"
@@ -20,7 +21,9 @@
 #include "../src/base/base_string.c"
 #include "../src/base/base_math.c"
 #include "../src/base/base_hash.c"
+#include "../src/base/base_jobs.c"
 #include "../src/platform/win32/win32_platform.c"
+#include "../src/platform/win32/win32_thread.c"
 #include "../src/ui/r_atlas.c"
 #include "../src/ui/r_raster.c"
 #include "../src/ui/r_icons.c"
@@ -329,6 +332,147 @@ static BenchResult bench_ui_layout(void) {
     return result;
 }
 
+// --- jobs ------------------------------------------------------------------
+// Dispatch overhead: the job body is empty, so what is measured is the ring,
+// the counter and the wake-ups. Target: under 1 us per job (ADR-012 budget).
+static void bench_job_empty(void *data, u64 begin, u64 end) {
+    Unused(data);
+    Unused(begin);
+    Unused(end);
+}
+
+static u64 bench_jobs_dispatch_run(u32 worker_count, u32 job_count) {
+    jobs_init(worker_count);
+    JobCounter counter;
+    counter.pending = 0;
+    u64 start_us = os_time_now_us();
+    for (u32 i = 0; i < job_count; i += 1) { jobs_push(&counter, bench_job_empty, 0); }
+    jobs_wait(&counter);
+    u64 elapsed_us = os_time_now_us() - start_us;
+    AssertAlways(counter.pending == 0);
+    ArenaTemp scratch = scratch_begin(0, 0);
+    os_debug_print(str8f(scratch.arena, "  jobs: %u workers, %llu ns per empty job\n",
+                         jobs_worker_count(), elapsed_us * 1000 / job_count));
+    scratch_end(scratch);
+    jobs_shutdown();
+    return elapsed_us;
+}
+
+static BenchResult bench_jobs_dispatch(void) {
+    u32 job_count = 200000;
+    // Every pool shape, because the interesting number is what the contention
+    // between consumers costs: one producer against N consumers on one ring.
+    bench_jobs_dispatch_run(1, job_count);
+    bench_jobs_dispatch_run(3, job_count);
+
+    u64 start_cycles = __rdtsc();
+    u64 micros = bench_jobs_dispatch_run(0, job_count);  // 0: one worker per core, minus us
+    u64 end_cycles = __rdtsc();
+    u64 ns_per_job = micros * 1000 / job_count;
+    AssertAlways(ns_per_job < 1000);  // the acceptance criterion
+
+    BenchResult result;
+    result.name = "jobs dispatch 200k empty jobs";
+    result.cycles = end_cycles - start_cycles;
+    result.micros = micros;
+    result.bytes = job_count;  // the MB/s column reads as M jobs/s
+    return result;
+}
+
+// 64 MB summed sequentially, then through jobs_dispatch: the speedup is the
+// number the ticket asks for (> 3x on four cores).
+typedef struct BenchSum {
+    const u32 *values;
+    volatile long long total;
+} BenchSum;
+
+// The same range, but with real work per element: the plain sum saturates the
+// memory bus long before it saturates the cores, so it measures the machine's
+// DRAM, not the pool. This one measures the pool.
+static void bench_mix_range(void *data, u64 begin, u64 end) {
+    BenchSum *sum = (BenchSum *)data;
+    u64 local = 0;
+    for (u64 i = begin; i < end; i += 1) {
+        u64 value = sum->values[i];
+        for (u32 round = 0; round < 8; round += 1) { value = hash64_mix(value); }
+        local += value;
+    }
+    os_atomic_add_u64(&sum->total, local);
+}
+
+static void bench_sum_range(void *data, u64 begin, u64 end) {
+    BenchSum *sum = (BenchSum *)data;
+    u64 local = 0;
+    for (u64 i = begin; i < end; i += 1) { local += sum->values[i]; }
+    os_atomic_add_u64(&sum->total, local);
+}
+
+static BenchResult bench_jobs_parallel_sum(void) {
+    u64 bytes = MB(64);
+    u64 count = bytes / sizeof(u32);
+    u32 *values = push_array(bench_arena, u32, count);
+    for (u64 i = 0; i < count; i += 1) { values[i] = (u32)i; }
+
+    BenchSum sum;
+    sum.values = values;
+    sum.total = 0;
+    u64 sequential_start = os_time_now_us();
+    bench_sum_range(&sum, 0, count);
+    u64 sequential_us = os_time_now_us() - sequential_start;
+    u64 expected = (u64)sum.total;
+
+    jobs_init(0);
+    sum.total = 0;
+    JobCounter counter;
+    counter.pending = 0;
+    u64 start_us = os_time_now_us();
+    u64 start_cycles = __rdtsc();
+    jobs_dispatch(&counter, bench_sum_range, &sum, count);
+    jobs_wait(&counter);
+    u64 end_cycles = __rdtsc();
+    u64 end_us = os_time_now_us();
+    u64 parallel_us = end_us - start_us;
+    AssertAlways((u64)sum.total == expected);
+
+    ArenaTemp scratch = scratch_begin(0, 0);
+    os_debug_print(str8f(scratch.arena,
+                         "  jobs: sum 64 MB, %llu us sequential, %llu us on %u workers, "
+                         "speedup %02f x\n",
+                         sequential_us, parallel_us, jobs_worker_count(),
+                         parallel_us ? (f64)sequential_us / (f64)parallel_us : 0.0));
+    scratch_end(scratch);
+
+    sum.total = 0;
+    u64 mix_sequential_start = os_time_now_us();
+    bench_mix_range(&sum, 0, count);
+    u64 mix_sequential_us = os_time_now_us() - mix_sequential_start;
+    u64 mix_expected = (u64)sum.total;
+
+    jobs_init(0);
+    sum.total = 0;
+    counter.pending = 0;
+    u64 mix_start_us = os_time_now_us();
+    jobs_dispatch(&counter, bench_mix_range, &sum, count);
+    jobs_wait(&counter);
+    u64 mix_parallel_us = os_time_now_us() - mix_start_us;
+    AssertAlways((u64)sum.total == mix_expected);
+    scratch = scratch_begin(0, 0);
+    os_debug_print(str8f(scratch.arena,
+                         "  jobs: mix 16 M elements, %llu us sequential, %llu us on %u workers, "
+                         "speedup %02f x\n",
+                         mix_sequential_us, mix_parallel_us, jobs_worker_count(),
+                         mix_parallel_us ? (f64)mix_sequential_us / (f64)mix_parallel_us : 0.0));
+    scratch_end(scratch);
+    jobs_shutdown();
+
+    BenchResult result;
+    result.name = "jobs parallel sum 64 MB";
+    result.cycles = end_cycles - start_cycles;
+    result.micros = parallel_us;
+    result.bytes = bytes;
+    return result;
+}
+
 int main(void) {
     os_init();
     bench_arena = arena_alloc(GB(1));
@@ -338,5 +482,7 @@ int main(void) {
     bench_print(bench_atlas_skyline());
     bench_print(bench_text_glyph_cache());
     bench_print(bench_ui_layout());
+    bench_print(bench_jobs_dispatch());
+    bench_print(bench_jobs_parallel_sum());
     return 0;
 }

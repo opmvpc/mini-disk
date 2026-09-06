@@ -11,7 +11,27 @@ entre 0,36 s et 14 s. Le coût n'est donc pas dans notre boucle. Restent : (a) u
 créé dans notre process ; (b) des messages `SendMessage` inter-threads traités par le WndProc pendant
 l'attente `MsgWaitForMultipleObjectsEx` (ils ne font pas revenir la boucle). Mesure par thread : le temps est sur le **thread principal**, ce qui favorise (b).
 
-## Décision
+## Verdict (T-008, overlay debug) — **résolu**
+L'overlay F11 compte les appels et les réveils de `os_events_pump` et chaque entrée dans le WndProc,
+en séparant les messages **dispatchés** (sortis de la file par `PeekMessage`) des messages **envoyés**
+par un autre thread. Relevé après 12 s de repos (`build/demo.png`) : **36 appels, 36 réveils, 36
+messages** depuis le lancement, dont une trentaine produits par l'overlay lui-même, qui anime à 16 ms
+tant qu'il est ouvert. Les 12 s de repos ne produisent **aucun réveil et aucun message** ; le top 5
+des identifiants ne contient que du démarrage (`WM_GETICON` x6, `WM_WINDOWPOSCHANGING` x2,
+`WM_CREATE`, `WM_MOVE`, `WM_SIZE`).
+
+Mesure par thread sur les mêmes 12 s (`Process.Threads[].TotalProcessorTime`, delta exact) :
+14 threads, **un seul consomme** (78 ms) et c'est le **dernier créé** du process. Le thread principal
+est à 0 ms, et les 7 workers du pool de T-008 aussi (ils dorment sur un sémaphore, ce qui vérifie au
+passage le critère « 0 % de CPU au repos » du job system). Les threads du pilote GL sont créés après
+les nôtres, à `os_gl_init`.
+
+Conclusion : **hypothèse (a)**. Le coût est un thread du pilote Intel dans notre process, pas notre
+boucle et pas des `SendMessage` traités pendant l'attente. Rien à corriger de notre côté ; à
+re-mesurer sur la GeForce 930MX quand l'occasion se présente, et à retester si un jour on ajoute un
+pilote GPU différent.
+
+## Décision (avant T-008)
 Non bloquant pour la phase 1 (budget visé : 0 % ; mesuré : 0,5 %). L'overlay debug de T-008 affichera
 le compteur de réveils et de messages WndProc, ce qui tranchera (a) vs (b). Si (b) : identifier le
 message. Si (a) : documenter comme coût pilote, tester sur la GeForce 930MX.

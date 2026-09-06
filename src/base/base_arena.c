@@ -79,6 +79,14 @@ ArenaTemp scratch_begin(Arena **conflicts, u64 conflict_count) {
 
 void scratch_end(ArenaTemp temp) { arena_temp_end(temp); }
 
+u64 scratch_thread_committed(void) {
+    u64 total = 0;
+    for (u64 i = 0; i < SCRATCH_COUNT; i += 1) {
+        if (tls_scratch[i] != 0) { total += tls_scratch[i]->committed; }
+    }
+    return total;
+}
+
 void scratch_thread_release(void) {
     for (u64 i = 0; i < SCRATCH_COUNT; i += 1) {
         if (tls_scratch[i] != 0) {

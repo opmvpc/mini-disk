@@ -14,13 +14,14 @@ ont un fichier `T-NNN-*.md` ; les suivants sont des lignes à détailler au mome
 | [T-005](T-005-texte-directwrite.md) | `win32_font_dwrite` + `ui_text` : cache de glyphes, mesure, "Hello 世界" | done |
 | [T-006](T-006-ui-core.md) | `ui_core` : UI_Box, clés, piles, layout 5 passes, signaux, animations | done |
 | [T-007](T-007-theme-et-widgets.md) | `ui_theme` (tokens 02b) + widgets : bouton, label, champ texte, liste virtualisée 100k lignes, splitter | done |
-| [T-008](T-008-jobs-et-overlay-debug.md) | `base_jobs` (thread pool) + overlay debug F11 (fps, draw calls, mémoire arènes) | doing |
+| [T-008](T-008-jobs-et-overlay-debug.md) | `base_jobs` (thread pool) + overlay debug F11 (fps, draw calls, mémoire arènes) | done |
 
 ## Phase 2 — Bibliothèque (cible : 100k pistes, recherche < 5 ms, exe < 250 KB)
 
 | Ticket | Titre | Statut |
 |--------|-------|--------|
-| [T-010](T-010-scan-bibliotheque.md) | Scan multi-thread, modèle SoA + StringTable, dialogue dossier, événements core → UI | todo |
+| [T-009](T-009-draw-calls-tri-par-texture.md) | Optimisation renderer : 94 → < 10 draw calls (tri par clip/texture, banc frame réaliste) | doing |
+| [T-010](T-010-scan-bibliotheque.md) | Scan multi-thread, modèle SoA + StringTable, dialogue dossier, événements core → UI | doing |
 | [T-011](T-011-tags-audio.md) | Tags ID3v1/v2, Vorbis, MP4, APE, WAV/AIFF + durées exactes, fuzz ASan | todo |
 | [T-012](T-012-index-recherche-cache.md) | Index triés, navigateur par colonnes, recherche incrémentale, cache `.mdlib` mappé | todo |
 | [T-013](T-013-vue-bibliotheque.md) | Vue Bibliothèque réelle : colonnes, tri, navigateur, recherche, états, prefs | todo |

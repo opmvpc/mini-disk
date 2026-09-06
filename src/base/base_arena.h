@@ -42,5 +42,6 @@ void      arena_temp_end(ArenaTemp temp);
 ArenaTemp scratch_begin(Arena **conflicts, u64 conflict_count);
 void      scratch_end(ArenaTemp temp);
 void      scratch_thread_release(void);
+u64       scratch_thread_committed(void);  // this thread's scratch, for the overlay
 
 #endif // BASE_ARENA_H

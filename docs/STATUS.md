@@ -2,7 +2,7 @@
 
 Dernière mise à jour : 2026-09-06 (soir)
 
-## Phase actuelle : 1 · Fondations — T-001..T-007 faits, T-008 en cours (dernier de la phase)
+## Phase actuelle : 2 · Bibliothèque — T-009 (optim draw calls) et T-010 (scan) en cours, en parallèle
 
 ### Fait (phase 0 terminée)
 - 4 rapports de recherche livrés (`research/01..04`, ~10 700 lignes) + tokens de design (`02b`).
@@ -16,9 +16,19 @@ Dernière mise à jour : 2026-09-06 (soir)
 - Repo GitHub : https://github.com/opmvpc/mini-disk
 
 ### En cours
-- Rien : T-007 attend sa review.
+- T-009 : renderer, 94 → < 10 draw calls par frame réelle (prompt `prompts/I-009`).
+- T-010 : scan multi-thread, modèle SoA, StringTable, événements core → UI (prompt `prompts/I-010`).
 
 ### Fait en phase 1 (suite)
+- T-008 livré : `platform.h` threads / sémaphores / SRW / atomiques (`win32_thread.c`), `base_jobs`
+  (pool de N-1 workers, ring MPMC de Vyukov sans lock ni allocation, `jobs_dispatch` parallel-for,
+  `jobs_wait` où le thread principal exécute des jobs, workers endormis sur sémaphore), overlay
+  debug **F11** (fps + min/avg/max sur 120 frames avec graphe en barres, boxes, draw calls,
+  vertices, atlas et remplissage, mémoire par arène, jobs et workers, DPI, taille fenêtre, réveils
+  de `os_events_pump` et messages WndProc par identifiant). **910 ns par job vide à 7 workers**,
+  4,35x de speedup sur un parallel-for borné calcul, 70 cas / **1 378 checks**, exe 107 008 o,
+  imports kernel32+user32. **P-005 résolu** : 0 réveil et 0 message sur 12 s de repos, le CPU
+  résiduel est sur un thread du pilote GL. Capture : `build/demo.png`.
 - T-007 livré : `ui_theme` (tokens de research/02b, couleurs de mode SP/mono/LP2/LP4), `ui_widgets`
   (bouton, bouton icône, label, séparateur, champ texte UTF-8 avec sélection/presse-papiers/undo,
   **liste virtualisée 100 000 lignes à 110 boxes par frame**, splitter, tooltip 500 ms, menu contextuel
@@ -38,15 +48,25 @@ Dernière mise à jour : 2026-09-06 (soir)
 - T-001 livré et reviewé : `base/`, `build.bat` (7 cibles), 125 checks, exe release **7 168 octets**, imports kernel32+user32. Voir P-003 (TLS sans CRT).
 
 ### Prochain pas
-1. Review de T-008, tag `v0.1.0-phase1`, bilan de phase, puis phase 2 (bibliothèque : T-010..T-017 à détailler).
-2. P-005 : identifier la source du CPU résiduel (0,5 %) avec l'overlay de T-008.
-3. P-007 : marge de 4,5 Ko seulement sous le budget de 100 Ko ; levier `/O1` mesuré à −16,9 Ko si T-008 déborde.
+1. Review de T-008, tag `v0.1.0-phase1`, puis phase 2 (bibliothèque : T-010..T-017 à détailler).
+2. P-007 : plus de tension immédiate (marge de 24 Ko sous le budget de 128 Ko) ; le levier `/O1`
+   (−16,9 Ko mesuré) reste disponible quand la phase 2 grossira.
+3. P-005 : clos. À re-mesurer sur la GeForce 930MX si l'occasion se présente.
 
 ### Action utilisateur requise
 - Zadig → WinUSB sur "Net MD Walkman" avant la phase 3.
 
-## KPI
-| Métrique | Valeur | Date |
-|----------|--------|------|
-| Taille exe release | 97 792 o (T-007 : thème + widgets), marge 4 608 o | 2026-09-06 |
-| Budget CI (`SIZE_BUDGET_KB`) | 128 KB (fin de phase 1 : T-007 à 97,8 KB laisse 4,5 KB pour T-008 ; `/O1` = 80,9 KB reste un levier, cf. P-007 ; phase 2 = 250 KB) | 2026-09-06 |
+## KPI — fin de phase 1 (i7-8550U, 4 cœurs / 8 threads, Intel UHD 620, Windows 11)
+| Métrique | Valeur | Cible | Date |
+|----------|--------|-------|------|
+| Taille exe release | **107 008 o**, marge 24 064 o | < 128 KB | 2026-09-06 |
+| Imports | kernel32 + user32 | ces deux-là | 2026-09-06 |
+| Fps / temps de frame (démo, overlay ouvert) | 60 fps vsync, frame typique 2,3 ms (min 1,6 / max 100 au réveil) | 60 fps | 2026-09-06 |
+| Layout | 12 020 boxes en **493 µs** (41 ns/box, meilleur de 200 passes) | < 1 ms | 2026-09-06 |
+| Liste virtualisée | 110 boxes pour 100 000 lignes | < 200 boxes | 2026-09-06 |
+| Draw calls | **94** pour la frame de la démo (overlay ouvert, 1 499 quads) ; 8 sur le banc renderer de T-004 | < 10 | 2026-09-06 |
+| Texte | 80 ns par glyphe à chaud | — | 2026-09-06 |
+| Jobs | 910 ns par job vide (7 workers), speedup 4,35x sur un parallel-for | < 1 µs, > 3x | 2026-09-06 |
+| CPU au repos, 12 s | 31 à 78 ms, **0 ms sur nos threads** (0 réveil, 0 message) ; le reste est un thread du pilote GL | 0 % | 2026-09-06 |
+| Tests | 70 cas, **1 378 checks**, 0 échec (ASan) | verts | 2026-09-06 |
+| Budget CI (`SIZE_BUDGET_KB`) | 128 KB (phase 2 : 250 KB ; `/O1` = −16,9 Ko reste un levier, cf. P-007) | — | 2026-09-06 |

@@ -6,6 +6,7 @@
 #include "../src/base/base_math.h"
 #include "../src/base/base_hash.h"
 #include "../src/platform/platform.h"
+#include "../src/base/base_jobs.h"
 #include "../src/ui/r_core.h"
 #include "../src/ui/r_backend.h"
 #include "../src/ui/r_atlas.h"
@@ -21,7 +22,9 @@
 #include "../src/base/base_string.c"
 #include "../src/base/base_math.c"
 #include "../src/base/base_hash.c"
+#include "../src/base/base_jobs.c"
 #include "../src/platform/win32/win32_platform.c"
+#include "../src/platform/win32/win32_thread.c"
 #include "../src/platform/win32/win32_window.c"
 #include "../src/ui/r_atlas.c"
 #include "../src/ui/r_raster.c"
@@ -77,6 +80,7 @@ static void test_check(b32 condition, const char *expression, i32 line) {
     } while (0)
 
 #include "test_base.c"
+#include "test_jobs.c"
 #include "test_events.c"
 #include "test_render.c"
 #include "test_text.c"
@@ -89,6 +93,7 @@ int main(void) {
     test_report("minidisk tests\n");
 
     test_base_run_all();
+    test_jobs_run_all();
     test_events_run_all();
     test_render_run_all();
     test_text_run_all();
