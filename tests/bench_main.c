@@ -13,6 +13,7 @@
 #include "../src/ui/r_icons.h"
 #include "../src/ui/ui_font.h"
 #include "../src/ui/ui_text.h"
+#include "../src/ui/ui_theme.h"
 #include "../src/ui/ui_core.h"
 
 #include "../src/base/base_arena.c"
@@ -27,6 +28,7 @@
 #include "../src/platform/win32/win32_font_dwrite.c"
 #include "../src/ui/ui_font.c"
 #include "../src/ui/ui_text.c"
+#include "../src/ui/ui_theme.c"
 #include "../src/ui/ui_core.c"
 
 // The renderer benches measure r_core and r_atlas, not the driver: the back end

@@ -13,7 +13,9 @@
 #include "ui/r_icons.h"
 #include "ui/ui_font.h"
 #include "ui/ui_text.h"
+#include "ui/ui_theme.h"
 #include "ui/ui_core.h"
+#include "ui/ui_widgets.h"
 
 #if BUILD_NO_CRT
 #include "base/base_crt_stubs.c"
@@ -37,6 +39,8 @@
 #include "ui/r_gl.c"
 #include "ui/ui_font.c"
 #include "ui/ui_text.c"
+#include "ui/ui_theme.c"
 #include "ui/ui_core.c"
+#include "ui/ui_widgets.c"
 
 #include "app/app.c"

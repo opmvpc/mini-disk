@@ -1,202 +1,573 @@
-// app.c - demo loop of T-006: three columns built with the three interesting
-// size kinds, a panel that resizes with an animation, and a keyboard focus ring
-// that Tab walks around. The loop only wakes on an event or while something is
-// still animating (ADR-004).
+// app.c - the T-007 demo: three panels separated by splitters, a search field
+// filtering a generated library of 100 000 tracks, a virtualized list with
+// multiple selection, a context menu, tooltips, and a status bar that shows the
+// number of boxes the frame actually built.
+//
+// The loop still only wakes on an event or while something animates (ADR-004).
 
 #define APP_MAX_EVENTS 256
+#define APP_LIBRARY_COUNT 100000
+#define APP_PLAN_MAX 64
+
+typedef struct AppLibrary {
+    u32 count;
+    String8 *title;
+    String8 *artist;
+    u32 *duration_s;
+    u8 *mode;  // UI_Mode
+} AppLibrary;
 
 typedef struct AppDemo {
-    b32 panel_wide;      // the animated panel target
-    f32 panel_width;     // smoothed towards the target
-    u32 click_count;
-    b32 rows_dense;
+    AppLibrary library;
+    u32 *filtered;  // indices into the library, the result of the search
+    u32 filtered_count;
+    u8 query[UI_TEXT_INPUT_CAP];
+    u32 query_size;
+
+    UI_TextInput search;
+    UI_List list;
+    UI_Splitter library_split;
+    UI_Splitter disc_split;
+    UI_ContextMenu menu;
+
+    u32 plan[APP_PLAN_MAX];
+    u32 plan_count;
+    UI_Mode plan_mode;
+    b32 initialized;
 } AppDemo;
 
 global AppDemo app_demo;
 
-// The palette of the demo: premultiplied, computed once per use, no theme yet.
-static u32 app_bg(void) { return r_rgb(0x111113); }
-static u32 app_panel(void) { return r_rgb(0x1A1A20); }
-static u32 app_surface(void) { return r_rgb(0x24242C); }
-static u32 app_accent(void) { return r_rgba(0xF4, 0x9A, 0x2A, 255); }
+// --- the fake library ------------------------------------------------------
+static const char *app_words_a[] = {"Nuit",   "Silence", "Orage",  "Cristal", "Fugue",
+                                    "Maree",  "Prisme",  "Verre",  "Cendre",  "Aurore",
+                                    "Spirale", "Echo",   "Lueur",  "Derive",  "Fracture",
+                                    "Ivoire"};
+static const char *app_words_b[] = {"electrique", "de janvier", "en mineur", "lointain",
+                                    "au ralenti", "de sel",     "obscur",    "de papier",
+                                    "sans fin",   "du nord",    "en boucle", "de cuivre"};
+static const char *app_artists[] = {
+    "Ryuichi Sakamoto", "Boards of Canada", "Autechre",   "Aphex Twin", "Jan Jelinek",
+    "Susumu Yokota",    "Oval",             "Fennesz",    "Nala Sinephro", "Cornelius",
+    "Loscil",           "Tim Hecker",       "Grouper",    "Biosphere",  "Hiroshi Yoshimura",
+    "Midori Takada",    "Colleen",          "Jonny Nash", "Sofie Birch", "Yasuaki Shimizu"};
 
-static void app_column_header(String8 title, String8 subtitle) {
-    UI_Font(ui_font(UI_FontStyle_Emphasis))
-    UI_TextColor(r_rgba(0xF0, 0xF0, 0xF6, 255)) {
-        ui_label(title);
-    }
-    UI_Font(ui_font(UI_FontStyle_Caption))
-    UI_TextColor(r_rgba(0x8A, 0x8A, 0x96, 255)) {
-        ui_label(subtitle);
+md_inline u32 app_mix(u32 x) {
+    x ^= x >> 16;
+    x *= 0x7FEB352Du;
+    x ^= x >> 15;
+    x *= 0x846CA68Bu;
+    x ^= x >> 16;
+    return x;
+}
+
+static void app_library_build(Arena *arena, AppLibrary *library, u32 count) {
+    library->count = count;
+    library->title = push_array(arena, String8, count);
+    library->artist = push_array(arena, String8, count);
+    library->duration_s = push_array(arena, u32, count);
+    library->mode = push_array(arena, u8, count);
+    for (u32 i = 0; i < count; i += 1) {
+        u32 h = app_mix(i + 1);
+        library->title[i] = str8f(arena, "%s %s %u", app_words_a[h % ArrayCount(app_words_a)],
+                                  app_words_b[(h >> 8) % ArrayCount(app_words_b)],
+                                  (h >> 16) % 900 + 100);
+        library->artist[i] = str8_cstr(app_artists[(h >> 5) % ArrayCount(app_artists)]);
+        library->duration_s[i] = 95 + (h >> 3) % 420;
+        library->mode[i] = (u8)((h >> 21) % UI_Mode_COUNT);
     }
 }
 
-static void app_build_ui(f32 scale, f32 dt) {
-    // The animated panel: one exponential step per frame, and the loop keeps
-    // spinning only because ui_animating() stays true until it converges.
-    Unused(dt);
-    f32 target = app_demo.panel_wide ? 420.0f * scale : 200.0f * scale;
-    app_demo.panel_width = ui_animate(app_demo.panel_width, target, UI_ANIM_RATE_SLOW);
+md_inline u8 app_lower(u8 c) { return (c >= 'A' && c <= 'Z') ? (u8)(c + 32) : c; }
 
+static b32 app_contains_ci(String8 haystack, String8 needle) {
+    if (needle.size == 0) { return 1; }
+    if (needle.size > haystack.size) { return 0; }
+    u64 last = haystack.size - needle.size;
+    for (u64 i = 0; i <= last; i += 1) {
+        u64 j = 0;
+        while (j < needle.size && app_lower(haystack.str[i + j]) == app_lower(needle.str[j])) {
+            j += 1;
+        }
+        if (j == needle.size) { return 1; }
+    }
+    return 0;
+}
+
+static void app_filter(void) {
+    AppLibrary *library = &app_demo.library;
+    String8 query = str8(app_demo.query, app_demo.query_size);
+    u32 count = 0;
+    for (u32 i = 0; i < library->count; i += 1) {
+        if (app_contains_ci(library->title[i], query) ||
+            app_contains_ci(library->artist[i], query)) {
+            app_demo.filtered[count] = i;
+            count += 1;
+        }
+    }
+    app_demo.filtered_count = count;
+    ui_list_select_clear(&app_demo.list);
+    app_demo.list.cursor = 0;
+    app_demo.list.anchor = 0;
+    app_demo.list.scroll = 0.0f;
+}
+
+static void app_plan_add(u32 track) {
+    if (app_demo.plan_count >= APP_PLAN_MAX) { return; }
+    app_demo.plan[app_demo.plan_count] = track;
+    app_demo.plan_count += 1;
+}
+
+static void app_plan_add_selection(void) {
+    UI_List *list = &app_demo.list;
+    for (u64 i = 0; i < app_demo.filtered_count; i += 1) {
+        if (ui_list_selected(list, i)) { app_plan_add(app_demo.filtered[i]); }
+    }
+}
+
+// --- small building blocks -------------------------------------------------
+static String8 app_duration(u32 seconds) {
+    return str8f(ui_frame_arena(), "%u:%02u", seconds / 60, seconds % 60);
+}
+
+md_inline f32 app_cell_padding(void) { return ui_dp(ui_theme()->space[UI_Space_8]); }
+
+// One cell of a list row: a single box, whatever the alignment.
+static void app_cell(UI_Size width, String8 text, u32 color, u32 text_flags, UI_TextAlign align) {
+    UI_PrefWidth(width)
+    UI_PrefHeight(ui_pct(1.0f, 1.0f))
+    UI_TextColor(color)
+    UI_TextFlags(text_flags)
+    UI_TextAlign((u32)align)
+    UI_TextPadding(app_cell_padding()) {
+        UI_Box *box = ui_build_box_from_key(UI_DrawText, 0);
+        box->display_string = text;
+    }
+}
+
+// Durations, indices and counters: right aligned, tabular figures, so the
+// digits line up down the column (research/02 s10.1).
+static void app_cell_number(f32 width, String8 text, u32 color) {
+    app_cell(ui_px(width, 1.0f), text, color, UI_TextFlag_TabularNumbers, UI_TextAlign_Right);
+}
+
+static void app_column_header(String8 title, UI_Size width, UI_TextAlign align) {
+    const UI_Theme *theme = ui_theme();
+    UI_Font(ui_font(UI_FontStyle_Caption)) {
+        app_cell(width, title, theme->fg_disabled, 0, align);
+    }
+}
+
+// A panel: a titled column with a 1 px border on its inner side.
+static UI_Box *app_panel_begin(String8 id, UI_Size width, String8 title, String8 subtitle) {
+    const UI_Theme *theme = ui_theme();
+    UI_Box *panel = 0;
+    UI_PrefWidth(width)
+    UI_PrefHeight(ui_pct(1.0f, 1.0f))
+    UI_ChildLayoutAxis(Axis2_Y)
+    UI_BgColor(theme->panel) {
+        panel = ui_build_box(UI_DrawBackground | UI_Clip, id);
+    }
+    ui_push_parent(panel);
+
+    UI_PrefWidth(ui_pct(1.0f, 0.0f))
+    UI_PrefHeight(ui_px(ui_dp(theme->row_comfortable), 1.0f))
+    UI_ChildLayoutAxis(Axis2_X) {
+        UI_Box *header = ui_build_box_from_key(0, 0);
+        UI_Parent(header) UI_TextPadding(ui_dp(theme->space[UI_Space_12])) {
+            ui_label_styled(UI_FontStyle_Emphasis, theme->fg_primary, title);
+            ui_spacer(ui_pct(1.0f, 0.0f));
+            ui_label_styled(UI_FontStyle_Caption, theme->fg_muted, subtitle);
+        }
+    }
+    ui_separator();
+    return panel;
+}
+
+md_inline void app_panel_end(void) { ui_pop_parent(); }
+
+// --- the three panels ------------------------------------------------------
+static void app_library_panel(f32 width) {
+    const UI_Theme *theme = ui_theme();
+    UI_List *list = &app_demo.list;
+    String8 count_label =
+        str8f(ui_frame_arena(), "%u / %u", app_demo.filtered_count, app_demo.library.count);
+    app_panel_begin(str8_lit("###library"), ui_px(width, 1.0f), str8_lit("Bibliotheque"),
+                    count_label);
+
+    // Search field.
+    UI_PrefWidth(ui_pct(1.0f, 0.0f))
+    UI_PrefHeight(ui_px(ui_dp(theme->row_comfortable), 1.0f))
+    UI_ChildLayoutAxis(Axis2_X) {
+        UI_Box *bar = ui_build_box_from_key(0, 0);
+        UI_Parent(bar) {
+            ui_spacer(ui_px(ui_dp(theme->space[UI_Space_8]), 1.0f));
+            UI_PrefHeight(ui_px(ui_dp(theme->row_standard), 1.0f)) {
+                ui_text_input(&app_demo.search, str8_lit("Rechercher un titre, un artiste"));
+            }
+            ui_spacer(ui_px(ui_dp(theme->space[UI_Space_8]), 1.0f));
+        }
+    }
+    if (app_demo.search.changed) {
+        String8 query = ui_text_input_string(&app_demo.search);
+        mem_copy(app_demo.query, query.str, query.size);
+        app_demo.query_size = (u32)query.size;
+        app_filter();
+    }
+
+    // Column headers.
+    f32 artist_width = ui_dp(180.0f);
+    f32 duration_width = ui_dp(64.0f);
+    UI_PrefWidth(ui_pct(1.0f, 0.0f))
+    UI_PrefHeight(ui_px(ui_dp(theme->row_compact), 1.0f))
+    UI_ChildLayoutAxis(Axis2_X)
+    UI_BgColor(theme->panel) {
+        UI_Box *header = ui_build_box_from_key(UI_DrawBackground, 0);
+        UI_Parent(header) {
+            app_column_header(str8_lit("TITRE"), ui_pct(1.0f, 0.0f), UI_TextAlign_Left);
+            app_column_header(str8_lit("ARTISTE"), ui_px(artist_width, 1.0f), UI_TextAlign_Left);
+            app_column_header(str8_lit("DUREE"), ui_px(duration_width, 1.0f), UI_TextAlign_Right);
+        }
+    }
+    ui_separator();
+
+    // The list itself: 100 000 rows, only the visible ones become boxes.
+    ui_list_begin(list, app_demo.filtered_count, ui_dp(theme->row_compact));
+    UI_ListEachRow(list, i) {
+        u32 track = app_demo.filtered[i];
+        ui_list_row_begin(list, i);
+        b32 selected = ui_list_selected(list, i);
+        u32 secondary = selected ? theme->fg_primary : theme->fg_secondary;
+        app_cell(ui_pct(1.0f, 0.0f), app_demo.library.title[track], theme->fg_primary, 0,
+                 UI_TextAlign_Left);
+        app_cell(ui_px(artist_width, 1.0f), app_demo.library.artist[track], secondary, 0,
+                 UI_TextAlign_Left);
+        app_cell_number(duration_width, app_duration(app_demo.library.duration_s[track]),
+                        secondary);
+        ui_list_row_end(list);
+    }
+    ui_list_end(list);
+
+    if (list->context) {
+        ui_context_menu_open(&app_demo.menu, list->context_pos, list->context_row);
+    }
+    if (list->activated) { app_plan_add_selection(); }
+    app_panel_end();
+}
+
+static void app_plan_panel(void) {
+    const UI_Theme *theme = ui_theme();
+    u32 total = 0;
+    for (u32 i = 0; i < app_demo.plan_count; i += 1) {
+        total += app_demo.library.duration_s[app_demo.plan[i]];
+    }
+    String8 subtitle = str8f(ui_frame_arena(), "%u pistes - %S", app_demo.plan_count,
+                             app_duration(total));
+    app_panel_begin(str8_lit("###plan"), ui_pct(1.0f, 0.0f), str8_lit("Plan"), subtitle);
+
+    UI_PrefWidth(ui_pct(1.0f, 0.0f))
+    UI_PrefHeight(ui_pct(1.0f, 0.0f))
+    UI_ChildLayoutAxis(Axis2_Y)
+    UI_BgColor(theme->surface) {
+        UI_Box *body = ui_build_box_from_key(UI_DrawBackground | UI_Clip, 0);
+        UI_Parent(body) {
+            if (app_demo.plan_count == 0) {
+                UI_PrefHeight(ui_px(ui_dp(theme->row_comfortable), 1.0f))
+                UI_TextPadding(ui_dp(theme->space[UI_Space_12])) {
+                    ui_label_styled(UI_FontStyle_Ui, theme->fg_muted,
+                                    str8_lit("Entree ou double clic ajoute la selection"));
+                }
+            }
+            for (u32 i = 0; i < app_demo.plan_count; i += 1) {
+                u32 track = app_demo.plan[i];
+                UI_Seed(hash64_mix((u64)i + 1))
+                UI_PrefWidth(ui_pct(1.0f, 0.0f))
+                UI_PrefHeight(ui_px(ui_dp(theme->row_compact), 1.0f))
+                UI_ChildLayoutAxis(Axis2_X)
+                UI_BgColor(theme->surface) {
+                    UI_Box *row = ui_build_box(UI_Clickable | UI_DrawBackground,
+                                               str8_lit("###planrow"));
+                    UI_Parent(row) {
+                        app_cell_number(ui_dp(32.0f), str8f(ui_frame_arena(), "%u", i + 1),
+                                        theme->fg_muted);
+                        // The mode pastille: colour carries meaning, only here.
+                        UI_PrefWidth(ui_px(ui_dp(theme->space[UI_Space_8]), 1.0f))
+                        UI_PrefHeight(ui_pct(1.0f, 1.0f)) {
+                            UI_Box *cell = ui_build_box_from_key(0, 0);
+                            UI_Parent(cell)
+                            UI_FixedY(ui_dp(7.0f))
+                            UI_PrefWidth(ui_px(ui_dp(theme->space[UI_Space_8]), 1.0f))
+                            UI_PrefHeight(ui_px(ui_dp(theme->space[UI_Space_8]), 1.0f))
+                            UI_CornerRadius(ui_dp(4.0f))
+                            UI_BgColor(theme->mode[app_demo.library.mode[track]]) {
+                                ui_build_box_from_key(UI_FloatingY | UI_DrawBackground, 0);
+                            }
+                        }
+                        app_cell(ui_pct(1.0f, 0.0f), app_demo.library.title[track],
+                                 theme->fg_primary, 0, UI_TextAlign_Left);
+                        app_cell_number(ui_dp(64.0f),
+                                        app_duration(app_demo.library.duration_s[track]),
+                                        theme->fg_secondary);
+                    }
+                }
+            }
+        }
+    }
+    app_panel_end();
+}
+
+// A capacity gauge: one segment per planned track, coloured by its mode.
+static void app_disc_panel(f32 width) {
+    const UI_Theme *theme = ui_theme();
+    f32 capacity_s = 80.0f * 60.0f;
+    u32 used = 0;
+    for (u32 i = 0; i < app_demo.plan_count; i += 1) {
+        used += app_demo.library.duration_s[app_demo.plan[i]];
+    }
+    String8 subtitle = str8_lit("MZ-N505");
+    app_panel_begin(str8_lit("###disc"), ui_px(width, 1.0f), str8_lit("Disque"), subtitle);
+
+    UI_PrefWidth(ui_pct(1.0f, 0.0f))
+    UI_PrefHeight(ui_pct(1.0f, 0.0f))
+    UI_ChildLayoutAxis(Axis2_Y)
+    UI_BgColor(theme->surface) {
+        UI_Box *body = ui_build_box_from_key(UI_DrawBackground | UI_Clip, 0);
+        UI_Parent(body) UI_TextPadding(ui_dp(theme->space[UI_Space_12])) {
+            ui_label_styled(UI_FontStyle_Emphasis, theme->fg_primary,
+                            str8f(ui_frame_arena(), "%S / 80:00", app_duration(used)));
+
+            // The gauge: free space in control, then one segment per track.
+            UI_PrefWidth(ui_pct(1.0f, 0.0f))
+            UI_PrefHeight(ui_px(ui_dp(theme->space[UI_Space_12]), 1.0f))
+            UI_ChildLayoutAxis(Axis2_X)
+            UI_BgColor(theme->control)
+            UI_CornerRadius(ui_dp(theme->space[UI_Space_2])) {
+                UI_Box *gauge = ui_build_box_from_key(UI_DrawBackground, 0);
+                UI_Parent(gauge) UI_CornerRadius(0.0f) {
+                    for (u32 i = 0; i < app_demo.plan_count; i += 1) {
+                        u32 track = app_demo.plan[i];
+                        f32 fraction = (f32)app_demo.library.duration_s[track] / capacity_s;
+                        UI_PrefWidth(ui_pct(fraction, 0.0f))
+                        UI_PrefHeight(ui_pct(1.0f, 1.0f))
+                        UI_BgColor(theme->mode[app_demo.library.mode[track]]) {
+                            ui_build_box_from_key(UI_DrawBackground, 0);
+                        }
+                    }
+                }
+            }
+
+            ui_spacer(ui_px(ui_dp(theme->space[UI_Space_8]), 1.0f));
+            static const char *mode_names[UI_Mode_COUNT] = {"SP", "Mono", "LP2", "LP4"};
+            for (u32 mode = 0; mode < UI_Mode_COUNT; mode += 1) {
+                UI_PrefWidth(ui_pct(1.0f, 0.0f))
+                UI_PrefHeight(ui_px(ui_dp(theme->row_compact), 1.0f))
+                UI_ChildLayoutAxis(Axis2_X) {
+                    UI_Box *row = ui_build_box_from_key(0, 0);
+                    UI_Parent(row) {
+                        UI_PrefWidth(ui_px(ui_dp(theme->space[UI_Space_24]), 1.0f))
+                        UI_PrefHeight(ui_pct(1.0f, 1.0f)) {
+                            UI_Box *cell = ui_build_box_from_key(0, 0);
+                            UI_Parent(cell)
+                            UI_FixedX(ui_dp(theme->space[UI_Space_12]))
+                            UI_FixedY(ui_dp(7.0f))
+                            UI_PrefWidth(ui_px(ui_dp(theme->space[UI_Space_8]), 1.0f))
+                            UI_PrefHeight(ui_px(ui_dp(theme->space[UI_Space_8]), 1.0f))
+                            UI_CornerRadius(ui_dp(4.0f))
+                            UI_BgColor(theme->mode[mode]) {
+                                ui_build_box_from_key(UI_FloatingX | UI_FloatingY |
+                                                          UI_DrawBackground,
+                                                      0);
+                            }
+                        }
+                        app_cell(ui_text_size(app_cell_padding(), 1.0f),
+                                 str8_cstr(mode_names[mode]), theme->fg_secondary, 0,
+                                 UI_TextAlign_Left);
+                    }
+                }
+            }
+
+            ui_spacer(ui_px(ui_dp(theme->space[UI_Space_12]), 1.0f));
+            UI_PrefWidth(ui_pct(1.0f, 0.0f))
+            UI_PrefHeight(ui_px(ui_dp(theme->row_standard), 1.0f))
+            UI_ChildLayoutAxis(Axis2_X) {
+                UI_Box *row = ui_build_box_from_key(0, 0);
+                UI_Parent(row) {
+                    ui_spacer(ui_px(ui_dp(theme->space[UI_Space_12]), 1.0f));
+                    if (ui_button_primary(str8_lit("Graver###burn")).clicked) {
+                        app_demo.plan_count = 0;
+                    }
+                    ui_tooltip(str8_lit("Ecrit le plan sur le disque insere"));
+                    ui_spacer(ui_px(ui_dp(theme->space[UI_Space_8]), 1.0f));
+                    if (ui_button(str8_lit("Vider###clear")).clicked) { app_demo.plan_count = 0; }
+                    ui_tooltip(str8_lit("Retire toutes les pistes du plan"));
+                }
+            }
+        }
+    }
+    app_panel_end();
+}
+
+static void app_toolbar(void) {
+    const UI_Theme *theme = ui_theme();
+    UI_PrefWidth(ui_pct(1.0f, 0.0f))
+    UI_PrefHeight(ui_px(ui_dp(theme->row_comfortable), 1.0f))
+    UI_ChildLayoutAxis(Axis2_X)
+    UI_BgColor(theme->panel) {
+        UI_Box *bar = ui_build_box_from_key(UI_DrawBackground, 0);
+        UI_Parent(bar) {
+            ui_spacer(ui_px(ui_dp(theme->space[UI_Space_8]), 1.0f));
+            UI_PrefHeight(ui_px(ui_dp(theme->row_standard), 1.0f)) {
+                if (ui_button_icon(R_Icon_Disc, str8_lit("###device")).clicked) {}
+                ui_tooltip(str8_lit("Rafraichir l'appareil"));
+                ui_spacer(ui_px(ui_dp(theme->space[UI_Space_4]), 1.0f));
+                if (ui_button_icon(R_Icon_Play, str8_lit("###preview")).clicked) {}
+                ui_tooltip(str8_lit("Preecouter la selection"));
+                ui_spacer(ui_px(ui_dp(theme->space[UI_Space_12]), 1.0f));
+                if (ui_button(str8_lit("Ajouter au plan###add")).clicked) {
+                    app_plan_add_selection();
+                }
+                ui_tooltip(str8_lit("Entree ajoute aussi la selection"));
+            }
+            ui_spacer(ui_pct(1.0f, 0.0f));
+            UI_TextPadding(ui_dp(theme->space[UI_Space_12])) {
+                ui_label_styled(UI_FontStyle_Caption, theme->fg_muted,
+                                str8f(ui_frame_arena(), "%llu selectionnees",
+                                      ui_list_selected_count(&app_demo.list)));
+            }
+        }
+    }
+}
+
+static void app_status_bar(void) {
+    const UI_Theme *theme = ui_theme();
+    UI_PrefWidth(ui_pct(1.0f, 0.0f))
+    UI_PrefHeight(ui_px(ui_dp(theme->row_compact), 1.0f))
+    UI_ChildLayoutAxis(Axis2_X)
+    UI_BgColor(theme->panel)
+    UI_Font(ui_font(UI_FontStyle_Caption))
+    UI_TextPadding(ui_dp(theme->space[UI_Space_12])) {
+        UI_Box *bar = ui_build_box_from_key(UI_DrawBackground, 0);
+        UI_Parent(bar) {
+            ui_label_styled(UI_FontStyle_Caption, theme->fg_muted,
+                            str8f(ui_frame_arena(),
+                                  "liste 100k : %llu boxes pour %llu lignes visibles - "
+                                  "%llu boxes dans la frame",
+                                  app_demo.list.box_count, app_demo.list.visible_count,
+                                  ui_frame_box_count()));
+            ui_spacer(ui_pct(1.0f, 0.0f));
+            ui_label_styled(UI_FontStyle_Caption, theme->fg_muted,
+                            str8_lit("Tab navigue - Ctrl+A tout selectionner - clic droit menu"));
+        }
+    }
+}
+
+static void app_build_ui(f32 scale) {
+    const UI_Theme *theme = ui_theme();
+    Unused(scale);
     UI_Box *root = ui_root(UI_Layer_Content);
     root->flags |= UI_DrawBackground;
-    root->bg_color = app_bg();
+    root->bg_color = theme->canvas;
+    root->child_layout_axis = Axis2_Y;
 
-    ui_push_child_layout_axis(Axis2_X);
-    ui_push_pref_width(ui_pct(1.0f, 0.0f));
-    ui_push_pref_height(ui_pct(1.0f, 0.0f));
-    UI_Box *row = ui_build_box(0, str8_lit("###main_row"));
-    ui_pop_pref_height();
-    ui_pop_pref_width();
-    ui_pop_child_layout_axis();
+    UI_Parent(root) {
+        app_toolbar();
+        ui_separator();
 
-    UI_Parent(row) {
-        // --- column 1: ChildrenSum, the column is as wide as its widest child
-        UI_PrefWidth(ui_children_sum(1.0f))
-        UI_PrefHeight(ui_pct(1.0f, 1.0f))
-        UI_ChildLayoutAxis(Axis2_Y)
-        UI_BgColor(app_panel())
-        UI_CornerRadius(0.0f) {
-            UI_Box *column = ui_build_box(UI_DrawBackground, str8_lit("###col_sum"));
-            UI_Parent(column) {
-                UI_TextPadding(14.0f * scale) {
-                    app_column_header(str8_lit("ChildrenSum"),
-                                      str8_lit("largeur = celle du plus large enfant"));
-                    UI_PrefWidth(ui_text_size(14.0f * scale, 1.0f))
-                    UI_PrefHeight(ui_px(28.0f * scale, 1.0f))
-                    UI_BgColor(app_surface())
-                    UI_CornerRadius(4.0f * scale) {
-                        UI_Signal wide = ui_button(str8_lit("Panneau large / etroit##wide"));
-                        if (wide.clicked || wide.key_pressed) {
-                            app_demo.panel_wide = !app_demo.panel_wide;
-                        }
-                        UI_Signal dense = ui_button(str8_lit("Lignes denses##dense"));
-                        if (dense.clicked || dense.key_pressed) {
-                            app_demo.rows_dense = !app_demo.rows_dense;
-                        }
-                        UI_Signal count = ui_button(str8_lit("Compter les clics##count"));
-                        if (count.clicked || count.key_pressed) { app_demo.click_count += 1; }
-                    }
-                    ui_labelf("clics: %u", app_demo.click_count);
-                }
-            }
-        }
-
-        // --- column 2: PercentOfParent, fills what the two others leave
         UI_PrefWidth(ui_pct(1.0f, 0.0f))
-        UI_PrefHeight(ui_pct(1.0f, 1.0f))
-        UI_ChildLayoutAxis(Axis2_Y)
-        UI_BgColor(r_rgb(0x141419)) {
-            UI_Box *column = ui_build_box(UI_DrawBackground | UI_Clip, str8_lit("###col_pct"));
-            UI_Parent(column) UI_TextPadding(14.0f * scale) {
-                app_column_header(str8_lit("PercentOfParent"),
-                                  str8_lit("strictness 0 : cette colonne encaisse les violations"));
-                f32 row_height = (app_demo.rows_dense ? 22.0f : 30.0f) * scale;
-                for (u32 i = 0; i < 12; i += 1) {
-                    UI_Seed(hash64_mix((u64)i + 1))
-                    UI_PrefWidth(ui_pct(1.0f, 0.0f))
-                    UI_PrefHeight(ui_px(row_height, 1.0f))
-                    UI_BgColor((i & 1) ? r_rgb(0x1B1B22) : r_rgb(0x17171D))
-                    UI_TextPadding(14.0f * scale) {
-                        UI_Box *item = ui_build_box(UI_Clickable | UI_Focusable |
-                                                        UI_DrawBackground | UI_DrawText,
-                                                    str8_lit("piste###row"));
-                        UI_Signal signal = ui_signal(item);
-                        item->display_string =
-                            str8f(ui_frame_arena(), "%u - piste de demonstration %u", i + 1, i + 1);
-                        if (signal.clicked || signal.key_pressed) { app_demo.click_count += 1; }
-                    }
-                }
+        UI_PrefHeight(ui_pct(1.0f, 0.0f))
+        UI_ChildLayoutAxis(Axis2_X) {
+            UI_Box *body = ui_build_box_from_key(0, 0);
+            UI_Parent(body) {
+                // The body rect is last frame's, which is what the splitters
+                // were dragged against anyway.
+                f32 total = rect_width(body->rect);
+                f32 library_width = ui_splitter_update(&app_demo.library_split, Axis2_X, total);
+                f32 disc_width = ui_splitter_update(&app_demo.disc_split, Axis2_X, total);
+                app_library_panel(library_width);
+                ui_splitter(&app_demo.library_split, Axis2_X);
+                app_plan_panel();
+                ui_splitter(&app_demo.disc_split, Axis2_X);
+                app_disc_panel(disc_width);
             }
         }
-
-        // --- column 3: Pixels, animated width
-        UI_PrefWidth(ui_px(app_demo.panel_width, 1.0f))
-        UI_PrefHeight(ui_pct(1.0f, 1.0f))
-        UI_ChildLayoutAxis(Axis2_Y)
-        UI_BgColor(app_panel()) {
-            UI_Box *column = ui_build_box(UI_DrawBackground | UI_Clip, str8_lit("###col_px"));
-            UI_Parent(column) UI_TextPadding(14.0f * scale) {
-                app_column_header(str8_lit("Pixels"), str8_lit("largeur animee, cliquez le bouton"));
-                ui_labelf("largeur: %d px", (i32)app_demo.panel_width);
-                UI_PrefWidth(ui_pct(1.0f, 0.0f))
-                UI_PrefHeight(ui_px(90.0f * scale, 1.0f))
-                UI_BgColor(app_surface())
-                UI_BorderColor(app_accent())
-                UI_CornerRadius(6.0f * scale)
-                UI_TextPadding(12.0f * scale) {
-                    ui_build_box(UI_DrawBackground | UI_DrawBorder | UI_DrawDropShadow |
-                                     UI_DrawText | UI_Clickable | UI_Focusable,
-                                 str8_lit("Tab / Shift+Tab pour naviguer##focusdemo"));
-                }
-            }
-        }
+        ui_separator();
+        app_status_bar();
     }
 
-    // A tooltip layer root, to prove the floating layers land on top.
-    UI_LayerScope(UI_Layer_Tooltip) {
-        V2 mouse = ui_mouse();
-        UI_FixedX(mouse.x + 16.0f * scale)
-        UI_FixedY(mouse.y + 16.0f * scale)
-        UI_PrefWidth(ui_text_size(8.0f * scale, 1.0f))
-        UI_PrefHeight(ui_px(24.0f * scale, 1.0f))
-        UI_BgColor(r_rgba(0x2E, 0x2E, 0x38, 240))
-        UI_CornerRadius(4.0f * scale)
-        UI_TextPadding(8.0f * scale)
-        UI_Font(ui_font(UI_FontStyle_Caption)) {
-            UI_Box *tip = ui_build_box(UI_FloatingX | UI_FloatingY | UI_DrawBackground |
-                                           UI_DrawDropShadow | UI_DrawText,
-                                       str8_lit("###tooltip"));
-            tip->display_string = str8f(ui_frame_arena(), "boxes: %llu - anim: %d",
-                                        ui_box_count(), ui_animating() ? 1 : 0);
+    if (ui_context_menu_begin(&app_demo.menu)) {
+        u64 row = app_demo.menu.payload;
+        if (ui_context_menu_item(&app_demo.menu, str8_lit("Ajouter au plan"))) {
+            app_plan_add_selection();
         }
+        if (ui_context_menu_item(&app_demo.menu, str8_lit("Ajouter cette piste"))) {
+            if (row < app_demo.filtered_count) { app_plan_add(app_demo.filtered[row]); }
+        }
+        ui_context_menu_separator(&app_demo.menu);
+        if (ui_context_menu_item(&app_demo.menu, str8_lit("Tout selectionner"))) {
+            ui_list_select_all(&app_demo.list);
+        }
+        if (ui_context_menu_item(&app_demo.menu, str8_lit("Deselectionner"))) {
+            ui_list_select_clear(&app_demo.list);
+        }
+        ui_context_menu_end(&app_demo.menu);
     }
+}
+
+static void app_init(Arena *permanent, f32 scale) {
+    UI_Theme theme;
+    ui_theme_dark(&theme);
+    ui_theme_set(&theme);
+
+    app_library_build(permanent, &app_demo.library, APP_LIBRARY_COUNT);
+    app_demo.filtered = push_array(permanent, u32, APP_LIBRARY_COUNT);
+    u64 selection_words = (APP_LIBRARY_COUNT + 63) / 64;
+    ui_list_init(&app_demo.list, push_array_zero(permanent, u64, selection_words),
+                 selection_words);
+    ui_text_input_init(&app_demo.search, str8_lit(""));
+    ui_splitter_init(&app_demo.library_split, 420.0f * scale, 220.0f * scale, 420.0f * scale);
+    ui_splitter_init(&app_demo.disc_split, 260.0f * scale, 200.0f * scale, 320.0f * scale);
+    app_demo.disc_split.measures_trailing = 1;
+    app_filter();
+    app_demo.initialized = 1;
 }
 
 static void app_run(void) {
     Arena *permanent = arena_alloc(MB(256));
     Arena *frame_arena = arena_alloc(MB(64));
     os_events_set_frame_arena(frame_arena);
-    OsWindow window = os_window_create(str8_lit("minidisk"), 1024, 640);
+    OsWindow window = os_window_create(str8_lit("minidisk"), 1200, 720);
 
     if (!os_gl_init(window) || !r_init(permanent)) {
         os_debug_print(str8_lit("minidisk: OpenGL 3.3 core is required, aborting\n"));
         os_exit(2);
     }
     f32 scale = os_window_dpi_scale(window);
-    r_icons_build(frame_arena, (u32)(24.0f * scale));
+    r_icons_build(frame_arena, (u32)(16.0f * scale));
     if (!os_font_init() || !ui_fonts_build(scale)) {
         os_debug_print(str8_lit("minidisk: no usable system font, aborting\n"));
         os_exit(2);
     }
     ui_text_init(permanent);
     ui_init(permanent);
-    app_demo.panel_width = 200.0f * scale;
+    app_init(permanent, scale);
 
     // 256 OsEvent is 24 KB: on the arena, not on the stack (C6262).
     OsEvent *events = push_array(permanent, OsEvent, APP_MAX_EVENTS);
     u64 last_us = os_time_now_us();
     b32 running = 1;
     while (running) {
-        // The whole point of the ticket: a converged UI waits forever, so the
-        // process is at strictly zero wakeups until something happens.
         os_events_pump(1, ui_animating() ? 16000 : OS_TIMEOUT_INFINITE);
 
         u64 event_count = 0;
         OsEvent event;
         while (os_event_next(&event)) {
             if (event.kind == OsEvent_Close) { running = 0; }
-            if (event.kind == OsEvent_KeyDown && event.key == OsKey_Escape &&
-                ui_focus_key() == 0) {
-                running = 0;
-            }
             if (event.kind == OsEvent_DpiChanged) {
                 r_atlas_reset();
                 ui_text_reset();
                 scale = event.dpi_scale;
-                r_icons_build(frame_arena, (u32)(24.0f * scale));
+                r_icons_build(frame_arena, (u32)(16.0f * scale));
                 ui_fonts_build(scale);
-                app_demo.panel_width = app_demo.panel_wide ? 420.0f * scale : 200.0f * scale;
             }
             if (event_count < APP_MAX_EVENTS) {
                 events[event_count] = event;
@@ -213,9 +584,10 @@ static void app_run(void) {
         if (os_redraw_requested() || ui_animating()) {
             V2 size = os_window_get_size(window);
             r_begin_frame(frame_arena, size.x, size.y, scale);
-            r_clear(app_bg());
+            r_clear(ui_theme()->canvas);
             ui_begin(frame_arena, events, event_count, dt, size, scale);
-            app_build_ui(scale, dt);
+            app_build_ui(scale);
+            ui_widgets_end_frame();
             ui_end();
             r_end_frame();
         }

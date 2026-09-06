@@ -2,7 +2,7 @@
 
 Dernière mise à jour : 2026-09-06 (soir)
 
-## Phase actuelle : 1 · Fondations — T-001..T-006 faits, T-007 en cours
+## Phase actuelle : 1 · Fondations — T-001..T-007 faits, T-008 en cours (dernier de la phase)
 
 ### Fait (phase 0 terminée)
 - 4 rapports de recherche livrés (`research/01..04`, ~10 700 lignes) + tokens de design (`02b`).
@@ -16,9 +16,14 @@ Dernière mise à jour : 2026-09-06 (soir)
 - Repo GitHub : https://github.com/opmvpc/mini-disk
 
 ### En cours
-- Rien : T-006 attend sa review.
+- Rien : T-007 attend sa review.
 
 ### Fait en phase 1 (suite)
+- T-007 livré : `ui_theme` (tokens de research/02b, couleurs de mode SP/mono/LP2/LP4), `ui_widgets`
+  (bouton, bouton icône, label, séparateur, champ texte UTF-8 avec sélection/presse-papiers/undo,
+  **liste virtualisée 100 000 lignes à 110 boxes par frame**, splitter, tooltip 500 ms, menu contextuel
+  au clavier), démo trois panneaux « Bibliothèque | Plan | Disque », 65 cas / **1 345 checks**,
+  exe 97 792 o, imports kernel32+user32, 31 ms de CPU sur 12 s au repos. Capture : `build/demo.png`.
 - T-006 livré : `ui_core` (clés hachées, piles de style, layout sémantique en 2 parcours, signaux, animations, 3 couches), démo 3 colonnes, **layout de 12 020 boxes en 338 µs** (28 ns/box, meilleur de 200 passes), 1 231 checks, exe 66 048 o, imports kernel32+user32, 15,6 ms de CPU sur 12 s au repos.
 - T-005 livré et reviewé : DirectWrite → atlas R8, fallback système (japonais, katakana half-width), caches glyphes/mesure, ellipsis, chiffres tabulaires, 63 ns/glyphe à chaud, 1 143 checks, exe 54 272 o. P-006 (vtables COM en C).
 - T-005 livré : DirectWrite chargé dynamiquement (vtables COM à la main), fallback système par
@@ -33,8 +38,9 @@ Dernière mise à jour : 2026-09-06 (soir)
 - T-001 livré et reviewé : `base/`, `build.bat` (7 cibles), 125 checks, exe release **7 168 octets**, imports kernel32+user32. Voir P-003 (TLS sans CRT).
 
 ### Prochain pas
-1. Review de T-007, puis T-008 (jobs + overlay, fin de phase 1, tag v0.1.0-phase1).
+1. Review de T-008, tag `v0.1.0-phase1`, bilan de phase, puis phase 2 (bibliothèque : T-010..T-017 à détailler).
 2. P-005 : identifier la source du CPU résiduel (0,5 %) avec l'overlay de T-008.
+3. P-007 : marge de 4,5 Ko seulement sous le budget de 100 Ko ; levier `/O1` mesuré à −16,9 Ko si T-008 déborde.
 
 ### Action utilisateur requise
 - Zadig → WinUSB sur "Net MD Walkman" avant la phase 3.
@@ -42,5 +48,5 @@ Dernière mise à jour : 2026-09-06 (soir)
 ## KPI
 | Métrique | Valeur | Date |
 |----------|--------|------|
-| Taille exe release | 66 048 o (T-006 : `ui_core`) | 2026-09-06 |
-| Budget CI (`SIZE_BUDGET_KB`) | 100 KB (phase 1) | 2026-09-06 |
+| Taille exe release | 97 792 o (T-007 : thème + widgets), marge 4 608 o | 2026-09-06 |
+| Budget CI (`SIZE_BUDGET_KB`) | 128 KB (fin de phase 1 : T-007 à 97,8 KB laisse 4,5 KB pour T-008 ; `/O1` = 80,9 KB reste un levier, cf. P-007 ; phase 2 = 250 KB) | 2026-09-06 |

@@ -36,7 +36,16 @@ enum {
     UI_FloatingX      = 1u << 8,   // position imposed, ignored by the parent layout
     UI_FloatingY      = 1u << 9,
     UI_Disabled       = 1u << 10,  // no signal, drawn dimmed by the widget
+    UI_DrawIcon       = 1u << 11,  // `icon` (R_Icon + 1) is stamped from the atlas
 };
+
+// Horizontal alignment of the drawn text inside the box. Durations, sizes and
+// counters are right aligned with tabular figures (research/02 s10.3).
+typedef enum UI_TextAlign {
+    UI_TextAlign_Left = 0,
+    UI_TextAlign_Center,
+    UI_TextAlign_Right,
+} UI_TextAlign;
 
 typedef enum UI_SizeKind {
     UI_SizeKind_Null = 0,       // occupies nothing
@@ -118,6 +127,11 @@ struct UI_Box {
     f32 border_thickness;
     f32 text_padding;
     u32 bg_color, border_color, text_color;
+    // Four bytes, not twelve: UI_Box is walked twice per frame over the whole
+    // tree, and every byte of it is a byte of cache line.
+    u16 icon;        // 0: none, else R_Icon + 1
+    u8 text_flags;   // UI_TextFlag_*
+    u8 text_align;   // UI_TextAlign_*
     OsFont font;
 
     // -- cold: retained across frames -----------------------------------
@@ -129,7 +143,8 @@ typedef struct UI_Signal {
     UI_Box *box;
     V2 mouse;       // relative to the top left corner of the box
     V2 drag_delta;  // since the press
-    V2 scroll;      // wheel, in lines
+    V2 scroll;         // wheel, in lines
+    V2 scroll_pixels;  // the same delta the OS also gave us in pixels
     b32 hovering;
     b32 pressed;
     b32 released;
@@ -141,6 +156,7 @@ typedef struct UI_Signal {
     b32 key_pressed;  // Space or Enter while focused
     u32 key;          // OsKey routed to the focus this frame, 0 if none
     u32 modifiers;
+    u32 press_modifiers;  // modifiers held when the press happened
 } UI_Signal;
 
 // A for that runs its body once and guarantees the pop. Rule: never break,
@@ -167,6 +183,8 @@ typedef struct UI_Signal {
     X(corner_radius, f32)            \
     X(border_thickness, f32)         \
     X(text_padding, f32)             \
+    X(text_flags, u32)               \
+    X(text_align, u32)               \
     X(font, OsFont)                  \
     X(fixed_x, f32)                  \
     X(fixed_y, f32)
@@ -190,6 +208,8 @@ UI_STACK_LIST
 #define UI_CornerRadius(v)    DeferLoop(ui_push_corner_radius(v), ui_pop_corner_radius())
 #define UI_BorderThickness(v) DeferLoop(ui_push_border_thickness(v), ui_pop_border_thickness())
 #define UI_TextPadding(v)     DeferLoop(ui_push_text_padding(v), ui_pop_text_padding())
+#define UI_TextFlags(v)       DeferLoop(ui_push_text_flags(v), ui_pop_text_flags())
+#define UI_TextAlign(v)       DeferLoop(ui_push_text_align(v), ui_pop_text_align())
 #define UI_Font(v)            DeferLoop(ui_push_font(v), ui_pop_font())
 #define UI_FixedX(v)          DeferLoop(ui_push_fixed_x(v), ui_pop_fixed_x())
 #define UI_FixedY(v)          DeferLoop(ui_push_fixed_y(v), ui_pop_fixed_y())
@@ -223,24 +243,42 @@ UI_Signal ui_signal(UI_Box *box);
 UI_Box *ui_root(UI_Layer layer);
 UI_Box *ui_box_from_key(UI_Key key);  // 0 when absent
 u64     ui_box_count(void);           // live boxes in the table, tests
+u64     ui_frame_box_count(void);     // boxes built during this frame
 u64     ui_frame_index(void);
 UI_Key  ui_hot_key(void);
 UI_Key  ui_active_key(void);
 UI_Key  ui_focus_key(void);
 void    ui_set_focus(UI_Key key, b32 via_keyboard);
 V2      ui_mouse(void);
+V2      ui_viewport(void);
 Arena  *ui_frame_arena(void);
+f32     ui_dt(void);
+f32     ui_dpi_scale(void);
+UI_Box *ui_last_box(void);  // the box built last, for ui_tooltip and friends
+// A widget with an animation of its own (a hover delay, a kinetic scroll) says
+// so here: the loop keeps waking at 16 ms as long as somebody asks.
+void    ui_request_animation(void);
+
+// --- raw input, for the widgets that route keys themselves -----------------
+// ui_signal only reports the first key of the frame; a text field needs them
+// all, in order, with the characters interleaved by arrival.
+typedef struct UI_KeyEvent {
+    u32 key;
+    u32 modifiers;
+} UI_KeyEvent;
+
+u32         ui_key_event_count(void);
+UI_KeyEvent ui_key_event(u32 index);
+u32         ui_char_event_count(void);
+u32         ui_char_event(u32 index);  // a full UTF-32 codepoint
+b32         ui_escape_pressed(void);   // Escape is eaten by the focus, popups still need it
+UI_Key      ui_press_key(void);        // box pressed this frame, 0 if none
+b32         ui_mouse_pressed(void);    // a left press happened, anywhere
 // One exponential step towards `target`, registered with the animation counter
 // so the caller's own animations also keep ui_animating() true.
 f32     ui_animate(f32 current, f32 target, f32 rate);
 
 // Exposed for the bench: the five passes on one root, without rendering.
 void ui_layout(UI_Box *root);
-
-// --- two widgets, just enough for the demo ---------------------------------
-UI_Box   *ui_label(String8 string);
-UI_Box   *ui_labelf(const char *fmt, ...);
-UI_Signal ui_button(String8 string);
-UI_Box   *ui_spacer(UI_Size size);
 
 #endif // UI_CORE_H

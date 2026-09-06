@@ -7,18 +7,16 @@
 #include "ui_core.h"
 
 #include "r_atlas.h"
+#include "r_icons.h"
 #include "ui_font.h"
 #include "ui_text.h"
+#include "ui_theme.h"
 
 #define UI_STACK_DEPTH   64
 #define UI_BUCKET_COUNT  4096  // power of two
 #define UI_MAX_KEY_EVENTS 64
+#define UI_MAX_CHAR_EVENTS 64
 #define UI_DRAG_THRESHOLD 4.0f
-
-typedef struct UI_KeyEvent {
-    u32 key;
-    u32 modifiers;
-} UI_KeyEvent;
 
 typedef struct UI_State {
     Arena *permanent;
@@ -28,6 +26,7 @@ typedef struct UI_State {
     UI_Box *free_first;   // pool free list
     UI_Box *transient_first;  // key 0 boxes of the frame, released at the next begin
     u64 box_count;        // keyed boxes alive in the table
+    u64 frame_box_count;  // boxes built since ui_begin, the virtualization budget
 
     UI_Box *roots[UI_Layer_COUNT];
     u64 frame_index;
@@ -45,10 +44,17 @@ typedef struct UI_State {
     UI_Key press_key, release_key, click_key, double_click_key, right_click_key;
     UI_Key right_press_key, scroll_key;
     V2 scroll_delta;
+    V2 scroll_pixel_delta;
     u32 press_click_count;
+    u32 press_modifiers;
+    b32 mouse_pressed;
+    b32 escape_pressed;
     b32 focus_via_keyboard;
     UI_KeyEvent key_events[UI_MAX_KEY_EVENTS];
     u32 key_event_count;
+    u32 char_events[UI_MAX_CHAR_EVENTS];
+    u32 char_event_count;
+    UI_Box *last_box;
 
 #define X(name, type)                       \
     type name##_stack[UI_STACK_DEPTH];      \
@@ -58,6 +64,7 @@ typedef struct UI_State {
 } UI_State;
 
 global UI_State ui_state;
+StaticAssert(sizeof(UI_Box) <= 256, ui_box_fits_four_cache_lines);
 
 // --- small math ------------------------------------------------------------
 // 2^x for x <= 0, ~1e-4 absolute: enough for an animation, and no libm.
@@ -194,11 +201,30 @@ static void ui_prune(void) {
 }
 
 u64 ui_box_count(void) { return ui_state.box_count; }
+u64 ui_frame_box_count(void) { return ui_state.frame_box_count; }
 u64 ui_frame_index(void) { return ui_state.frame_index; }
 UI_Key ui_hot_key(void) { return ui_state.hot_key; }
 UI_Key ui_active_key(void) { return ui_state.active_key; }
 UI_Key ui_focus_key(void) { return ui_state.focus_key; }
 V2 ui_mouse(void) { return ui_state.mouse; }
+V2 ui_viewport(void) { return ui_state.viewport; }
+f32 ui_dt(void) { return ui_state.dt; }
+f32 ui_dpi_scale(void) { return ui_state.dpi_scale; }
+UI_Box *ui_last_box(void) { return ui_state.last_box; }
+void ui_request_animation(void) { ui_state.active_animations += 1; }
+u32 ui_key_event_count(void) { return ui_state.key_event_count; }
+UI_KeyEvent ui_key_event(u32 index) {
+    Assert(index < ui_state.key_event_count);
+    return ui_state.key_events[index];
+}
+u32 ui_char_event_count(void) { return ui_state.char_event_count; }
+u32 ui_char_event(u32 index) {
+    Assert(index < ui_state.char_event_count);
+    return ui_state.char_events[index];
+}
+b32 ui_escape_pressed(void) { return ui_state.escape_pressed; }
+UI_Key ui_press_key(void) { return ui_state.press_key; }
+b32 ui_mouse_pressed(void) { return ui_state.mouse_pressed; }
 Arena *ui_frame_arena(void) { return ui_state.frame_arena; }
 f32 ui_animate(f32 current, f32 target, f32 rate) { return ui_anim_step(current, target, rate); }
 b32 ui_animating(void) { return ui_state.active_animations > 0; }
@@ -272,6 +298,8 @@ UI_Box *ui_build_box_from_key(UI_Flags flags, UI_Key key) {
     box->corner_radius = ui_top_corner_radius();
     box->border_thickness = ui_top_border_thickness();
     box->text_padding = ui_top_text_padding();
+    box->text_flags = (u8)ui_top_text_flags();
+    box->text_align = (u8)ui_top_text_align();
     box->bg_color = ui_top_bg_color();
     box->border_color = ui_top_border_color();
     box->text_color = ui_top_text_color();
@@ -279,6 +307,9 @@ UI_Box *ui_build_box_from_key(UI_Flags flags, UI_Key key) {
     box->fixed_pos = v2(ui_top_fixed_x(), ui_top_fixed_y());
     box->display_string.str = 0;
     box->display_string.size = 0;
+    box->icon = 0;
+    ui_state.frame_box_count += 1;
+    ui_state.last_box = box;
     return box;
 }
 
@@ -379,7 +410,11 @@ static void ui_consume_events(const OsEvent *events, u64 event_count) {
     ui_state.right_click_key = 0;
     ui_state.scroll_key = 0;
     ui_state.scroll_delta = v2(0.0f, 0.0f);
+    ui_state.scroll_pixel_delta = v2(0.0f, 0.0f);
     ui_state.key_event_count = 0;
+    ui_state.char_event_count = 0;
+    ui_state.mouse_pressed = 0;
+    ui_state.escape_pressed = 0;
     ui_state.mouse_prev = ui_state.mouse;
 
     for (u64 i = 0; i < event_count; i += 1) {
@@ -397,9 +432,11 @@ static void ui_consume_events(const OsEvent *events, u64 event_count) {
                 ui_state.mouse = event->pos;
                 UI_Key hit = ui_hit_key(ui_state.mouse, UI_Clickable);
                 if (event->button == OsMouseButton_Left) {
+                    ui_state.mouse_pressed = 1;
                     ui_state.active_key = hit;
                     ui_state.press_key = hit;
                     ui_state.press_click_count = event->click_count;
+                    ui_state.press_modifiers = event->modifiers;
                     ui_state.drag_start = ui_state.mouse;
                     ui_state.drag_started = 0;
                     UI_Box *box = ui_box_from_key(hit);
@@ -438,18 +475,28 @@ static void ui_consume_events(const OsEvent *events, u64 event_count) {
             case OsEvent_Wheel: {
                 ui_state.scroll_key = ui_hit_key(ui_state.mouse, UI_Scrollable);
                 ui_state.scroll_delta = v2_add(ui_state.scroll_delta, event->wheel_lines);
+                ui_state.scroll_pixel_delta =
+                    v2_add(ui_state.scroll_pixel_delta, event->wheel_pixels);
             } break;
 
             case OsEvent_KeyDown: {
                 if (event->key == OsKey_Tab) {
                     ui_focus_advance((event->modifiers & OsMod_Shift) ? -1 : 1);
                 } else if (event->key == OsKey_Escape) {
+                    ui_state.escape_pressed = 1;
                     ui_state.focus_key = 0;
                 } else if (ui_state.key_event_count < UI_MAX_KEY_EVENTS) {
                     UI_KeyEvent *slot = &ui_state.key_events[ui_state.key_event_count];
                     slot->key = event->key;
                     slot->modifiers = event->modifiers;
                     ui_state.key_event_count += 1;
+                }
+            } break;
+
+            case OsEvent_Char: {
+                if (ui_state.char_event_count < UI_MAX_CHAR_EVENTS) {
+                    ui_state.char_events[ui_state.char_event_count] = event->codepoint;
+                    ui_state.char_event_count += 1;
                 }
             } break;
 
@@ -478,6 +525,7 @@ UI_Signal ui_signal(UI_Box *box) {
     signal.hovering = (ui_state.hot_key == box->key) && (ui_state.active_key == 0 ||
                                                          ui_state.active_key == box->key);
     signal.pressed = (ui_state.press_key == box->key);
+    if (signal.pressed) { signal.press_modifiers = ui_state.press_modifiers; }
     signal.released = (ui_state.release_key == box->key);
     signal.clicked = (ui_state.click_key == box->key);
     signal.double_clicked = (ui_state.double_click_key == box->key);
@@ -489,6 +537,7 @@ UI_Signal ui_signal(UI_Box *box) {
     if (ui_state.scroll_key == box->key) {
         signal.scrolled = 1;
         signal.scroll = ui_state.scroll_delta;
+        signal.scroll_pixels = ui_state.scroll_pixel_delta;
     }
     if (ui_state.focus_key == box->key && ui_state.key_event_count > 0) {
         signal.key = ui_state.key_events[0].key;
@@ -533,8 +582,11 @@ static void ui_layout_sizes(UI_Box *box) {
             case UI_SizeKind_TextContent: {
                 f32 content = 0.0f;
                 if (box->font.v != 0) {
-                    content = (axis == Axis2_X) ? ui_text_width(box->font, box->display_string, 0)
-                                                : ui_text_line_height(box->font);
+                    // Same flags as the draw, or tabular digits would measure
+                    // narrower than they are drawn and get an ellipsis.
+                    content = (axis == Axis2_X)
+                                  ? ui_text_width(box->font, box->display_string, box->text_flags)
+                                  : ui_text_line_height(box->font);
                 }
                 box->computed_size[axis] = content + 2.0f * size.value;
             } break;
@@ -673,7 +725,6 @@ static void ui_animate_box(UI_Box *box) {
 }
 
 // --- rendering -------------------------------------------------------------
-#define UI_FOCUS_RING_COLOR r_rgba(0xF4, 0x9A, 0x2A, 255)
 
 static void ui_draw_box(UI_Box *box) {
     f32 scale = ui_state.dpi_scale;
@@ -703,25 +754,58 @@ static void ui_draw_box(UI_Box *box) {
         params.border = max_f32(box->border_thickness, 1.0f * scale);
         r_rect(params);
     }
+    // Focus ring of research/02 s10.6: 1 px of accent one pixel outside the
+    // box, plus a wider halo at low alpha so it reads on any background.
     if (box->focus_t > UI_ANIM_EPSILON) {
-        f32 grow = 2.0f * scale;
+        const UI_Theme *theme = ui_theme();
+        f32 offset = theme->focus_ring_width * scale;
+        f32 halo = offset + 2.0f * scale;
         StructZero(&params);
-        params.dst = rect(box->rect.min.x - grow, box->rect.min.y - grow, box->rect.max.x + grow,
-                          box->rect.max.y + grow);
-        params.color = ui_color_fade(UI_FOCUS_RING_COLOR, box->focus_t);
-        params.corner_radius = box->corner_radius + grow;
+        params.dst = rect(box->rect.min.x - halo, box->rect.min.y - halo, box->rect.max.x + halo,
+                          box->rect.max.y + halo);
+        params.color = ui_color_fade(theme->focus_halo, box->focus_t);
+        params.corner_radius = box->corner_radius + halo;
         params.border = 2.0f * scale;
         r_rect(params);
+        StructZero(&params);
+        params.dst = rect(box->rect.min.x - offset, box->rect.min.y - offset,
+                          box->rect.max.x + offset, box->rect.max.y + offset);
+        params.color = ui_color_fade(theme->focus_ring, box->focus_t);
+        params.corner_radius = box->corner_radius + offset;
+        params.border = theme->focus_ring_width * scale;
+        r_rect(params);
+    }
+
+    f32 text_x = box->rect.min.x + box->text_padding;
+    if (box->flags & UI_DrawIcon) {
+        Assert(box->icon != 0);
+        R_AtlasRect icon = r_icon_rect((R_Icon)(box->icon - 1));
+        f32 size = (f32)icon.width;
+        f32 x = (box->display_string.size != 0)
+                    ? text_x
+                    : round_f32((box->rect.min.x + box->rect.max.x - size) * 0.5f);
+        f32 y = round_f32((box->rect.min.y + box->rect.max.y - size) * 0.5f);
+        r_rect_textured(rect(x, y, x + size, y + size), r_atlas_texture(), icon.uv0, icon.uv1,
+                        box->text_color, R_VertFlag_R8);
+        if (box->display_string.size != 0) {
+            text_x += size + ui_theme()->space[UI_Space_6] * scale;
+        }
     }
     if ((box->flags & UI_DrawText) && box->font.v != 0 && box->display_string.size != 0) {
         f32 height = rect_height(box->rect);
         f32 line = ui_text_line_height(box->font);
         f32 baseline = box->rect.min.y + round_f32((height - line) * 0.5f) +
                        ui_text_ascent(box->font);
-        f32 max_width = rect_width(box->rect) - 2.0f * box->text_padding;
-        ui_text_draw_ellipsized(box->font, box->display_string,
-                                v2(box->rect.min.x + box->text_padding, baseline), max_width,
-                                box->text_color, 0);
+        f32 max_width = box->rect.max.x - box->text_padding - text_x;
+        if (box->text_align != UI_TextAlign_Left) {
+            // The measure is cached by ui_text, so aligning costs a lookup.
+            f32 width = min_f32(ui_text_width(box->font, box->display_string, box->text_flags),
+                                max_width);
+            f32 slack = max_width - width;
+            text_x += (box->text_align == UI_TextAlign_Right) ? slack : round_f32(slack * 0.5f);
+        }
+        ui_text_draw_ellipsized(box->font, box->display_string, v2(text_x, baseline), max_width,
+                                box->text_color, box->text_flags);
     }
 
     b32 clipped = (box->flags & UI_Clip) != 0;
@@ -732,6 +816,9 @@ static void ui_draw_box(UI_Box *box) {
 
 // --- frame -----------------------------------------------------------------
 void ui_init(Arena *permanent) {
+    UI_Theme theme;
+    ui_theme_dark(&theme);
+    ui_theme_set(&theme);  // the dark theme is the default (research/02 s10.1)
     StructZero(&ui_state);
     ui_state.permanent = permanent;
     ui_state.buckets = push_array_zero(permanent, UI_Box *, UI_BUCKET_COUNT);
@@ -753,6 +840,7 @@ void ui_begin(Arena *frame_arena, const OsEvent *events, u64 event_count, f32 dt
     ui_state.viewport = viewport;
     ui_state.dpi_scale = dpi_scale;
     ui_state.active_animations = 0;
+    ui_state.frame_box_count = 0;
 
     ui_stacks_reset();
     ui_state.parent_stack[0] = 0;
@@ -793,40 +881,4 @@ void ui_end(void) {
         ui_draw_box(ui_state.roots[layer]);
     }
     r_set_layer(R_Layer_Content);
-}
-
-// --- the two widgets the demo needs ----------------------------------------
-UI_Box *ui_label(String8 string) {
-    UI_Box *box = 0;
-    UI_PrefWidth(ui_text_size(ui_top_text_padding(), 0.0f))
-    UI_PrefHeight(ui_text_size(2.0f * ui_state.dpi_scale, 1.0f)) {
-        box = ui_build_box(UI_DrawText, string);
-    }
-    return box;
-}
-
-UI_Box *ui_labelf(const char *fmt, ...) {
-    va_list args;
-    va_start(args, fmt);
-    String8 text = str8fv(ui_state.frame_arena, fmt, args);
-    va_end(args);
-    return ui_label(text);
-}
-
-UI_Signal ui_button(String8 string) {
-    UI_Box *box = ui_build_box(UI_Clickable | UI_Focusable | UI_DrawBackground | UI_DrawBorder |
-                                   UI_DrawText,
-                               string);
-    return ui_signal(box);
-}
-
-UI_Box *ui_spacer(UI_Size size) {
-    UI_Box *box = 0;
-    Axis2 axis = ui_top_child_layout_axis();
-    if (axis == Axis2_X) {
-        UI_PrefWidth(size) { box = ui_build_box_from_key(0, 0); }
-    } else {
-        UI_PrefHeight(size) { box = ui_build_box_from_key(0, 0); }
-    }
-    return box;
 }
