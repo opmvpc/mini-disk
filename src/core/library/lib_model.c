@@ -72,7 +72,7 @@ md_inline u64 lib_next_pow2(u64 x) {
     return result;
 }
 
-static void lib_index_rebuild(Library *lib) {
+void lib_path_index_rebuild(Library *lib) {
     u32 mask = lib->index_slots - 1;
     mem_zero(lib->index, sizeof(u32) * lib->index_slots);
     for (u32 id = 0; id < lib->count; id += 1) {
@@ -138,7 +138,11 @@ static void lib_grow(Library *lib, u32 capacity) {
     lib->capacity = capacity;
     lib->index_slots = (u32)lib_next_pow2((u64)capacity * 2);
     lib->index = push_array_zero(lib->arena, u32, lib->index_slots);
-    lib_index_rebuild(lib);
+    lib_path_index_rebuild(lib);
+}
+
+void lib_reserve(Library *lib, u32 capacity) {
+    if (capacity > lib->capacity) { lib_grow(lib, (u32)lib_next_pow2(capacity)); }
 }
 
 void lib_init(Library *lib, Arena *arena, Arena *text) {

@@ -11,6 +11,9 @@
 #include "../src/core/library/tags.h"
 #include "../src/core/library/lib_events.h"
 #include "../src/core/library/lib_scan.h"
+#include "../src/core/library/lib_index.h"
+#include "../src/core/library/lib_search.h"
+#include "../src/core/library/lib_cache.h"
 #include "../src/ui/r_core.h"
 #include "../src/ui/r_backend.h"
 #include "../src/ui/r_atlas.h"
@@ -46,6 +49,9 @@
 #include "../src/core/library/tags_ape.c"
 #include "../src/core/library/tags_riff.c"
 #include "../src/core/library/lib_scan.c"
+#include "../src/core/library/lib_index.c"
+#include "../src/core/library/lib_search.c"
+#include "../src/core/library/lib_cache.c"
 
 // The renderer benches measure r_core and r_atlas, not the driver: the back end
 // is a stub, exactly as in the tests.
@@ -779,6 +785,205 @@ static BenchResult bench_tags_parse(void) {
     return result;
 }
 
+
+// --- T-012: index, sort, incremental search, mapped cache -------------------
+// 100 000 synthetic tracks, built in memory: no file is touched, and the words
+// are picked so that "the" hits about a quarter of the library and "the b" a
+// fortieth of it, which is what a real query looks like.
+#define BENCH_LIB_COUNT 100000
+
+static const char *bench_words[] = {"the", "blue", "night", "theme", "bells", "ocean",
+                                    "amber", "static", "the", "bathysphere", "cendre",
+                                    "\xC3\xA9tude", "aurora", "the", "prism", "glass"};
+static const char *bench_artists[] = {"The Beatles", "Autechre", "Boards of Canada",
+                                      "\xC3\x89milie Simon", "Bj\xC3\xB6rk", "Elias Rond",
+                                      "Fanny Kaplan", "Oval", "Loscil", "The Bad Plus",
+                                      "Tim Hecker", "Grouper"};
+
+global Library bench_library;
+global Library bench_loaded;
+global Arena *bench_lib_arena;
+global Arena *bench_lib_text;
+global Arena *bench_loaded_arena;
+global Arena *bench_loaded_text;
+global Arena *bench_index_arena;
+global Arena *bench_search_arena;
+global LibIndex bench_index;
+global LibSearch bench_search;
+
+static void bench_library_generate(void) {
+    bench_lib_arena = arena_alloc(MB(512));
+    bench_lib_text = arena_alloc(MB(512));
+    bench_index_arena = arena_alloc(GB(2));
+    bench_search_arena = arena_alloc(MB(64));
+    lib_init(&bench_library, bench_lib_arena, bench_lib_text);
+    lib_reserve(&bench_library, BENCH_LIB_COUNT);
+    ArenaTemp scratch = scratch_begin(0, 0);
+    for (u32 i = 0; i < BENCH_LIB_COUNT; i += 1) {
+        u32 h = i * 2654435761u;
+        String8 path = str8f(scratch.arena, "C:\\music\\%03u\\%05u.mp3", i % 512, i);
+        TrackId id = lib_track_add(&bench_library, path, 4096 + i, 1000000ull * i);
+        Library *lib = &bench_library;
+        lib->title_id[id] = lib_intern(
+            &lib->strings,
+            str8f(scratch.arena, "%s %s %u", bench_words[h % ArrayCount(bench_words)],
+                  bench_words[(h >> 8) % ArrayCount(bench_words)], (h >> 16) % 900 + 100));
+        lib->artist_id[id] = lib_intern(
+            &lib->strings, str8_cstr(bench_artists[(h >> 5) % ArrayCount(bench_artists)]));
+        lib->album_id[id] = lib_intern(
+            &lib->strings,
+            str8f(scratch.arena, "%s %u", bench_words[(h >> 12) % ArrayCount(bench_words)],
+                  (h >> 20) % 300));
+        lib->duration_ms[id] = 95000 + (h >> 3) % 420000;
+        lib->sample_rate[id] = 44100;
+        lib->channels[id] = 2;
+        lib->year[id] = (u16)(1970 + h % 55);
+    }
+    scratch_end(scratch);
+    lib_search_init(&bench_search, bench_search_arena, BENCH_LIB_COUNT + 1);
+}
+
+static void bench_line(const char *name, u64 micros, u64 cycles, u64 items, const char *unit) {
+    ArenaTemp scratch = scratch_begin(0, 0);
+    os_debug_print(str8f(scratch.arena, "  %s: %llu us (%llu.%03llu ms), %llu cycles, %llu %s\n",
+                         name, micros, micros / 1000, micros % 1000, cycles, items, unit));
+    scratch_end(scratch);
+}
+
+static BenchResult bench_index_sort(void) {
+    u64 best_us = U64_MAX;
+    u64 best_cycles = 0;
+    for (u32 pass = 0; pass < 3; pass += 1) {
+        lib_index_build(&bench_index, &bench_library, bench_index_arena, 1);
+        u64 start_cycles = __rdtsc();
+        u64 start_us = os_time_now_us();
+        lib_index_order(&bench_index, LibSort_Artist);
+        u64 end_us = os_time_now_us();
+        u64 end_cycles = __rdtsc();
+        if (end_us - start_us < best_us) {
+            best_us = end_us - start_us;
+            best_cycles = end_cycles - start_cycles;
+        }
+    }
+    // The index the search benches below run against.
+    lib_index_build(&bench_index, &bench_library, bench_index_arena, 1);
+    lib_index_order(&bench_index, LibSort_Title);
+    bench_line("sort 100k by artist (target < 30 ms)", best_us, best_cycles, BENCH_LIB_COUNT,
+               "tracks");
+
+    BenchResult result;
+    result.name = "library sort 100k";
+    result.cycles = best_cycles;
+    result.micros = best_us;
+    result.bytes = (u64)BENCH_LIB_COUNT * LIB_BYTES_PER_TRACK;
+    return result;
+}
+
+static BenchResult bench_index_search(void) {
+    u64 best_us = U64_MAX;
+    u64 best_cycles = 0;
+    u32 hits = 0;
+    for (u32 pass = 0; pass < 20; pass += 1) {
+        lib_search_invalidate(&bench_search);
+        u64 start_cycles = __rdtsc();
+        u64 start_us = os_time_now_us();
+        lib_search_run(&bench_search, &bench_index, str8_lit("the"));
+        u64 end_us = os_time_now_us();
+        u64 end_cycles = __rdtsc();
+        hits = bench_search.result_count;
+        if (end_us - start_us < best_us) {
+            best_us = end_us - start_us;
+            best_cycles = end_cycles - start_cycles;
+        }
+    }
+    AssertAlways(hits != 0 && !bench_search.refined);
+    bench_line("search \"the\" over 100k (target < 5 ms)", best_us, best_cycles, hits, "hits");
+
+    BenchResult result;
+    result.name = "library search cold";
+    result.cycles = best_cycles;
+    result.micros = best_us;
+    result.bytes = (u64)BENCH_LIB_COUNT * (sizeof(u64) + 2 * sizeof(u32));
+    return result;
+}
+
+static BenchResult bench_index_search_refined(void) {
+    u64 best_us = U64_MAX;
+    u64 best_cycles = 0;
+    u32 hits = 0;
+    u32 scanned = 0;
+    for (u32 pass = 0; pass < 20; pass += 1) {
+        lib_search_invalidate(&bench_search);
+        lib_search_run(&bench_search, &bench_index, str8_lit("the"));
+        u64 start_cycles = __rdtsc();
+        u64 start_us = os_time_now_us();
+        lib_search_run(&bench_search, &bench_index, str8_lit("the b"));
+        u64 end_us = os_time_now_us();
+        u64 end_cycles = __rdtsc();
+        AssertAlways(bench_search.refined);
+        hits = bench_search.result_count;
+        scanned = bench_search.scanned;
+        if (end_us - start_us < best_us) {
+            best_us = end_us - start_us;
+            best_cycles = end_cycles - start_cycles;
+        }
+    }
+    bench_line("refine \"the\" to \"the b\" (target < 1 ms)", best_us, best_cycles, hits, "hits");
+
+    BenchResult result;
+    result.name = "library search refined";
+    result.cycles = best_cycles;
+    result.micros = best_us;
+    result.bytes = (u64)scanned * (sizeof(u64) + 2 * sizeof(u32));
+    return result;
+}
+
+static BenchResult bench_library_cache(void) {
+    ArenaTemp scratch = scratch_begin(0, 0);
+    String8 path = os_path_join(scratch.arena, os_known_folder(scratch.arena, OsKnownFolder_Temp),
+                                str8_lit("minidisk_bench.mdlib"));
+    u64 save_start = os_time_now_us();
+    LibCacheStatus status = lib_cache_save(&bench_library, path, str8_lit("C:\\music"));
+    u64 save_us = os_time_now_us() - save_start;
+    AssertAlways(status == LibCache_Ok);
+
+    bench_loaded_arena = arena_alloc(MB(512));
+    bench_loaded_text = arena_alloc(MB(512));
+    u64 best_us = U64_MAX;
+    u64 best_cycles = 0;
+    u64 bytes = 0;
+    for (u32 pass = 0; pass < 5; pass += 1) {
+        lib_init(&bench_loaded, bench_loaded_arena, bench_loaded_text);
+        u64 start_cycles = __rdtsc();
+        u64 start_us = os_time_now_us();
+        status = lib_cache_load(&bench_loaded, path, scratch.arena, 0);
+        u64 end_us = os_time_now_us();
+        u64 end_cycles = __rdtsc();
+        AssertAlways(status == LibCache_Ok && bench_loaded.live_count == BENCH_LIB_COUNT);
+        if (end_us - start_us < best_us) {
+            best_us = end_us - start_us;
+            best_cycles = end_cycles - start_cycles;
+        }
+        bytes = bench_loaded.strings.size + (u64)BENCH_LIB_COUNT * LIB_BYTES_PER_TRACK;
+    }
+    OsFileInfo info;
+    StructZero(&info);
+    os_file_stat(path, &info);
+    bench_line("cache save 100k", save_us, 0, info.size >> 10, "KB written");
+    bench_line("cache load 100k (target < 50 ms)", best_us, best_cycles, info.size >> 10, "KB");
+    os_file_delete(path);
+    arena_release(bench_loaded_text);
+    arena_release(bench_loaded_arena);
+    scratch_end(scratch);
+
+    BenchResult result;
+    result.name = "library cache load 100k";
+    result.cycles = best_cycles;
+    result.micros = best_us;
+    result.bytes = bytes;
+    return result;
+}
+
 int main(void) {
     os_init();
     bench_arena = arena_alloc(GB(1));
@@ -793,5 +998,10 @@ int main(void) {
     bench_print(bench_library_scan());
     bench_print(bench_tags_parse());
     bench_print(bench_realistic_frame());
+    bench_library_generate();
+    bench_print(bench_index_sort());
+    bench_print(bench_index_search());
+    bench_print(bench_index_search_refined());
+    bench_print(bench_library_cache());
     return 0;
 }

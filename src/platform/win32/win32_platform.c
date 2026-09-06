@@ -93,10 +93,61 @@ b32 os_file_write_all(String8 path, String8 data) {
             ok = WriteFile(file, data.str + written_total, chunk, &written, 0) && written != 0;
             written_total += written;
         }
+        // The bytes must be on the platter before the rename that publishes
+        // them, or a power cut leaves an empty file under the real name.
+        if (ok) { ok = FlushFileBuffers(file) != 0; }
         CloseHandle(file);
     }
     scratch_end(scratch);
     return ok;
+}
+
+b32 os_file_move_replace(String8 from, String8 to) {
+    ArenaTemp scratch = scratch_begin(0, 0);
+    String16 from16 = str16_from_str8(scratch.arena, from);
+    String16 to16 = str16_from_str8(scratch.arena, to);
+    b32 ok = MoveFileExW((LPCWSTR)from16.str, (LPCWSTR)to16.str,
+                         MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0;
+    scratch_end(scratch);
+    return ok;
+}
+
+b32 os_file_map(OsFileMap *map, String8 path) {
+    StructZero(map);
+    ArenaTemp scratch = scratch_begin(0, 0);
+    String16 path16 = str16_from_str8(scratch.arena, path);
+    HANDLE file = CreateFileW((LPCWSTR)path16.str, GENERIC_READ, FILE_SHARE_READ, 0, OPEN_EXISTING,
+                              FILE_ATTRIBUTE_NORMAL, 0);
+    scratch_end(scratch);
+    if (file == INVALID_HANDLE_VALUE) { return 0; }
+    LARGE_INTEGER size;
+    if (!GetFileSizeEx(file, &size) || size.QuadPart <= 0) {
+        CloseHandle(file);
+        return 0;
+    }
+    HANDLE mapping = CreateFileMappingW(file, 0, PAGE_READONLY, 0, 0, 0);
+    if (!mapping) {
+        CloseHandle(file);
+        return 0;
+    }
+    void *base = MapViewOfFile(mapping, FILE_MAP_READ, 0, 0, 0);
+    if (!base) {
+        CloseHandle(mapping);
+        CloseHandle(file);
+        return 0;
+    }
+    map->data = (u8 *)base;
+    map->size = (u64)size.QuadPart;
+    map->file = file;
+    map->mapping = mapping;
+    return 1;
+}
+
+void os_file_unmap(OsFileMap *map) {
+    if (map->data) { UnmapViewOfFile(map->data); }
+    if (map->mapping) { CloseHandle(map->mapping); }
+    if (map->file) { CloseHandle(map->file); }
+    StructZero(map);
 }
 
 String8 os_command_line(Arena *arena) {

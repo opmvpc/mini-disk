@@ -11,6 +11,9 @@
 #include "../src/core/library/tags.h"
 #include "../src/core/library/lib_events.h"
 #include "../src/core/library/lib_scan.h"
+#include "../src/core/library/lib_index.h"
+#include "../src/core/library/lib_search.h"
+#include "../src/core/library/lib_cache.h"
 #include "../src/ui/r_core.h"
 #include "../src/ui/r_backend.h"
 #include "../src/ui/r_atlas.h"
@@ -51,6 +54,9 @@
 #include "../src/core/library/tags_ape.c"
 #include "../src/core/library/tags_riff.c"
 #include "../src/core/library/lib_scan.c"
+#include "../src/core/library/lib_index.c"
+#include "../src/core/library/lib_search.c"
+#include "../src/core/library/lib_cache.c"
 
 typedef struct TestState {
     Arena *arena;         // per test case arena, reset between cases
@@ -103,6 +109,7 @@ static void test_check(b32 condition, const char *expression, i32 line) {
 #include "test_widgets.c"
 #include "test_library.c"
 #include "test_tags.c"
+#include "test_index.c"
 
 int main(void) {
     os_init();
@@ -118,6 +125,7 @@ int main(void) {
     test_widgets_run_all();
     test_library_run_all();
     test_tags_run_all();
+    test_index_run_all();
 
     test_report("%llu case(s), %llu check(s), %llu failure(s)\n", test_state.cases,
                 test_state.checks, test_state.failures);

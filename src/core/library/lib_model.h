@@ -102,6 +102,12 @@ typedef struct Library {
 
 void lib_init(Library *lib, Arena *arena, Arena *text);
 void lib_clear(Library *lib);
+// Grows the SoA so `capacity` slots fit without another move. The cache loader
+// (T-012) is the only caller: everything else grows one track at a time.
+void lib_reserve(Library *lib, u32 capacity);
+// Rebuilds the path hash from the live slots. Also the cache loader's, which
+// brings back the columns but not a hash table it would have to trust.
+void lib_path_index_rebuild(Library *lib);
 
 md_inline b32 lib_track_live(const Library *lib, TrackId id) {
     return id < lib->count && (lib->flags[id] & LibTrackFlag_Live) != 0;

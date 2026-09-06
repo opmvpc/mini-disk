@@ -1,8 +1,8 @@
 # STATUS — où on en est
 
-Dernière mise à jour : 2026-09-06 (soir)
+Dernière mise à jour : 2026-09-07
 
-## Phase actuelle : 2 · Bibliothèque — T-009/T-010/T-011/T-015 faits, T-012 en cours
+## Phase actuelle : 2 · Bibliothèque — T-009..T-012, T-015 faits, T-013 en cours
 
 ### Fait (phase 0 terminée)
 - 4 rapports de recherche livrés (`research/01..04`, ~10 700 lignes) + tokens de design (`02b`).
@@ -16,9 +16,21 @@ Dernière mise à jour : 2026-09-06 (soir)
 - Repo GitHub : https://github.com/opmvpc/mini-disk
 
 ### En cours
-- T-012 : index triés, navigateur par colonnes, recherche incrémentale, cache `.mdlib` mappé (prompt `prompts/I-012`).
+- T-013 : vue Bibliothèque complète (colonnes redimensionnables, états vide/scan/aucun résultat, app_state, prefs) (prompt `prompts/I-013`).
 
 ### Fait en phase 2
+- T-012 livré : index triés par colonne (titre, artiste, album, durée, date d'ajout) en fusion stable
+  sur des paires `(clé u64, id)`, clés normalisées (casse, accents repliés par deux tables plates de
+  384 o couvrant latin-1 et latin ext-A, articles optionnels), navigateur **Artiste → Album** avec
+  comptes, recherche incrémentale (masque 64 bits par piste, sous-chaîne SSE2 sur un blob normalisé,
+  tokens ET, raffinement qui ne reteste ni les tokens déjà prouvés ni les tokens d'une lettre,
+  **zéro allocation pendant la recherche**), cache `library.mdlib` mappé (SoA écrit tel quel, string
+  table + slots d'internement, écriture atomique `.tmp` + `MoveFileEx`, validation exhaustive de
+  l'en-tête, des offsets, de chaque `StringId` et de la free-list, version → rejet propre), TrackId
+  stables entre sessions, démarrage « cache puis rescan de fond qui ne pousse que les diffs », tri au
+  clic sur l'en-tête. **Tri 100k en 22,8 ms, recherche « the » sur 100k en 4,09 ms, raffinement
+  « the b » en 0,978 ms, cache 100k chargé en 26,9 ms** (fichier 12,04 Mo), 8 cas de test ajoutés
+  (104 cas / 1 780 checks), **exe 187 392 o**, imports kernel32+user32. Capture : `build/demo.png`.
 - T-011 livré : lecture des tags et des en-têtes sans décoder l'audio, **2 lectures de 64 Ko par
   fichier** (tête + queue) : ID3v2.2/2.3/2.4 (unsync tag et frame, ISO-8859-1 / UTF-16 BOM /
   UTF-16BE / UTF-8, TXXX ReplayGain, APIC → offset + hash), ID3v1/v1.1, en-tête MPEG avec
@@ -96,12 +108,15 @@ Dernière mise à jour : 2026-09-06 (soir)
 ## KPI — phase 2 en cours (même machine)
 | Métrique | Valeur | Cible | Date |
 |----------|--------|-------|------|
-| Taille exe release | **167 424 o**, marge 37 376 o sous la cible de T-011 | < 200 KB (CI 250 KB) | 2026-09-06 |
+| Taille exe release | **187 392 o**, marge 37 888 o sous la cible de T-012 | < 220 KB (CI 250 KB) | 2026-09-07 |
 | Scan bibliothèque | 50 000 fichiers / 500 dossiers : **168 ms à froid**, **63 ms à chaud** (7 workers) | < 2 s / < 300 ms | 2026-09-06 |
 | Mémoire bibliothèque | **74 o/piste** → 7,4 MB pour 100 000 pistes (hors chaînes), 0 allocation par piste | < 40 MB | 2026-09-06 |
 | Annulation du scan | < 100 ms (test) | < 100 ms | 2026-09-06 |
 | Lecture des tags | **2,13 µs/fichier** (parsing), 2 lectures de 64 Ko par fichier | < 3 s / 10 000 | 2026-09-06 |
 | Scan + tags, 50 000 fichiers | **2,38 s à froid**, **73 ms à chaud** (0 fichier ouvert au rescan) | < 3 s / 10 000 | 2026-09-06 |
 | Fuzz des parseurs | 22 vecteurs x 10 000 mutations, **0 crash, 0 rapport ASan** | 0 | 2026-09-06 |
-| Tests | 96 cas, **1 697 checks**, 0 échec (ASan) | verts | 2026-09-06 |
+| Tests | **104 cas, 1 780 checks**, 0 échec (ASan) | verts | 2026-09-07 |
+| Tri de la bibliothèque | 100 000 pistes par artiste : **22,8 ms** (fusion stable sur clés normalisées) | < 30 ms | 2026-09-07 |
+| Recherche incrémentale | « the » sur 100 000 pistes : **4,09 ms** ; raffinée « the b » : **0,978 ms**, 0 allocation | < 5 ms / < 1 ms | 2026-09-07 |
+| Cache `library.mdlib` | 100 000 pistes, fichier de 12,04 Mo : **chargé en 26,9 ms**, écrit en 53 ms | < 50 ms | 2026-09-07 |
 | CPU au repos, 12 s, après un scan | **15,6 ms** (78,1 / 62,5 / 15,6 sur 3 mesures) | 0 % | 2026-09-06 |

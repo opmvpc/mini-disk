@@ -19,7 +19,22 @@ u64   os_page_size(void);
 
 // --- files -----------------------------------------------------------------
 String8 os_file_read_all(Arena *arena, String8 path);   // size 0 when unreadable
-b32     os_file_write_all(String8 path, String8 data);
+b32     os_file_write_all(String8 path, String8 data);  // flushed before it returns
+// Rename over an existing file in one step: what makes a ".tmp then move"
+// write atomic for a reader (ADR-010 s9.3).
+b32     os_file_move_replace(String8 from, String8 to);
+
+// A read only view of a whole file, paged in by the OS on demand. This is how
+// the library cache is loaded: three system calls and no copy (research/03 s9.4).
+typedef struct OsFileMap {
+    u8 *data;    // 0 when the mapping failed
+    u64 size;
+    void *file;  // opaque: the OS handles
+    void *mapping;
+} OsFileMap;
+
+b32  os_file_map(OsFileMap *map, String8 path);  // 0: unreadable or empty
+void os_file_unmap(OsFileMap *map);
 
 // --- file system -----------------------------------------------------------
 // A directory entry, or what os_file_stat found. `name` points into the

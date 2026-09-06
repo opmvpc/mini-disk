@@ -47,6 +47,22 @@ typedef struct AppDemo {
     u32 scan_files, scan_dirs_done, scan_dirs_total;
     u64 scan_us;
     String8 root;
+
+    // --- T-012: sorted index, column browser, search, mapped cache ----------
+    Arena *index_arena;   // the index owns it: lib_index_build clears it
+    LibIndex index;
+    LibBrowser browser;
+    LibSearch finder;
+    UI_List artist_list;
+    UI_List album_list;
+    u32 sort_column;      // LibSortColumn
+    b32 sort_desc;
+    b32 index_ready;
+    u64 index_us;
+    u64 index_at_us;      // when it was last rebuilt, to throttle a live rescan
+    String8 cache_path;
+    u64 cache_load_us;
+    u32 cache_tracks;
 } AppDemo;
 
 global AppDemo app_demo;
@@ -158,20 +174,38 @@ static b32 app_contains_ci(String8 haystack, String8 needle) {
     return 0;
 }
 
+// The rows the list shows: the search's own buffer once the index exists, the
+// naive filter of the demo (and of a first scan still running) before that.
+md_inline const u32 *app_rows_view(void) {
+    return app_demo.index_ready ? app_demo.finder.results : app_demo.filtered;
+}
+
+md_inline u32 app_rows_count(void) {
+    return app_demo.index_ready ? app_demo.finder.result_count : app_demo.filtered_count;
+}
+
 static void app_filter(void) {
     String8 query = str8(app_demo.query, app_demo.query_size);
-    u32 source_count = app_source_count();
-    u32 count = 0;
-    for (u32 i = 0; i < source_count; i += 1) {
-        u32 index = app_source_index(i);
-        AppTrack track = app_track(index);
-        if (app_contains_ci(track.title, query) || app_contains_ci(track.artist, query) ||
-            app_contains_ci(track.album, query)) {
-            app_demo.filtered[count] = index;
-            count += 1;
+    if (app_demo.index_ready) {
+        lib_search_set_order(&app_demo.finder, (LibSortColumn)app_demo.sort_column,
+                             app_demo.sort_desc);
+        lib_search_set_filter(&app_demo.finder, lib_browser_artist_filter(&app_demo.browser),
+                              lib_browser_album_filter(&app_demo.browser));
+        lib_search_run(&app_demo.finder, &app_demo.index, query);
+    } else {
+        u32 source_count = app_source_count();
+        u32 count = 0;
+        for (u32 i = 0; i < source_count; i += 1) {
+            u32 index = app_source_index(i);
+            AppTrack track = app_track(index);
+            if (app_contains_ci(track.title, query) || app_contains_ci(track.artist, query) ||
+                app_contains_ci(track.album, query)) {
+                app_demo.filtered[count] = index;
+                count += 1;
+            }
         }
+        app_demo.filtered_count = count;
     }
-    app_demo.filtered_count = count;
     ui_list_select_clear(&app_demo.list);
     app_demo.list.cursor = 0;
     app_demo.list.anchor = 0;
@@ -186,9 +220,45 @@ static void app_plan_add(u32 track) {
 
 static void app_plan_add_selection(void) {
     UI_List *list = &app_demo.list;
-    for (u64 i = 0; i < app_demo.filtered_count; i += 1) {
-        if (ui_list_selected(list, i)) { app_plan_add(app_demo.filtered[i]); }
+    const u32 *rows = app_rows_view();
+    for (u64 i = 0; i < app_rows_count(); i += 1) {
+        if (ui_list_selected(list, i)) { app_plan_add(rows[i]); }
     }
+}
+
+// --- T-012: the index, the browser and the cache ---------------------------
+// One rebuild covers everything the panel reads: the sorted views, the artist
+// and album columns, and the search buffers the next keystroke refines.
+static void app_index_rebuild(void) {
+    u64 start_us = os_time_now_us();
+    lib_index_build(&app_demo.index, &app_demo.library, app_demo.index_arena, 1);
+    lib_browser_build(&app_demo.browser, &app_demo.index);
+    lib_search_invalidate(&app_demo.finder);
+    app_demo.index_us = os_time_now_us() - start_us;
+    app_demo.index_at_us = os_time_now_us();
+    app_demo.index_ready = app_demo.library.live_count > 0;
+    app_filter();
+}
+
+static void app_sort_by(u32 column) {
+    if (app_demo.sort_column == column) {
+        app_demo.sort_desc = !app_demo.sort_desc;
+    } else {
+        app_demo.sort_column = column;
+        app_demo.sort_desc = 0;
+    }
+    app_filter();
+}
+
+static String8 app_cache_path(Arena *arena) {
+    ArenaTemp scratch = scratch_begin(&arena, 1);
+    String8 folder = os_known_folder(scratch.arena, OsKnownFolder_LocalAppData);
+    if (folder.size == 0) { folder = os_known_folder(scratch.arena, OsKnownFolder_Temp); }
+    String8 dir = os_path_join(scratch.arena, folder, str8_lit("minidisk"));
+    os_dir_create(dir);
+    String8 path = os_path_join(arena, dir, str8_lit("library.mdlib"));
+    scratch_end(scratch);
+    return path;
 }
 
 // --- the scan (T-010) ------------------------------------------------------
@@ -243,6 +313,28 @@ static void app_scan_from_command_line(void) {
     scratch_end(scratch);
 }
 
+// "--query <text>": pre-fills the search field, which is how the capture of
+// the demo shows a search in progress without anyone typing.
+static void app_query_from_command_line(void) {
+    ArenaTemp scratch = scratch_begin(0, 0);
+    String8 args = os_command_line(scratch.arena);
+    String8 flag = str8_lit("--query ");
+    u64 at = str8_find(args, flag, 0);
+    if (at != args.size) {
+        String8 text = str8_trim(str8_skip(args, at + flag.size));
+        if (text.size && text.str[0] == '"') {
+            text = str8_skip(text, 1);
+            text = str8_prefix(text, str8_find(text, str8_lit("\""), 0));
+        }
+        text = str8_prefix(text, Min(text.size, (u64)UI_TEXT_INPUT_CAP - 1));
+        ui_text_input_init(&app_demo.search, text);
+        mem_copy(app_demo.query, text.str, text.size);
+        app_demo.query_size = (u32)text.size;
+        app_filter();
+    }
+    scratch_end(scratch);
+}
+
 // Polled once per frame: it merges what the workers published and returns at
 // once, so the frame that starts a 50 000 file scan renders like any other.
 static void app_scan_tick(void) {
@@ -250,27 +342,42 @@ static void app_scan_tick(void) {
     lib_scan_update(&app_demo.scan);
     LibEvent event;
     b32 done = 0;
+    b32 changed = 0;
     while (lib_events_next(&app_demo.events, &event)) {
         if (event.kind == LibEvent_ScanProgress || event.kind == LibEvent_ScanDone) {
             app_demo.scan_files = event.files_seen;
             app_demo.scan_dirs_done = event.dirs_done;
             app_demo.scan_dirs_total = event.dirs_total;
         }
+        if (event.kind == LibEvent_TracksAdded || event.kind == LibEvent_TracksRemoved ||
+            event.kind == LibEvent_TracksTagged) {
+            changed = 1;
+        }
         if (event.kind == LibEvent_ScanDone) { done = 1; }
+    }
+    // Only the diffs reach the panel: a rescan over an unchanged library pushes
+    // nothing, and a rescan that does is folded in at most four times a second
+    // rather than once per merged batch.
+    if (!done && changed && app_demo.index_ready &&
+        os_time_now_us() - app_demo.index_at_us > 250000) {
+        app_index_rebuild();
     }
     if (!done) { return; }
     app_demo.scan_us = app_demo.scan.end_us - app_demo.scan.start_us;
     app_demo.scan_active = 0;
     app_demo.scanned = app_demo.library.live_count > 0;
     if (app_demo.scanned) {
-        // Paths need more room than the generated titles did.
-        f32 wanted = ui_dp(640.0f);
-        app_demo.library_split.size = Max(app_demo.library_split.size, wanted);
+        // Real titles, artists and albums need more room than the generated
+        // two column demo did.
+        app_demo.library_split.size = Max(app_demo.library_split.size, ui_dp(640.0f));
     }
     lib_scan_end(&app_demo.scan);
     app_rows_rebuild();
     app_demo.plan_count = 0;
-    app_filter();
+    app_index_rebuild();
+    // The cache is reconstructible: writing it is best effort, and a failure
+    // costs the next launch a rescan and nothing else.
+    lib_cache_save(&app_demo.library, app_demo.cache_path, app_demo.root);
 }
 
 // --- small building blocks -------------------------------------------------
@@ -299,11 +406,129 @@ static void app_cell_number(f32 width, String8 text, u32 color) {
     app_cell(ui_px(width, 1.0f), text, color, UI_TextFlag_TabularNumbers, UI_TextAlign_Right);
 }
 
-static void app_column_header(String8 title, UI_Size width, UI_TextAlign align) {
+// A column header. When `column` names a sort column it is clickable: the
+// first click sorts, the next one flips the direction (T-012).
+#define APP_COLUMN_PLAIN U32_MAX
+
+static void app_column_header(String8 title, UI_Size width, UI_TextAlign align, u32 column) {
     const UI_Theme *theme = ui_theme();
-    UI_Font(ui_font(UI_FontStyle_Caption)) {
-        app_cell(width, title, theme->fg_disabled, 0, align);
+    b32 sortable = app_demo.index_ready && column < LibSort_COUNT;
+    b32 active = sortable && app_demo.sort_column == column;
+    String8 label = title;
+    if (active) {
+        label = str8f(ui_frame_arena(), "%S %s", title,
+                      app_demo.sort_desc ? "\xE2\x96\xBE" : "\xE2\x96\xB4");
     }
+    UI_Font(ui_font(UI_FontStyle_Caption))
+    UI_PrefWidth(width)
+    UI_PrefHeight(ui_pct(1.0f, 1.0f))
+    UI_TextColor(active ? theme->fg_primary : theme->fg_disabled)
+    UI_TextAlign((u32)align)
+    UI_TextPadding(app_cell_padding()) {
+        UI_Box *box = ui_build_box(sortable ? (UI_DrawText | UI_Clickable) : UI_DrawText,
+                                   str8f(ui_frame_arena(), "###head%u", column));
+        box->display_string = label;
+        if (sortable && ui_signal(box).clicked) { app_sort_by(column); }
+    }
+}
+
+// --- the Artist -> Album column browser ------------------------------------
+typedef struct AppBrowserClick {
+    b32 hit;
+    u32 group;  // LIB_GROUP_ALL when the "everything" row was clicked
+} AppBrowserClick;
+
+// One column: a virtualized list whose row 0 stands for "no filter", then one
+// row per group with the number of tracks behind it.
+static AppBrowserClick app_browser_column(UI_List *list, String8 id, String8 title,
+                                          String8 all_label, u32 all_count,
+                                          const LibGroup *groups, u32 count, u32 selected) {
+    const UI_Theme *theme = ui_theme();
+    AppBrowserClick result;
+    result.hit = 0;
+    result.group = LIB_GROUP_ALL;
+    f32 row_height = ui_dp(theme->row_compact);
+    f32 count_width = ui_dp(56.0f);
+    list->cursor = (selected == LIB_GROUP_ALL) ? 0 : selected + 1;
+    list->has_cursor = 1;
+
+    UI_PrefWidth(ui_pct(0.5f, 0.0f))
+    UI_PrefHeight(ui_pct(1.0f, 1.0f))
+    UI_ChildLayoutAxis(Axis2_Y) {
+        UI_Box *column = ui_build_box(0, id);
+        UI_Parent(column) {
+            UI_PrefWidth(ui_pct(1.0f, 0.0f))
+            UI_PrefHeight(ui_px(row_height, 1.0f))
+            UI_ChildLayoutAxis(Axis2_X)
+            UI_BgColor(theme->panel) {
+                UI_Box *head = ui_build_box_from_key(UI_DrawBackground, 0);
+                UI_Parent(head) {
+                    app_column_header(title, ui_pct(1.0f, 0.0f), UI_TextAlign_Left,
+                                      APP_COLUMN_PLAIN);
+                }
+            }
+            ui_separator();
+            ui_list_begin(list, (u64)count + 1, row_height);
+            UI_ListEachRow(list, i) {
+                UI_Signal signal = ui_list_row_begin(list, i);
+                b32 selected_row = ui_list_selected(list, i);
+                u32 color = selected_row ? theme->fg_primary : theme->fg_secondary;
+                String8 name = all_label;
+                u32 tracks = all_count;
+                if (i != 0) {
+                    name = lib_string(&app_demo.library.strings, groups[i - 1].name);
+                    tracks = groups[i - 1].count;
+                    if (name.size == 0) { name = str8_lit("(sans nom)"); }
+                }
+                app_cell(ui_pct(1.0f, 0.0f), name, color, 0, UI_TextAlign_Left);
+                app_cell_number(count_width, str8f(ui_frame_arena(), "%u", tracks),
+                                theme->fg_muted);
+                ui_list_row_end(list);
+                if (signal.clicked) {
+                    result.hit = 1;
+                    result.group = (i == 0) ? LIB_GROUP_ALL : (u32)(i - 1);
+                }
+            }
+            ui_list_end(list);
+        }
+    }
+    return result;
+}
+
+static void app_browser_panel(void) {
+    if (!app_demo.index_ready) { return; }
+    const UI_Theme *theme = ui_theme();
+    LibBrowser *browser = &app_demo.browser;
+    // "every album" counts the tracks of the artist column's selection, which
+    // is the whole library when no artist is picked.
+    u32 album_total = (browser->selected_artist < browser->artist_count)
+                          ? browser->artists[browser->selected_artist].count
+                          : app_demo.index.live_count;
+    UI_PrefWidth(ui_pct(1.0f, 0.0f))
+    UI_PrefHeight(ui_px(ui_dp(150.0f), 0.0f))
+    UI_ChildLayoutAxis(Axis2_X)
+    UI_BgColor(theme->surface) {
+        UI_Box *row = ui_build_box(UI_DrawBackground | UI_Clip, str8_lit("###browser"));
+        UI_Parent(row) {
+            AppBrowserClick artist = app_browser_column(
+                &app_demo.artist_list, str8_lit("###artists"), str8_lit("ARTISTE"),
+                str8_lit("Tous les artistes"), app_demo.index.live_count, browser->artists,
+                browser->artist_count, browser->selected_artist);
+            ui_separator();
+            AppBrowserClick album = app_browser_column(
+                &app_demo.album_list, str8_lit("###albums"), str8_lit("ALBUM"),
+                str8_lit("Tous les albums"), album_total, browser->albums,
+                browser->album_count, browser->selected_album);
+            if (artist.hit) {
+                lib_browser_select_artist(browser, &app_demo.index, artist.group);
+                app_filter();
+            } else if (album.hit) {
+                lib_browser_select_album(browser, album.group);
+                app_filter();
+            }
+        }
+    }
+    ui_separator();
 }
 
 // A panel: a titled column with a 1 px border on its inner side.
@@ -342,7 +567,7 @@ static void app_library_panel(f32 width) {
         app_demo.scan_active
             ? str8f(ui_frame_arena(), "scan : %u fichiers, %u / %u dossiers", app_demo.scan_files,
                     app_demo.scan_dirs_done, app_demo.scan_dirs_total)
-            : str8f(ui_frame_arena(), "%u / %u", app_demo.filtered_count, app_source_count());
+            : str8f(ui_frame_arena(), "%u / %u", app_rows_count(), app_source_count());
     app_panel_begin(str8_lit("###library"), ui_px(width, 1.0f), str8_lit("Bibliotheque"),
                     count_label);
 
@@ -366,6 +591,9 @@ static void app_library_panel(f32 width) {
         app_filter();
     }
 
+    ui_separator();
+    app_browser_panel();
+
     // Column headers.
     f32 artist_width = ui_dp(180.0f);
     f32 album_width = app_demo.scanned ? ui_dp(180.0f) : 0.0f;
@@ -376,20 +604,25 @@ static void app_library_panel(f32 width) {
     UI_BgColor(theme->panel) {
         UI_Box *header = ui_build_box_from_key(UI_DrawBackground, 0);
         UI_Parent(header) {
-            app_column_header(str8_lit("TITRE"), ui_pct(1.0f, 0.0f), UI_TextAlign_Left);
-            app_column_header(str8_lit("ARTISTE"), ui_px(artist_width, 1.0f), UI_TextAlign_Left);
+            app_column_header(str8_lit("TITRE"), ui_pct(1.0f, 0.0f), UI_TextAlign_Left,
+                              LibSort_Title);
+            app_column_header(str8_lit("ARTISTE"), ui_px(artist_width, 1.0f), UI_TextAlign_Left,
+                              LibSort_Artist);
             if (app_demo.scanned) {
-                app_column_header(str8_lit("ALBUM"), ui_px(album_width, 1.0f), UI_TextAlign_Left);
+                app_column_header(str8_lit("ALBUM"), ui_px(album_width, 1.0f), UI_TextAlign_Left,
+                                  LibSort_Album);
             }
-            app_column_header(str8_lit("DUREE"), ui_px(duration_width, 1.0f), UI_TextAlign_Right);
+            app_column_header(str8_lit("DUREE"), ui_px(duration_width, 1.0f), UI_TextAlign_Right,
+                              LibSort_Duration);
         }
     }
     ui_separator();
 
     // The list itself: 100 000 rows, only the visible ones become boxes.
-    ui_list_begin(list, app_demo.filtered_count, ui_dp(theme->row_compact));
+    const u32 *rows = app_rows_view();
+    ui_list_begin(list, app_rows_count(), ui_dp(theme->row_compact));
     UI_ListEachRow(list, i) {
-        AppTrack track = app_track(app_demo.filtered[i]);
+        AppTrack track = app_track(rows[i]);
         ui_list_row_begin(list, i);
         b32 selected = ui_list_selected(list, i);
         u32 secondary = selected ? theme->fg_primary : theme->fg_secondary;
@@ -663,7 +896,7 @@ static void app_build_ui(f32 scale) {
             app_plan_add_selection();
         }
         if (ui_context_menu_item(&app_demo.menu, str8_lit("Ajouter cette piste"))) {
-            if (row < app_demo.filtered_count) { app_plan_add(app_demo.filtered[row]); }
+            if (row < app_rows_count()) { app_plan_add(app_rows_view()[row]); }
         }
         ui_context_menu_separator(&app_demo.menu);
         if (ui_context_menu_item(&app_demo.menu, str8_lit("Tout selectionner"))) {
@@ -688,15 +921,38 @@ static void app_init(Arena *permanent, f32 scale) {
     // Two arenas: the columns and the hash slots on one, the interned strings
     // on the other, so the string bytes stay contiguous while the SoA doubles.
     lib_init(&app_demo.library, arena_alloc(MB(512)), arena_alloc(MB(512)));
+    app_demo.index_arena = arena_alloc(GB(2));
+    lib_browser_init(&app_demo.browser, permanent, APP_LIBRARY_COUNT);
+    lib_search_init(&app_demo.finder, permanent, APP_LIBRARY_COUNT);
+    app_demo.cache_path = app_cache_path(permanent);
     u64 selection_words = (APP_LIBRARY_COUNT + 63) / 64;
     ui_list_init(&app_demo.list, push_array_zero(permanent, u64, selection_words),
                  selection_words);
+    ui_list_init(&app_demo.artist_list, 0, 0);
+    ui_list_init(&app_demo.album_list, 0, 0);
     ui_text_input_init(&app_demo.search, str8_lit(""));
     ui_splitter_init(&app_demo.library_split, 420.0f * scale, 220.0f * scale, 420.0f * scale);
     ui_splitter_init(&app_demo.disc_split, 260.0f * scale, 200.0f * scale, 320.0f * scale);
     app_demo.disc_split.measures_trailing = 1;
     app_filter();
+
+    // Startup (T-012): the cache first, so the library is on screen before the
+    // disk is touched; then a rescan in the background that pushes its diffs.
+    String8 cached_root = str8(0, 0);
+    u64 start_us = os_time_now_us();
+    if (lib_cache_load(&app_demo.library, app_demo.cache_path, permanent, &cached_root) ==
+        LibCache_Ok) {
+        app_demo.cache_load_us = os_time_now_us() - start_us;
+        app_demo.cache_tracks = app_demo.library.live_count;
+        app_demo.scanned = app_demo.library.live_count > 0;
+        app_demo.root = cached_root;
+        app_rows_rebuild();
+        app_index_rebuild();
+        app_demo.library_split.size = Max(app_demo.library_split.size, 640.0f * scale);
+    }
     app_scan_from_command_line();
+    if (!app_demo.scan_active && cached_root.size) { app_scan_folder(cached_root); }
+    app_query_from_command_line();
     app_demo.initialized = 1;
 }
 

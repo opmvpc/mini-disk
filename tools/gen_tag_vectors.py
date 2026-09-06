@@ -389,6 +389,15 @@ DEMO = [
         "Marche", "Grand-Place", "Beffroi", "Retour"]),
     ("Sylvie Aumont", "Horizons", "2012", "Electronic", [
         "Bleu nuit", "Ligne de fuite", "Aube", "Derive"]),
+    # Two albums for one artist, and accented names, so the Artist -> Album
+    # browser and the accent folded sort of T-012 have something to show.
+    ("Django Reinhardt", "Nuages", "1946", "Jazz", [
+        "Belleville", "Blues Clair", "Les Yeux Noirs", "Swing 42"]),
+    ("Émilie Simon", "Végétal", "2006", "Pop", [
+        "Fleur de saison", "Dame de lotus", "Never Fall in Love", "Ice Girl"]),
+    ("The Bad Plus", "Never Stop", "2010", "Jazz", [
+        "The Radio Tower Has a Beating Heart", "People Like You", "Beryl Loves to Dance",
+        "Super America"]),
 ]
 
 def safe(name):
