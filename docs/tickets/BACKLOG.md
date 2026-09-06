@@ -8,8 +8,8 @@ ont un fichier `T-NNN-*.md` ; les suivants sont des lignes à détailler au mome
 | Ticket | Titre | Statut |
 |--------|-------|--------|
 | [T-001](T-001-base-et-build.md) | `base/` (types, arena, string8, math, stubs CRT), `build.bat` debug/release/test/check/analyze, runner de tests, fenêtre noire < 8 KB, CI verte | todo |
-| T-002 | `platform/win32` fenêtre : WndProc, `OsEvent`, boucle `MsgWaitForMultipleObjectsEx`, DPI v2, dark title bar, 0 % CPU au repos mesuré | todo |
-| T-003 | Contexte WGL GL 3.3 core + loader + `r_gl` : quad SDF arrondi anti-aliasé | todo |
+| [T-002](T-002-fenetre-win32.md) | `platform/win32` fenêtre : WndProc, `OsEvent`, boucle `MsgWaitForMultipleObjectsEx`, DPI v2, dark title bar, 0 % CPU au repos mesuré | todo |
+| [T-003](T-003-wgl-gl33-quad-sdf.md) | Contexte WGL GL 3.3 core + loader + `r_gl` : quad SDF arrondi anti-aliasé | todo |
 | T-004 | `r_core` : batches, VBO dynamique, scissor, atlas R8 + packing skyline | todo |
 | T-005 | `win32_font_dwrite` + `ui_text` : cache de glyphes, mesure, "Hello 世界" | todo |
 | T-006 | `ui_core` : UI_Box, clés, piles, layout 5 passes, signaux, animations | todo |
