@@ -216,6 +216,27 @@ static b32 r_same_clip(Rect a, Rect b) {
     return a.min.x == b.min.x && a.min.y == b.min.y && a.max.x == b.max.x && a.max.y == b.max.y;
 }
 
+// The pixels a command can touch: the rounded rect of r_write_quad plus the
+// same padding it gives the antialiasing ramp and the shadow blur.
+static Rect r_cmd_bounds(const R_Cmd *cmd) {
+    f32 pad = (cmd->flags & R_VertFlag_NoSdf) ? 0.0f : max_f32(cmd->softness, 0.0f) + 1.0f;
+    return rect(round_f32(cmd->dst.min.x) - pad, round_f32(cmd->dst.min.y) - pad,
+                round_f32(cmd->dst.max.x) + pad, round_f32(cmd->dst.max.y) + pad);
+}
+
+// "That scissor cannot touch these pixels". One pixel of margin because the
+// back end truncates the clip rect to whole pixels before handing it to
+// glScissor: the effective rectangle is never smaller than this one.
+static b32 r_clip_leaves_alone(Rect clip, Rect bounds) {
+    return bounds.min.x >= clip.min.x + 1.0f && bounds.min.y >= clip.min.y + 1.0f &&
+           bounds.max.x <= clip.max.x - 1.0f && bounds.max.y <= clip.max.y - 1.0f;
+}
+
+static Rect r_rect_union(Rect a, Rect b) {
+    return rect(min_f32(a.min.x, b.min.x), min_f32(a.min.y, b.min.y), max_f32(a.max.x, b.max.x),
+                max_f32(a.max.y, b.max.y));
+}
+
 // Counting sort on three buckets: stable, one pass to count and one to place,
 // which is what keeps "the order inside a layer is the order of the calls" true.
 static R_Cmd **r_sort_commands(void) {
@@ -253,17 +274,57 @@ void r_end_frame(void) {
     // Worst case one batch per command; the arena makes the bound free.
     r_frame.batches = push_array(r_frame.arena, R_Batch, r_frame.cmd_count);
 
+    // An untextured quad never samples: no R_VertFlag_Texture, so whatever is
+    // bound is ignored. The back end already binds the atlas for texture 0, so
+    // "no texture" and "the atlas" are the same GL state and must not cut a
+    // batch. Resolving it here, and not in the command, is what keeps the
+    // vertices bit for bit identical: r_write_quad still sees texture 0 and
+    // still leaves the sampling flag off (T-009).
+    u32 atlas_texture = r_atlas_texture();
+
     R_Batch *batch = 0;
+    Rect batch_bounds = rect(0.0f, 0.0f, 0.0f, 0.0f);  // union of the quads in the batch
+    b32 batch_exact = 0;  // the batch scissor does not cut any of them
     for (u32 i = 0; i < r_frame.cmd_count; i += 1) {
         const R_Cmd *cmd = order[i];
-        if (batch == 0 || batch->texture != cmd->texture || !r_same_clip(batch->clip, cmd->clip) ||
-            batch->quad_count == R_MAX_BATCH_QUADS) {
+        u32 texture = cmd->texture ? cmd->texture : atlas_texture;
+        Rect bounds = r_cmd_bounds(cmd);
+
+        // The commands are never reordered here: a batch only ever swallows the
+        // command that comes right after it, so the painter's order the caller
+        // asked for is exactly the order the GPU sees. What changes is the
+        // scissor: two different clip rects can still share one draw call when
+        // neither of them would remove a single pixel of the other's quads.
+        b32 open = (batch == 0 || batch->texture != texture ||
+                    batch->quad_count == R_MAX_BATCH_QUADS);
+        if (!open && !r_same_clip(batch->clip, cmd->clip)) {
+            b32 join = 0;
+            // Its own scissor removes nothing from it, so the command does not
+            // need one of its own...
+            if (r_clip_leaves_alone(cmd->clip, bounds)) {
+                // ... and it survives the one already set up.
+                join = r_clip_leaves_alone(batch->clip, bounds);
+                if (!join && batch_exact && r_clip_leaves_alone(cmd->clip, batch_bounds)) {
+                    // Or the other way around: nothing drawn so far would lose a
+                    // pixel to this command's scissor, so adopt it.
+                    batch->clip = cmd->clip;
+                    join = 1;
+                }
+            }
+            open = !join;
+        }
+        if (open) {
             batch = &r_frame.batches[r_frame.batch_count];
             r_frame.batch_count += 1;
             batch->quad_first = r_frame.quad_count;
             batch->quad_count = 0;
-            batch->texture = cmd->texture;
+            batch->texture = texture;
             batch->clip = cmd->clip;
+            batch_bounds = bounds;
+            batch_exact = r_clip_leaves_alone(cmd->clip, bounds);
+        } else {
+            batch_bounds = r_rect_union(batch_bounds, bounds);
+            batch_exact = batch_exact && r_clip_leaves_alone(batch->clip, bounds);
         }
         r_write_quad(r_frame.vertices + (u64)r_frame.quad_count * 4, cmd);
         r_frame.quad_count += 1;

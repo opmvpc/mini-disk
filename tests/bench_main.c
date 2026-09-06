@@ -7,6 +7,9 @@
 #include "../src/base/base_hash.h"
 #include "../src/platform/platform.h"
 #include "../src/base/base_jobs.h"
+#include "../src/core/library/lib_model.h"
+#include "../src/core/library/lib_events.h"
+#include "../src/core/library/lib_scan.h"
 #include "../src/ui/r_core.h"
 #include "../src/ui/r_backend.h"
 #include "../src/ui/r_atlas.h"
@@ -23,6 +26,7 @@
 #include "../src/base/base_hash.c"
 #include "../src/base/base_jobs.c"
 #include "../src/platform/win32/win32_platform.c"
+#include "../src/platform/win32/win32_file.c"
 #include "../src/platform/win32/win32_thread.c"
 #include "../src/ui/r_atlas.c"
 #include "../src/ui/r_raster.c"
@@ -33,6 +37,8 @@
 #include "../src/ui/ui_text.c"
 #include "../src/ui/ui_theme.c"
 #include "../src/ui/ui_core.c"
+#include "../src/core/library/lib_model.c"
+#include "../src/core/library/lib_scan.c"
 
 // The renderer benches measure r_core and r_atlas, not the driver: the back end
 // is a stub, exactly as in the tests.
@@ -95,6 +101,7 @@ static BenchResult bench_batch_build(void) {
     u32 iterations = 64;
     Arena *frame_arena = arena_alloc(MB(256));
 
+    u64 best_us = U64_MAX;
     u64 start_us = os_time_now_us();
     u64 start_cycles = __rdtsc();
     u32 batches = 0;
@@ -117,13 +124,25 @@ static BenchResult bench_batch_build(void) {
             r_rect(params);
         }
         r_pop_clip();
+        // r_end_frame on its own, best of the passes: that is the number the
+        // budget of T-004 and T-009 is written against (the mean measures the
+        // machine, the minimum measures the code).
+        u64 pass_start = os_time_now_us();
         r_end_frame();
+        u64 pass_us = os_time_now_us() - pass_start;
+        if (pass_us < best_us) { best_us = pass_us; }
         batches = r_draw_call_count();
         arena_clear(frame_arena);
     }
     u64 end_cycles = __rdtsc();
     u64 end_us = os_time_now_us();
     AssertAlways(batches > 0);
+    ArenaTemp scratch = scratch_begin(0, 0);
+    os_debug_print(str8f(scratch.arena,
+                         "  batches: %u draw calls, r_end_frame %llu us (best of %u, budget 900)\n",
+                         batches, best_us, iterations));
+    scratch_end(scratch);
+    AssertAlways(best_us <= 900);
     arena_release(frame_arena);
 
     BenchResult result;
@@ -473,6 +492,226 @@ static BenchResult bench_jobs_parallel_sum(void) {
     return result;
 }
 
+// --- library scan (T-010) --------------------------------------------------
+// 50 000 empty files in 500 folders, generated once in %TEMP%: a cold scan
+// (empty library) then a warm one (incremental, nothing changed on disk).
+#define BENCH_SCAN_FILES 50000
+#define BENCH_SCAN_FOLDERS 500
+
+// The listing is taken before the first deletion: deleting through an open
+// search handle makes FindNextFileW skip entries.
+static void bench_scan_tree_remove(Arena *arena, String8 dir) {
+    OsDirIter iter;
+    if (!os_dir_iter_begin(&iter, dir)) { return; }
+    String8List files;
+    String8List folders;
+    StructZero(&files);
+    StructZero(&folders);
+    OsFileInfo info;
+    while (os_dir_iter_next(&iter, &info)) {
+        String8 path = os_path_join(arena, dir, info.name);
+        str8_list_push(arena, info.is_dir ? &folders : &files, path);
+    }
+    os_dir_iter_end(&iter);
+    for (String8Node *node = files.first; node; node = node->next) { os_file_delete(node->str); }
+    for (String8Node *node = folders.first; node; node = node->next) {
+        bench_scan_tree_remove(arena, node->str);
+    }
+    os_dir_delete(dir);
+}
+
+static BenchResult bench_library_scan(void) {
+    ArenaTemp temp = arena_temp_begin(bench_arena);
+    Arena *arena = bench_arena;
+    String8 root = os_path_join(arena, os_known_folder(arena, OsKnownFolder_Temp),
+                                str8_lit("minidisk_bench_scan"));
+    bench_scan_tree_remove(arena, root);
+
+    u64 build_start_us = os_time_now_us();
+    os_dir_create(root);
+    for (u32 i = 0; i < BENCH_SCAN_FOLDERS; i += 1) {
+        os_dir_create(os_path_join(arena, root, str8f(arena, "d%03u", i)));
+    }
+    for (u32 i = 0; i < BENCH_SCAN_FILES; i += 1) {
+        ArenaTemp scratch = arena_temp_begin(arena);
+        String8 folder = os_path_join(arena, root, str8f(arena, "d%03u", i % BENCH_SCAN_FOLDERS));
+        os_file_write_all(os_path_join(arena, folder, str8f(arena, "t%05u.mp3", i)), str8(0, 0));
+        arena_temp_end(scratch);
+    }
+    u64 build_us = os_time_now_us() - build_start_us;
+
+    Arena *text = arena_alloc(MB(64));
+    Arena *columns = arena_alloc(MB(64));
+    Library lib;
+    lib_init(&lib, columns, text);
+    LibEventQueue events;
+    StructZero(&events);
+    jobs_init(0);
+
+    LibScan cold;
+    u64 cold_start_us = os_time_now_us();
+    u64 cold_cycles = __rdtsc();
+    lib_scan_begin(&cold, &lib, &events, root);
+    while (lib_scan_update(&cold)) { os_thread_yield(); }
+    cold_cycles = __rdtsc() - cold_cycles;
+    u64 cold_us = os_time_now_us() - cold_start_us;
+    lib_scan_end(&cold);
+
+    LibScan warm;
+    u64 warm_start_us = os_time_now_us();
+    lib_scan_begin(&warm, &lib, &events, root);
+    while (lib_scan_update(&warm)) { os_thread_yield(); }
+    u64 warm_us = os_time_now_us() - warm_start_us;
+    lib_scan_end(&warm);
+    AssertAlways(cold.added == BENCH_SCAN_FILES);
+    AssertAlways(warm.unchanged == BENCH_SCAN_FILES && warm.added == 0);
+
+    ArenaTemp scratch = scratch_begin(0, 0);
+    os_debug_print(str8f(scratch.arena,
+                         "  scan: %u files in %u folders, %llu us cold, %llu us warm, "
+                         "%u workers, tree built in %llu us\n",
+                         BENCH_SCAN_FILES, BENCH_SCAN_FOLDERS, cold_us, warm_us,
+                         jobs_worker_count(), build_us));
+    os_debug_print(str8f(scratch.arena,
+                         "  scan: %llu MB of columns for 100 000 tracks, "
+                         "%llu KB of strings for %u tracks\n",
+                         ((u64)100000 * LIB_BYTES_PER_TRACK) >> 20, lib.strings.size >> 10,
+                         lib.live_count));
+    scratch_end(scratch);
+
+    jobs_shutdown();
+    bench_scan_tree_remove(arena, root);
+    arena_release(text);
+    arena_release(columns);
+    arena_temp_end(temp);
+
+    BenchResult result;
+    result.name = "library scan 50 000 files (cold)";
+    result.cycles = cold_cycles;
+    result.micros = cold_us;
+    result.bytes = 0;
+    return result;
+}
+
+// The shape of the real demo (T-009): three clipped panels, thirty rows each,
+// every row an untextured background followed by three runs of atlas text and
+// an icon, plus a popup on its own layer. Before T-009 this cut a batch at
+// every single row; what is measured is the batch count and the time
+// r_end_frame alone costs, which is where the sort, the merge and the vertex
+// generation live.
+static void bench_realistic_frame_build(Arena *frame_arena, u32 rows) {
+    V2 uv0 = v2(0.10f, 0.10f);
+    V2 uv1 = v2(0.12f, 0.14f);
+    u32 atlas = r_atlas_texture();
+    u32 fg = 0xFFFFFFFFu;
+
+    r_begin_frame(frame_arena, 1920.0f, 1080.0f, 1.0f);
+    R_RectParams params;
+    StructZero(&params);
+    params.color = 0xFF2A2A2Au;
+    params.corner_radius = 4.0f;
+
+    // Toolbar: no texture, no clip of its own.
+    for (u32 i = 0; i < 6; i += 1) {
+        f32 x = 8.0f + (f32)i * 90.0f;
+        params.dst = rect(x, 8.0f, x + 80.0f, 40.0f);
+        r_rect(params);
+    }
+
+    for (u32 panel = 0; panel < 3; panel += 1) {
+        f32 px = 8.0f + (f32)panel * 634.0f;
+        r_push_clip(rect(px, 48.0f, px + 620.0f, 1072.0f));
+        params.dst = rect(px, 48.0f, px + 620.0f, 1072.0f);
+        r_rect(params);  // panel background
+        for (u32 i = 0; i < 10; i += 1) {
+            f32 gx = px + 12.0f + (f32)i * 9.0f;
+            r_rect_textured(rect(gx, 56.0f, gx + 8.0f, 72.0f), atlas, uv0, uv1, fg, 1);
+        }
+
+        // The list clip cuts the last row in half, exactly as a scrolled list
+        // does: that row is the one command that still needs its own scissor.
+        f32 list_bottom = 96.0f + (f32)rows * 26.0f - 13.0f;
+        r_push_clip(rect(px, 96.0f, px + 620.0f, list_bottom));
+        for (u32 row = 0; row < rows; row += 1) {
+            f32 y = 96.0f + (f32)row * 26.0f;
+            params.dst = rect(px + 4.0f, y, px + 616.0f, y + 25.0f);
+            params.color = (row & 1) ? 0xFF303030u : 0xFF262626u;
+            r_rect(params);  // row background, untextured
+            u32 columns[3] = {14, 10, 5};
+            f32 gx = px + 12.0f;
+            for (u32 column = 0; column < 3; column += 1) {
+                for (u32 glyph = 0; glyph < columns[column]; glyph += 1) {
+                    r_rect_textured(rect(gx, y + 5.0f, gx + 8.0f, y + 21.0f), atlas, uv0, uv1, fg,
+                                    1);
+                    gx += 9.0f;
+                }
+                gx += 40.0f;
+            }
+            r_rect_textured(rect(px + 592.0f, y + 5.0f, px + 608.0f, y + 21.0f), atlas, uv0, uv1,
+                            fg, 1);  // icon
+        }
+        r_pop_clip();
+        r_pop_clip();
+        params.color = 0xFF2A2A2Au;
+    }
+
+    r_set_layer(R_Layer_Popup);
+    r_push_clip(rect(600.0f, 300.0f, 1000.0f, 560.0f));
+    params.dst = rect(600.0f, 300.0f, 1000.0f, 560.0f);
+    r_rect(params);
+    for (u32 i = 0; i < 20; i += 1) {
+        f32 gx = 612.0f + (f32)i * 9.0f;
+        r_rect_textured(rect(gx, 320.0f, gx + 8.0f, 336.0f), atlas, uv0, uv1, fg, 1);
+    }
+    r_pop_clip();
+    r_set_layer(R_Layer_Content);
+}
+
+static BenchResult bench_realistic_frame(void) {
+    u32 rows = 30;
+    u32 iterations = 2000;
+    Arena *atlas_arena = arena_alloc(MB(32));
+    Arena *frame_arena = arena_alloc(MB(64));
+    r_atlas_init(atlas_arena);
+
+    u32 batches = 0;
+    u32 quads = 0;
+    u64 best_us = U64_MAX;
+    u64 start_us = os_time_now_us();
+    u64 start_cycles = __rdtsc();
+    for (u32 i = 0; i < iterations; i += 1) {
+        bench_realistic_frame_build(frame_arena, rows);
+        // Only r_end_frame is timed: building the command list is the caller's
+        // cost and it did not change.
+        u64 pass_start = os_time_now_us();
+        r_end_frame();
+        u64 pass_us = os_time_now_us() - pass_start;
+        if (pass_us < best_us) { best_us = pass_us; }
+        batches = r_draw_call_count();
+        quads = r_frame_state()->quad_count;
+        arena_clear(frame_arena);
+    }
+    u64 end_cycles = __rdtsc();
+    u64 end_us = os_time_now_us();
+
+    ArenaTemp scratch = scratch_begin(0, 0);
+    os_debug_print(str8f(scratch.arena,
+                         "  frame: %u quads, %u draw calls (budget < 10), r_end_frame %llu us "
+                         "(best of %u)\n",
+                         quads, batches, best_us, iterations));
+    scratch_end(scratch);
+    AssertAlways(batches < 10);  // the acceptance criterion of T-009
+    arena_release(frame_arena);
+    arena_release(atlas_arena);
+
+    BenchResult result;
+    result.name = "r_core realistic frame x2000";
+    result.cycles = end_cycles - start_cycles;
+    result.micros = end_us - start_us;
+    result.bytes = (u64)quads * iterations * 4 * sizeof(R_Vertex);
+    return result;
+}
+
 int main(void) {
     os_init();
     bench_arena = arena_alloc(GB(1));
@@ -484,5 +723,7 @@ int main(void) {
     bench_print(bench_ui_layout());
     bench_print(bench_jobs_dispatch());
     bench_print(bench_jobs_parallel_sum());
+    bench_print(bench_library_scan());
+    bench_print(bench_realistic_frame());
     return 0;
 }

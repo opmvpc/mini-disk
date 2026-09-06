@@ -21,6 +21,66 @@ u64   os_page_size(void);
 String8 os_file_read_all(Arena *arena, String8 path);   // size 0 when unreadable
 b32     os_file_write_all(String8 path, String8 data);
 
+// --- file system -----------------------------------------------------------
+// A directory entry, or what os_file_stat found. `name` points into the
+// iterator and is valid until the next os_dir_iter_next: walking a tree of
+// 50 000 files therefore allocates nothing at all.
+#define OS_NAME_MAX 780   // 260 UTF-16 units, worst case in UTF-8
+#define OS_PATH_MAX 1024
+
+typedef struct OsFileInfo {
+    String8 name;
+    u64 size;
+    u64 mtime_us;  // unix epoch, microseconds
+    b32 is_dir;
+} OsFileInfo;
+
+// Opaque tail: the OS search handle plus the buffer it fills (WIN32_FIND_DATAW
+// is 592 bytes; a static assert in the backend keeps this honest).
+typedef struct OsDirIter {
+    void *handle;
+    b32 pending;  // the entry the search handed us when it opened
+    u8 name[OS_NAME_MAX];
+    u8 opaque[640];
+} OsDirIter;
+
+b32  os_dir_iter_begin(OsDirIter *it, String8 dir_path);  // 0: unreadable
+b32  os_dir_iter_next(OsDirIter *it, OsFileInfo *out);    // 0: exhausted
+void os_dir_iter_end(OsDirIter *it);
+
+b32 os_file_stat(String8 path, OsFileInfo *out);  // `name` stays empty
+b32 os_dir_create(String8 path);                  // 1 when it exists afterwards
+b32 os_file_delete(String8 path);
+b32 os_dir_delete(String8 path);                  // the directory must be empty
+
+// Random access reads, for the tag parsers of T-011 and the codecs later on.
+typedef struct OsFile { void *v; } OsFile;  // v == 0: not open
+OsFile os_file_open(String8 path);        // read only, shared read
+u64    os_file_read_at(OsFile file, u64 offset, void *dst, u64 size);  // bytes read
+void   os_file_close(OsFile file);
+
+// --- paths -----------------------------------------------------------------
+// Slices into `path` where they can be, so walking a tree copies nothing.
+b32     os_path_is_separator(u8 c);
+String8 os_path_join(Arena *arena, String8 a, String8 b);
+String8 os_path_parent(String8 path);     // without the trailing separator
+String8 os_path_filename(String8 path);
+String8 os_path_extension(String8 path);  // without the dot, empty when none
+String8 os_path_normalize(Arena *arena, String8 path);  // '/' -> '\', no trailing sep
+
+typedef enum OsKnownFolder {
+    OsKnownFolder_Music = 0,
+    OsKnownFolder_LocalAppData,
+    OsKnownFolder_Temp,
+    OsKnownFolder_COUNT
+} OsKnownFolder;
+
+String8 os_known_folder(Arena *arena, OsKnownFolder folder);  // size 0 when unknown
+
+// The process command line, arguments only (the exe path is dropped). The app
+// parses it; nothing below app/ ever looks at it.
+String8 os_command_line(Arena *arena);
+
 // --- time and threads ------------------------------------------------------
 u64 os_time_now_us(void);      // monotonic, microseconds
 void os_sleep_us(u64 us);
@@ -39,6 +99,7 @@ u32 os_thread_current_id(void);
     ((u32)_InterlockedCompareExchange((volatile long *)(p), (long)(desired), \
                                       (long)(expected)))
 #define os_atomic_load_u64(p)     ((u64)_InterlockedOr64((volatile __int64 *)(p), 0))
+#define os_atomic_store_u64(p, v) ((void)_InterlockedExchange64((volatile __int64 *)(p), (__int64)(v)))
 #define os_atomic_add_u64(p, v)                                          \
     ((u64)_InterlockedExchangeAdd64((volatile __int64 *)(p), (__int64)(v)))
 #define os_atomic_inc_u64(p)      ((u64)_InterlockedIncrement64((volatile __int64 *)(p)))
@@ -247,6 +308,11 @@ b32 os_font_rasterize(OsFont font, u32 glyph, f32 subpixel_x, u8 *out, u64 out_c
                       OsGlyphMetrics *out_metrics);
 
 // --- clipboard and cursor --------------------------------------------------
+// The system folder picker (IFileDialog): modal on the active window, returns
+// size 0 when the user cancelled. ole32/shell32 are loaded on the first call
+// and never unloaded, so the import table stays kernel32 + user32.
+String8 os_dialog_pick_folder(Arena *arena, String8 title);
+
 String8 os_clipboard_get(Arena *arena);   // size 0 when there is no text
 b32     os_clipboard_set(String8 text);
 void    os_cursor_set(OsCursor cursor);

@@ -2,7 +2,7 @@
 
 Dernière mise à jour : 2026-09-06 (soir)
 
-## Phase actuelle : 2 · Bibliothèque — T-009 (optim draw calls) et T-010 (scan) en cours, en parallèle
+## Phase actuelle : 2 · Bibliothèque — T-009/T-010 faits, T-011 (tags) et T-015 (fix overlay) en cours
 
 ### Fait (phase 0 terminée)
 - 4 rapports de recherche livrés (`research/01..04`, ~10 700 lignes) + tokens de design (`02b`).
@@ -16,8 +16,19 @@ Dernière mise à jour : 2026-09-06 (soir)
 - Repo GitHub : https://github.com/opmvpc/mini-disk
 
 ### En cours
-- T-009 : renderer, 94 → < 10 draw calls par frame réelle (prompt `prompts/I-009`).
-- T-010 : scan multi-thread, modèle SoA, StringTable, événements core → UI (prompt `prompts/I-010`).
+- T-011 : tags ID3/Vorbis/MP4/APE/RIFF + durées exactes + fuzz (prompt `prompts/I-011`).
+- T-015 : overlay F11 hors écran à DPI ≠ 1 (prompt `prompts/I-015`).
+
+### Fait en phase 2
+- T-010 livré : `platform.h` système de fichiers (itération de dossier sans allocation, `os_file_stat`,
+  lecture aléatoire, helpers de chemins, dossiers connus), sélecteur de dossier `IFileDialog` (COM en C,
+  `ole32`/`shell32` dynamiques), `core/library` : SoA de 19 colonnes (**74 o/piste**, 7,4 MB pour
+  100 000 pistes), `StringTable` internée, `TrackId` stable + tombstones, scan **un job par
+  sous-dossier** avec allocateur bump sans verrou et pile de Treiber vers le thread principal, rescan
+  incrémental par (taille, mtime), annulation coopérative, file d'événements core → UI, démo
+  « Ajouter un dossier » + progression + chemins. **50 000 fichiers scannés en 168 ms à froid,
+  63 ms à chaud**, 5 cas / 76 checks ajoutés, exe 123 904 o, imports kernel32+user32, 15,6 ms de CPU
+  sur 12 s au repos. Capture : `build/demo.png`.
 
 ### Fait en phase 1 (suite)
 - T-008 livré : `platform.h` threads / sémaphores / SRW / atomiques (`win32_thread.c`), `base_jobs`
@@ -70,3 +81,13 @@ Dernière mise à jour : 2026-09-06 (soir)
 | CPU au repos, 12 s | 31 à 78 ms, **0 ms sur nos threads** (0 réveil, 0 message) ; le reste est un thread du pilote GL | 0 % | 2026-09-06 |
 | Tests | 70 cas, **1 378 checks**, 0 échec (ASan) | verts | 2026-09-06 |
 | Budget CI (`SIZE_BUDGET_KB`) | 128 KB (phase 2 : 250 KB ; `/O1` = −16,9 Ko reste un levier, cf. P-007) | — | 2026-09-06 |
+
+## KPI — phase 2 en cours (même machine)
+| Métrique | Valeur | Cible | Date |
+|----------|--------|-------|------|
+| Taille exe release | **123 904 o**, marge 39 936 o sous la cible de T-010 | < 160 KB (CI 250 KB) | 2026-09-06 |
+| Scan bibliothèque | 50 000 fichiers / 500 dossiers : **168 ms à froid**, **63 ms à chaud** (7 workers) | < 2 s / < 300 ms | 2026-09-06 |
+| Mémoire bibliothèque | **74 o/piste** → 7,4 MB pour 100 000 pistes (hors chaînes), 0 allocation par piste | < 40 MB | 2026-09-06 |
+| Annulation du scan | < 100 ms (test) | < 100 ms | 2026-09-06 |
+| Tests | 79 cas, **1 477 checks**, 0 échec (ASan) | verts | 2026-09-06 |
+| CPU au repos, 12 s, après un scan | **15,6 ms** (78,1 / 62,5 / 15,6 sur 3 mesures) | 0 % | 2026-09-06 |

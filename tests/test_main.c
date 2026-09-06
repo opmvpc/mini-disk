@@ -7,6 +7,9 @@
 #include "../src/base/base_hash.h"
 #include "../src/platform/platform.h"
 #include "../src/base/base_jobs.h"
+#include "../src/core/library/lib_model.h"
+#include "../src/core/library/lib_events.h"
+#include "../src/core/library/lib_scan.h"
 #include "../src/ui/r_core.h"
 #include "../src/ui/r_backend.h"
 #include "../src/ui/r_atlas.h"
@@ -24,6 +27,7 @@
 #include "../src/base/base_hash.c"
 #include "../src/base/base_jobs.c"
 #include "../src/platform/win32/win32_platform.c"
+#include "../src/platform/win32/win32_file.c"
 #include "../src/platform/win32/win32_thread.c"
 #include "../src/platform/win32/win32_window.c"
 #include "../src/ui/r_atlas.c"
@@ -36,6 +40,8 @@
 #include "../src/ui/ui_theme.c"
 #include "../src/ui/ui_core.c"
 #include "../src/ui/ui_widgets.c"
+#include "../src/core/library/lib_model.c"
+#include "../src/core/library/lib_scan.c"
 
 typedef struct TestState {
     Arena *arena;         // per test case arena, reset between cases
@@ -86,6 +92,7 @@ static void test_check(b32 condition, const char *expression, i32 line) {
 #include "test_text.c"
 #include "test_ui.c"
 #include "test_widgets.c"
+#include "test_library.c"
 
 int main(void) {
     os_init();
@@ -99,6 +106,7 @@ int main(void) {
     test_text_run_all();
     test_ui_run_all();
     test_widgets_run_all();
+    test_library_run_all();
 
     test_report("%llu case(s), %llu check(s), %llu failure(s)\n", test_state.cases,
                 test_state.checks, test_state.failures);

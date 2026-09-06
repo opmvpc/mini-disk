@@ -165,11 +165,119 @@ TEST(render_batching_follows_texture) {
 
     const R_Frame *frame = r_frame_state();
     EXPECT(frame->batch_count == 3);
-    EXPECT(frame->batches[0].texture == 0 && frame->batches[0].quad_count == 1);
+    // An untextured quad samples nothing, so it draws in whatever state is
+    // bound: it belongs to the atlas batch (T-009), not to a state of its own.
+    EXPECT(frame->batches[0].texture == r_atlas_texture() && frame->batches[0].quad_count == 1);
     EXPECT(frame->batches[1].texture == 7 && frame->batches[1].quad_count == 2);
     EXPECT(frame->batches[2].texture == 9 && frame->batches[2].quad_count == 1);
     // A mask is a raw quad multiplied by the R8 coverage: no distance field.
     EXPECT(frame->vertices[4].flags == (R_VertFlag_NoSdf | R_VertFlag_R8 | R_VertFlag_Texture));
+    // ... and the untextured quad still carries no sampling flag at all.
+    EXPECT(frame->vertices[0].flags == 0);
+}
+
+// The frame shape of the demo, in miniature: a row background with no texture
+// followed by atlas text. Before T-009 that was two draw calls per row.
+TEST(render_rows_and_text_share_one_batch) {
+    r_begin_frame(arena, 800.0f, 600.0f, 1.0f);
+    u32 atlas = r_atlas_texture();
+    for (u32 row = 0; row < 40; row += 1) {
+        f32 y = 10.0f + (f32)row * 12.0f;
+        r_rect(test_render_params(rect(10.0f, y, 400.0f, y + 11.0f)));
+        for (u32 glyph = 0; glyph < 6; glyph += 1) {
+            f32 x = 14.0f + (f32)glyph * 8.0f;
+            r_rect_textured(rect(x, y + 2.0f, x + 7.0f, y + 9.0f), atlas, v2(0.1f, 0.1f),
+                            v2(0.2f, 0.2f), r_rgb(0xFFFFFF), 1);
+        }
+    }
+    r_end_frame();
+
+    const R_Frame *frame = r_frame_state();
+    EXPECT(frame->quad_count == 40 * 7);
+    EXPECT(frame->batch_count == 1);
+}
+
+// The commands are never reordered, so a background emitted after the text of
+// the row above it still covers that text. This is the case the ticket calls
+// out: row n+1's background overlaps row n's descenders.
+TEST(render_overlapping_rows_keep_their_order) {
+    r_begin_frame(arena, 800.0f, 600.0f, 1.0f);
+    u32 atlas = r_atlas_texture();
+    for (u32 row = 0; row < 3; row += 1) {
+        f32 y = 10.0f + (f32)row * 20.0f;
+        R_RectParams params = test_render_params(rect(10.0f, y, 400.0f, y + 24.0f));
+        params.color = 10 + row;  // background of row n, four pixels into row n+1
+        r_rect(params);
+        // The glyph overlaps the next row's background on purpose.
+        r_rect_textured(rect(14.0f, y + 4.0f, 22.0f, y + 22.0f), atlas, v2(0.1f, 0.1f),
+                        v2(0.2f, 0.2f), 20 + row, 1);
+    }
+    r_end_frame();
+
+    const R_Frame *frame = r_frame_state();
+    EXPECT(frame->batch_count == 1);  // one draw call...
+    // ... and the painter's order inside it is exactly the order of the calls.
+    EXPECT(frame->vertices[0].color[0] == 10);
+    EXPECT(frame->vertices[4].color[0] == 20);
+    EXPECT(frame->vertices[8].color[0] == 11);
+    EXPECT(frame->vertices[12].color[0] == 21);
+    EXPECT(frame->vertices[16].color[0] == 12);
+    EXPECT(frame->vertices[20].color[0] == 22);
+}
+
+// A clip that would remove pixels is never dropped: the row crossing the
+// bottom of the list keeps its own scissor, and the rows around it do not.
+TEST(render_clip_kept_when_it_really_clips) {
+    r_begin_frame(arena, 800.0f, 600.0f, 1.0f);
+    r_rect(test_render_params(rect(10.0f, 10.0f, 400.0f, 40.0f)));  // outside any clip
+
+    r_push_clip(rect(0.0f, 50.0f, 500.0f, 200.0f));
+    r_rect(test_render_params(rect(10.0f, 60.0f, 400.0f, 90.0f)));    // inside the clip
+    r_rect(test_render_params(rect(10.0f, 180.0f, 400.0f, 220.0f)));  // cut by the clip
+    r_pop_clip();
+    r_rect(test_render_params(rect(10.0f, 300.0f, 400.0f, 340.0f)));
+    r_end_frame();
+
+    const R_Frame *frame = r_frame_state();
+    // The first two quads sit inside both clips, so the change of clip costs
+    // nothing. The third really is cut and opens a draw call with the list
+    // scissor; the fourth is below y = 200, that scissor would erase it, so it
+    // opens a third one.
+    EXPECT(frame->batch_count == 3);
+    EXPECT(frame->batches[0].quad_count == 2);
+    EXPECT(frame->batches[0].clip.max.y == 600.0f);  // the wide clip is the kept one
+    EXPECT(frame->batches[1].quad_count == 1);
+    EXPECT(frame->batches[1].clip.min.y == 50.0f && frame->batches[1].clip.max.y == 200.0f);
+    EXPECT(frame->batches[2].quad_count == 1);
+}
+
+// A popup is emitted while the list is still being built and must still land
+// on top of it, whatever the batching does with the clips.
+TEST(render_popup_stays_above_the_list) {
+    r_begin_frame(arena, 800.0f, 600.0f, 1.0f);
+    r_push_clip(rect(0.0f, 0.0f, 400.0f, 600.0f));
+    for (u32 row = 0; row < 4; row += 1) {
+        R_RectParams params = test_render_params(rect(10.0f, 10.0f + (f32)row * 20.0f, 390.0f,
+                                                      30.0f + (f32)row * 20.0f));
+        params.color = 1 + row;
+        r_rect(params);
+        if (row == 1) {
+            // Right in the middle of the list, over the same pixels.
+            r_set_layer(R_Layer_Popup);
+            R_RectParams popup = test_render_params(rect(50.0f, 20.0f, 300.0f, 200.0f));
+            popup.color = 99;
+            r_rect(popup);
+            r_set_layer(R_Layer_Content);
+        }
+    }
+    r_pop_clip();
+    r_end_frame();
+
+    const R_Frame *frame = r_frame_state();
+    EXPECT(frame->quad_count == 5);
+    for (u32 row = 0; row < 4; row += 1) { EXPECT(frame->vertices[row * 4].color[0] == 1 + row); }
+    EXPECT(frame->vertices[16].color[0] == 99);  // the popup is last, so on top
+    EXPECT(frame->batch_count == 1);
 }
 
 TEST(render_batch_splits_at_index_limit) {
@@ -422,6 +530,10 @@ static void test_render_run_all(void) {
     RUN(render_shadow_packs_softness);
     RUN(render_batching_follows_clip);
     RUN(render_batching_follows_texture);
+    RUN(render_rows_and_text_share_one_batch);
+    RUN(render_overlapping_rows_keep_their_order);
+    RUN(render_clip_kept_when_it_really_clips);
+    RUN(render_popup_stays_above_the_list);
     RUN(render_batch_splits_at_index_limit);
     RUN(render_clip_stack_intersects);
     RUN(render_layer_sort_is_stable);

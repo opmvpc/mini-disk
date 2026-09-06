@@ -99,6 +99,19 @@ b32 os_file_write_all(String8 path, String8 data) {
     return ok;
 }
 
+String8 os_command_line(Arena *arena) {
+    String8 text = str8_from_cstr16(arena, (const u16 *)GetCommandLineW());
+    // Past the exe path, quoted or not: everything the user typed after it.
+    u64 at = 0;
+    if (text.size && text.str[0] == '"') {
+        at = str8_find(text, str8_lit("\""), 1);
+        at = (at < text.size) ? at + 1 : text.size;
+    } else {
+        at = str8_find(text, str8_lit(" "), 0);
+    }
+    return str8_trim(str8_skip(text, Min(at, text.size)));
+}
+
 // --- time and threads ------------------------------------------------------
 
 u64 os_time_now_us(void) {

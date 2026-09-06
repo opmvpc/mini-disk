@@ -6,6 +6,9 @@
 #include "base/base_hash.h"
 #include "platform/platform.h"
 #include "base/base_jobs.h"
+#include "core/library/lib_model.h"
+#include "core/library/lib_events.h"
+#include "core/library/lib_scan.h"
 #include "ui/gl_loader.h"
 #include "ui/r_core.h"
 #include "ui/r_backend.h"
@@ -30,10 +33,15 @@
 #include "base/base_jobs.c"
 
 #include "platform/win32/win32_platform.c"
+#include "platform/win32/win32_file.c"
+#include "platform/win32/win32_dialog.c"
 #include "platform/win32/win32_thread.c"
 #include "platform/win32/win32_window.c"
 #include "platform/win32/win32_gl.c"
 #include "platform/win32/win32_font_dwrite.c"
+
+#include "core/library/lib_model.c"
+#include "core/library/lib_scan.c"
 
 #include "ui/gl_loader.c"
 #include "ui/r_atlas.c"
