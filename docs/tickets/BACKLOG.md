@@ -36,9 +36,13 @@ ont un fichier `T-NNN-*.md` ; les suivants sont des lignes à détailler au mome
 | [T-021](T-021-protocole-netmd-lecture.md) | Protocole NetMD lecture : trames/poll, identification, capacité, pistes, titres, groupes, charsets, transcriptions MZ-N505 | todo |
 | [T-022](T-022-edition-disque.md) | Édition : renommer, déplacer, effacer, groupes, simulation + sauvegarde TOC, budget TOC, tag v0.3.0 | todo |
 
-## Phase 4 — Plan & capacité
-T-030 modèle `.mdplan` + undo/redo · T-031 jauge en clusters (validée sur device) · T-032 budget TOC + sanitize
-titres · T-033 groupes depuis albums · T-034 vue Plan (réordonner, modes, DnD interne).
+## Phase 4 — Plan & capacité (le cœur produit : D1, D2, D3)
+
+| Ticket | Titre | Statut |
+|--------|-------|--------|
+| [T-030](T-030-modele-plan-undo.md) | Modèle `.mdplan` multi-disques, commandes réversibles, undo/redo, autosave, résolution des pistes | todo |
+| [T-031](T-031-capacite-clusters-budget-toc.md) | Capacité en clusters, budget TOC 255×7, sanitize/raccourcissement des titres, titrage auto, first-fit | todo |
+| [T-032](T-032-vue-plan-jauge.md) | Vue Plan : DnD interne, modes, groupes, jauge de capacité au pixel, barre TOC, tag v0.4.0 | todo |
 
 ## Phase 5 — Pipeline & SP
 T-040 minimp3/dr_flac/dr_wav/stb_vorbis · T-041 Media Foundation AAC/ALAC/WMA · T-042 resampler sinc ·
