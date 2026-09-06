@@ -12,12 +12,16 @@
 #include "../../platform/platform.h"
 #include "lib_events.h"
 #include "lib_model.h"
+#include "tags.h"
 
 // Entries travel in batches: one atomic push per 64 files instead of one per
 // file, and the main thread drains a whole directory's worth per pop.
 #define LIB_SCAN_BATCH     64
 #define LIB_SCAN_RESERVE   MB(256)  // virtual, committed 4 MB at a time
 #define LIB_SCAN_COMMIT    MB(4)
+// Tags are read in a second wave of jobs, over the tracks the merge found new
+// or changed: a rescan that changed nothing reads no file at all (T-011).
+#define LIB_TAG_BATCH      32
 
 typedef enum LibScanState {
     LibScanState_Idle = 0,
@@ -37,6 +41,37 @@ typedef struct LibScanBatch {
     LibScanEntry entries[LIB_SCAN_BATCH];
 } LibScanBatch;
 
+// What the main thread hands a tag job: tracks already in the library, whose
+// paths live in the scan's block and outlive the job.
+typedef struct LibTagRequest {
+    u32 next;
+    u32 count;
+    TrackId ids[LIB_TAG_BATCH];
+    String8 paths[LIB_TAG_BATCH];
+    u64 sizes[LIB_TAG_BATCH];
+} LibTagRequest;
+
+// What comes back. The strings are in the block: interning them into the
+// library's table is the main thread's business, and it is the only thread
+// that may touch it.
+typedef struct LibTagResult {
+    TrackId id;
+    String8 title, artist, album, album_artist, genre;
+    u64 cover_hash;
+    u32 duration_ms;
+    u32 sample_rate;
+    u16 track_no, disc_no, year;
+    i16 replaygain_track_db;
+    u8 channels;
+    u8 codec;
+} LibTagResult;
+
+typedef struct LibTagBatch {
+    u32 next;   // offset + 1 into the block, 0: end of the list
+    u32 count;
+    LibTagResult items[LIB_TAG_BATCH];
+} LibTagBatch;
+
 typedef struct LibScan {
     // --- the block: a lock free bump allocator over reserved pages ---------
     u8 *block;
@@ -52,7 +87,10 @@ typedef struct LibScan {
     volatile u32 dirs_total;
     volatile u32 dirs_done;
     volatile u32 exhausted;   // the block ran out: the scan stops, and says so
+    volatile u32 tags_published;  // Treiber stack of LibTagBatch offsets
+    volatile u32 tags_read;
     JobCounter counter;
+    JobCounter tag_counter;
 
     // --- main thread only --------------------------------------------------
     LibScanState state;
@@ -60,7 +98,8 @@ typedef struct LibScan {
     LibEventQueue *events;
     String8 root;        // in the block, normalised
     u32 generation;
-    u32 added, updated, unchanged, removed;
+    u32 added, updated, unchanged, removed, tagged;
+    LibTagRequest *tag_request;  // the batch being filled by the merge
     u64 start_us, end_us;
     b32 cancelled;
 } LibScan;

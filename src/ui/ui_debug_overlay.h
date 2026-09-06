@@ -17,6 +17,11 @@ void ui_debug_overlay_set_arenas(Arena *permanent, Arena *frame);
 void ui_debug_overlay_toggle(void);
 b32  ui_debug_overlay_visible(void);
 
+// The panel as the layout placed it, absolute physical pixels; empty while the
+// overlay has never been built. Read after ui_end: the placement test checks it
+// stays wholly inside the viewport at every DPI (T-015).
+Rect ui_debug_overlay_panel_rect(void);
+
 // Called between the application's UI and ui_end. Samples the frame time on
 // every call, whether or not the overlay is visible, so opening it shows the
 // history that was already there.

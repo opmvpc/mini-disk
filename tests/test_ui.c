@@ -446,6 +446,66 @@ TEST(ui_layers_are_hit_in_reverse_order) {
     EXPECT(ui_hot_key() == content_key);
 }
 
+// T-015. One frame of the fake loop with the F11 overlay in it, at an arbitrary
+// DPI: the fonts are rebuilt exactly like the application does on DpiChanged,
+// because the panel is sized from the width its own text really measures.
+static Rect test_ui_overlay_frame(f32 dpi_scale, V2 viewport) {
+    arena_clear(test_ui_frame);
+    r_begin_frame(test_ui_frame, viewport.x, viewport.y, dpi_scale);
+    ui_begin(test_ui_frame, 0, 0, TEST_UI_DT, viewport, dpi_scale);
+    ui_debug_overlay_build();
+    ui_end();
+    r_end_frame();
+    return ui_debug_overlay_panel_rect();
+}
+
+static void test_ui_set_dpi(f32 dpi_scale) {
+    r_atlas_reset();
+    ui_text_reset();
+    ui_fonts_build(dpi_scale);
+}
+
+static b32 test_ui_inside(Rect r, V2 viewport) {
+    return r.min.x >= -0.01f && r.min.y >= -0.01f && r.max.x <= viewport.x + 0.01f &&
+           r.max.y <= viewport.y + 0.01f && r.max.x > r.min.x && r.max.y > r.min.y;
+}
+
+TEST(ui_debug_overlay_stays_inside_the_viewport) {
+    Unused(arena);
+    const f32 scales[3] = {1.0f, 1.25f, 1.5f};
+    if (!ui_debug_overlay_visible()) { ui_debug_overlay_toggle(); }
+
+    for (u32 i = 0; i < 3; i += 1) {
+        f32 scale = scales[i];
+        test_ui_set_dpi(scale);
+
+        // A normal window: the panel hugs the right edge, whole, margin included.
+        V2 viewport = TEST_UI_VIEWPORT;
+        Rect panel = test_ui_overlay_frame(scale, viewport);
+        EXPECT(test_ui_inside(panel, viewport));
+        // It scales with the DPI instead of staying stuck at 100 % pixels, and
+        // it is wide enough for its own longest line ("... draw calls N").
+        EXPECT(panel.max.x - panel.min.x >= 300.0f * scale);
+        EXPECT(panel.min.x > viewport.x * 0.5f);  // still on the right hand side
+        // The line the ticket is about has to fit inside the panel: its width
+        // comes from the text it really draws, and the caption at 125 % is
+        // rounded up to a whole pixel, so it no longer fits in 304 dp.
+        f32 padding = ui_dp(ui_theme()->space[UI_Space_8]);
+        f32 widest = ui_text_width(ui_font(UI_FontStyle_Caption),
+                                   str8_lit("boxes 0 (0 live)  draw calls 0"), 0);
+        EXPECT(panel.max.x - panel.min.x >= widest + 2.0f * padding - 0.01f);
+
+        // A window narrower and shorter than the panel would like to be: it is
+        // clamped instead of hanging off the right edge or below the bottom.
+        V2 small = v2(260.0f, 180.0f);
+        Rect clamped = test_ui_overlay_frame(scale, small);
+        EXPECT(test_ui_inside(clamped, small));
+    }
+
+    ui_debug_overlay_toggle();
+    test_ui_set_dpi(1.0f);
+}
+
 static void test_ui_run_all(void) {
     test_report("ui\n");
     test_ui_arena = arena_alloc(MB(256));
@@ -465,4 +525,5 @@ static void test_ui_run_all(void) {
     RUN(ui_focus_traversal);
     RUN(ui_animation_converges);
     RUN(ui_layers_are_hit_in_reverse_order);
+    RUN(ui_debug_overlay_stays_inside_the_viewport);
 }

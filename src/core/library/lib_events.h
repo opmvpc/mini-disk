@@ -17,6 +17,7 @@ typedef enum LibEventKind {
     LibEvent_ScanDone,       // added, updated, removed, cancelled
     LibEvent_TracksAdded,    // count
     LibEvent_TracksRemoved,  // count
+    LibEvent_TracksTagged,   // count: tags read and merged (T-011)
     LibEvent_COUNT
 } LibEventKind;
 
@@ -28,6 +29,7 @@ typedef struct LibEvent {
     u32 added;
     u32 updated;
     u32 removed;
+    u32 tagged;
     u32 count;
     b32 cancelled;
 } LibEvent;

@@ -2,7 +2,7 @@
 
 Dernière mise à jour : 2026-09-06 (soir)
 
-## Phase actuelle : 2 · Bibliothèque — T-009/T-010 faits, T-011 (tags) et T-015 (fix overlay) en cours
+## Phase actuelle : 2 · Bibliothèque — T-009/T-010/T-011/T-015 faits, T-012 en cours
 
 ### Fait (phase 0 terminée)
 - 4 rapports de recherche livrés (`research/01..04`, ~10 700 lignes) + tokens de design (`02b`).
@@ -16,10 +16,21 @@ Dernière mise à jour : 2026-09-06 (soir)
 - Repo GitHub : https://github.com/opmvpc/mini-disk
 
 ### En cours
-- T-011 : tags ID3/Vorbis/MP4/APE/RIFF + durées exactes + fuzz (prompt `prompts/I-011`).
-- T-015 : overlay F11 hors écran à DPI ≠ 1 (prompt `prompts/I-015`).
+- T-012 : index triés, navigateur par colonnes, recherche incrémentale, cache `.mdlib` mappé (prompt `prompts/I-012`).
 
 ### Fait en phase 2
+- T-011 livré : lecture des tags et des en-têtes sans décoder l'audio, **2 lectures de 64 Ko par
+  fichier** (tête + queue) : ID3v2.2/2.3/2.4 (unsync tag et frame, ISO-8859-1 / UTF-16 BOM /
+  UTF-16BE / UTF-8, TXXX ReplayGain, APIC → offset + hash), ID3v1/v1.1, en-tête MPEG avec
+  Xing/Info/VBRI, FLAC (STREAMINFO / VORBIS_COMMENT / PICTURE), OGG Vorbis et Opus (durée par la
+  granule de la dernière page), MP4 (`moov/udta/meta/ilst`, `mvhd`, `stsd`, `moov` en fin de fichier
+  lu dans la queue), APEv2 en queue, WAV (`fmt `/`LIST INFO`) et AIFF (`COMM`/`NAME`/`AUTH`),
+  dispatcher par signature et replis nom de fichier / dossiers parents. Tags lus dans une deuxième
+  vague de jobs sur les seules pistes nouvelles ou modifiées : **un rescan sans changement n'ouvre
+  aucun fichier**. **2,13 µs par fichier** au parsing, 50 000 fichiers tagués en **2,38 s à froid**
+  (73 ms à chaud), 24 vecteurs golden de 34,8 Ko générés par `tools/gen_tag_vectors.py`, **fuzz de
+  220 000 mutations sous ASan sans crash**, 16 cas de test ajoutés, exe 167 424 o, imports
+  kernel32+user32. Capture : `build/demo.png` (titres, artistes, albums et durées réels).
 - T-010 livré : `platform.h` système de fichiers (itération de dossier sans allocation, `os_file_stat`,
   lecture aléatoire, helpers de chemins, dossiers connus), sélecteur de dossier `IFileDialog` (COM en C,
   `ole32`/`shell32` dynamiques), `core/library` : SoA de 19 colonnes (**74 o/piste**, 7,4 MB pour
@@ -85,9 +96,12 @@ Dernière mise à jour : 2026-09-06 (soir)
 ## KPI — phase 2 en cours (même machine)
 | Métrique | Valeur | Cible | Date |
 |----------|--------|-------|------|
-| Taille exe release | **123 904 o**, marge 39 936 o sous la cible de T-010 | < 160 KB (CI 250 KB) | 2026-09-06 |
+| Taille exe release | **167 424 o**, marge 37 376 o sous la cible de T-011 | < 200 KB (CI 250 KB) | 2026-09-06 |
 | Scan bibliothèque | 50 000 fichiers / 500 dossiers : **168 ms à froid**, **63 ms à chaud** (7 workers) | < 2 s / < 300 ms | 2026-09-06 |
 | Mémoire bibliothèque | **74 o/piste** → 7,4 MB pour 100 000 pistes (hors chaînes), 0 allocation par piste | < 40 MB | 2026-09-06 |
 | Annulation du scan | < 100 ms (test) | < 100 ms | 2026-09-06 |
-| Tests | 79 cas, **1 477 checks**, 0 échec (ASan) | verts | 2026-09-06 |
+| Lecture des tags | **2,13 µs/fichier** (parsing), 2 lectures de 64 Ko par fichier | < 3 s / 10 000 | 2026-09-06 |
+| Scan + tags, 50 000 fichiers | **2,38 s à froid**, **73 ms à chaud** (0 fichier ouvert au rescan) | < 3 s / 10 000 | 2026-09-06 |
+| Fuzz des parseurs | 22 vecteurs x 10 000 mutations, **0 crash, 0 rapport ASan** | 0 | 2026-09-06 |
+| Tests | 96 cas, **1 697 checks**, 0 échec (ASan) | verts | 2026-09-06 |
 | CPU au repos, 12 s, après un scan | **15,6 ms** (78,1 / 62,5 / 15,6 sur 3 mesures) | 0 % | 2026-09-06 |

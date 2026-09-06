@@ -8,6 +8,7 @@
 #include "../src/platform/platform.h"
 #include "../src/base/base_jobs.h"
 #include "../src/core/library/lib_model.h"
+#include "../src/core/library/tags.h"
 #include "../src/core/library/lib_events.h"
 #include "../src/core/library/lib_scan.h"
 #include "../src/ui/r_core.h"
@@ -20,6 +21,7 @@
 #include "../src/ui/ui_theme.h"
 #include "../src/ui/ui_core.h"
 #include "../src/ui/ui_widgets.h"
+#include "../src/ui/ui_debug_overlay.h"
 
 #include "../src/base/base_arena.c"
 #include "../src/base/base_string.c"
@@ -40,7 +42,14 @@
 #include "../src/ui/ui_theme.c"
 #include "../src/ui/ui_core.c"
 #include "../src/ui/ui_widgets.c"
+#include "../src/ui/ui_debug_overlay.c"
 #include "../src/core/library/lib_model.c"
+#include "../src/core/library/tags.c"
+#include "../src/core/library/tags_id3.c"
+#include "../src/core/library/tags_vorbis.c"
+#include "../src/core/library/tags_mp4.c"
+#include "../src/core/library/tags_ape.c"
+#include "../src/core/library/tags_riff.c"
 #include "../src/core/library/lib_scan.c"
 
 typedef struct TestState {
@@ -93,6 +102,7 @@ static void test_check(b32 condition, const char *expression, i32 line) {
 #include "test_ui.c"
 #include "test_widgets.c"
 #include "test_library.c"
+#include "test_tags.c"
 
 int main(void) {
     os_init();
@@ -107,6 +117,7 @@ int main(void) {
     test_ui_run_all();
     test_widgets_run_all();
     test_library_run_all();
+    test_tags_run_all();
 
     test_report("%llu case(s), %llu check(s), %llu failure(s)\n", test_state.cases,
                 test_state.checks, test_state.failures);

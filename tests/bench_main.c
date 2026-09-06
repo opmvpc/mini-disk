@@ -8,6 +8,7 @@
 #include "../src/platform/platform.h"
 #include "../src/base/base_jobs.h"
 #include "../src/core/library/lib_model.h"
+#include "../src/core/library/tags.h"
 #include "../src/core/library/lib_events.h"
 #include "../src/core/library/lib_scan.h"
 #include "../src/ui/r_core.h"
@@ -38,6 +39,12 @@
 #include "../src/ui/ui_theme.c"
 #include "../src/ui/ui_core.c"
 #include "../src/core/library/lib_model.c"
+#include "../src/core/library/tags.c"
+#include "../src/core/library/tags_id3.c"
+#include "../src/core/library/tags_vorbis.c"
+#include "../src/core/library/tags_mp4.c"
+#include "../src/core/library/tags_ape.c"
+#include "../src/core/library/tags_riff.c"
 #include "../src/core/library/lib_scan.c"
 
 // The renderer benches measure r_core and r_atlas, not the driver: the back end
@@ -712,6 +719,66 @@ static BenchResult bench_realistic_frame(void) {
     return result;
 }
 
+
+// --- T-011: tag parsing ----------------------------------------------------
+// The vectors of tests/data/, held in memory and parsed in a loop: this
+// measures the parsers, not the disk. The scan's own cost per file (two reads
+// of 64 KB) is measured by bench_library_scan.
+#define BENCH_TAGS_COUNT 13
+static const char *bench_tag_files[BENCH_TAGS_COUNT] = {
+    "id3v23_utf16.mp3", "id3v24_unsync.mp3", "id3v22.mp3", "id3v1_only.mp3",
+    "mpeg_vbri.mp3", "ape_tail.mp3", "flac.flac", "ogg_vorbis.ogg", "opus.opus",
+    "mp4.m4a", "mp4_moov_last.m4a", "wav.wav", "aiff.aif",
+};
+
+static BenchResult bench_tags_parse(void) {
+    String8 vectors[BENCH_TAGS_COUNT];
+    u64 total_bytes = 0;
+    u32 loaded = 0;
+    for (u32 i = 0; i < BENCH_TAGS_COUNT; i += 1) {
+        String8 path = str8f(bench_arena, "tests\\data\\%s", bench_tag_files[i]);
+        vectors[i] = os_file_read_all(bench_arena, path);
+        if (vectors[i].size) { loaded += 1; }
+        total_bytes += vectors[i].size;
+    }
+    AssertAlways(loaded == BENCH_TAGS_COUNT);  // run tools/gen_tag_vectors.py first
+
+    u32 iterations = 2000;
+    u64 titles = 0;
+    u64 start_cycles = __rdtsc();
+    u64 start_us = os_time_now_us();
+    for (u32 pass = 0; pass < iterations; pass += 1) {
+        for (u32 i = 0; i < BENCH_TAGS_COUNT; i += 1) {
+            TagsFile file;
+            StructZero(&file);
+            file.head = vectors[i];
+            file.size = vectors[i].size;
+            Tags tags;
+            tags_init(&tags);
+            tags_parse(&tags, &file);
+            titles += tags.title.size;
+        }
+    }
+    u64 end_cycles = __rdtsc();
+    u64 end_us = os_time_now_us();
+    AssertAlways(titles != 0);
+
+    u64 files = (u64)iterations * BENCH_TAGS_COUNT;
+    u64 ns_per_file = (end_us - start_us) * 1000 / files;
+    ArenaTemp scratch = scratch_begin(0, 0);
+    os_debug_print(str8f(scratch.arena,
+                         "  tags: %llu files parsed, %llu ns/file, %llu cycles/file\n",
+                         files, ns_per_file, (end_cycles - start_cycles) / files));
+    scratch_end(scratch);
+
+    BenchResult result;
+    result.name = "tags parse x26000";
+    result.cycles = end_cycles - start_cycles;
+    result.micros = end_us - start_us;
+    result.bytes = total_bytes * iterations;
+    return result;
+}
+
 int main(void) {
     os_init();
     bench_arena = arena_alloc(GB(1));
@@ -724,6 +791,7 @@ int main(void) {
     bench_print(bench_jobs_dispatch());
     bench_print(bench_jobs_parallel_sum());
     bench_print(bench_library_scan());
+    bench_print(bench_tags_parse());
     bench_print(bench_realistic_frame());
     return 0;
 }

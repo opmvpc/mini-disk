@@ -146,6 +146,155 @@ static void lib_scan_dir_job(void *data, u64 begin, u64 end) {
     os_atomic_inc_u32(&scan->dirs_done);
 }
 
+// --- the tag jobs (T-011) --------------------------------------------------
+// The directory walk does not read file contents: it would open 50 000 files
+// on a rescan where nothing changed. The merge decides which tracks are new or
+// changed, and those - and only those - become tag jobs. Each one costs at
+// most two reads of 64 KB (head + tail), and answers with canonical strings
+// copied into the block, because the string table belongs to the main thread.
+
+static String8 lib_scan_push_string(LibScan *scan, String8 s) {
+    if (s.size == 0) { return str8(0, 0); }
+    u8 *bytes = (u8 *)lib_scan_block_push(scan, s.size, 1);
+    if (!bytes) { return str8(0, 0); }
+    mem_copy(bytes, s.str, s.size);
+    return str8(bytes, s.size);
+}
+
+static void lib_scan_publish_tags(LibScan *scan, LibTagBatch *batch) {
+    u32 offset = lib_scan_offset_of(scan, batch) + 1;
+    for (;;) {
+        u32 head = os_atomic_load_u32(&scan->tags_published);
+        batch->next = head;
+        if (os_atomic_cas_u32(&scan->tags_published, head, offset) == head) { return; }
+    }
+}
+
+static LibTagBatch *lib_scan_take_tags(LibScan *scan) {
+    u32 head = os_atomic_load_u32(&scan->tags_published);
+    while (head != 0) {
+        u32 found = os_atomic_cas_u32(&scan->tags_published, head, 0);
+        if (found == head) { break; }
+        head = found;
+    }
+    return head ? (LibTagBatch *)(scan->block + (head - 1)) : 0;
+}
+
+typedef struct LibTagJobData {
+    LibScan *scan;
+    LibTagRequest *request;
+} LibTagJobData;
+
+static void lib_scan_tag_job(void *data, u64 begin, u64 end) {
+    Unused(begin);
+    Unused(end);
+    LibTagJobData *job = (LibTagJobData *)data;
+    LibScan *scan = job->scan;
+    LibTagRequest *request = job->request;
+    if (os_atomic_load_u32(&scan->cancel)) { return; }
+
+    LibTagBatch *batch = (LibTagBatch *)lib_scan_block_push(scan, sizeof(LibTagBatch), 8);
+    if (!batch) { return; }
+    batch->next = 0;
+    batch->count = 0;
+
+    // One pair of 64 KB buffers for the whole batch, out of this thread's
+    // scratch arena: 32 files, one allocation.
+    ArenaTemp scratch = scratch_begin(0, 0);
+    u8 *head = push_array(scratch.arena, u8, TAGS_BLOCK_SIZE);
+    u8 *tail = push_array(scratch.arena, u8, TAGS_BLOCK_SIZE);
+    for (u32 i = 0; i < request->count; i += 1) {
+        if (os_atomic_load_u32(&scan->cancel)) { break; }
+        Tags tags;
+        tags_read_file(&tags, request->paths[i], request->sizes[i], head, tail);
+        LibTagResult *item = &batch->items[batch->count];
+        item->id = request->ids[i];
+        item->title = lib_scan_push_string(scan, tags.title);
+        item->artist = lib_scan_push_string(scan, tags.artist);
+        item->album = lib_scan_push_string(scan, tags.album);
+        item->album_artist = lib_scan_push_string(scan, tags.album_artist);
+        item->genre = lib_scan_push_string(scan, tags.genre);
+        item->cover_hash = tags.cover_hash;
+        item->duration_ms = tags.duration_ms;
+        item->sample_rate = tags.sample_rate;
+        item->track_no = tags.track_no;
+        item->disc_no = tags.disc_no;
+        item->year = tags.year;
+        item->replaygain_track_db = tags.replaygain_track_db;
+        item->channels = tags.channels;
+        item->codec = tags.codec;
+        batch->count += 1;
+        os_atomic_inc_u32(&scan->tags_read);
+    }
+    scratch_end(scratch);
+    if (batch->count) { lib_scan_publish_tags(scan, batch); }
+}
+
+// Sends the batch the merge has been filling, however full it is.
+static void lib_scan_tag_flush(LibScan *scan) {
+    if (!scan->tag_request || scan->tag_request->count == 0) { return; }
+    LibTagJobData *job = (LibTagJobData *)lib_scan_block_push(scan, sizeof(LibTagJobData), 8);
+    if (job) {
+        job->scan = scan;
+        job->request = scan->tag_request;
+        jobs_push(&scan->tag_counter, lib_scan_tag_job, job);
+    }
+    scan->tag_request = 0;
+}
+
+static void lib_scan_tag_enqueue(LibScan *scan, TrackId id, String8 path, u64 size) {
+    if (!scan->tag_request) {
+        scan->tag_request = (LibTagRequest *)lib_scan_block_push(scan, sizeof(LibTagRequest), 8);
+        if (!scan->tag_request) { return; }
+        scan->tag_request->next = 0;
+        scan->tag_request->count = 0;
+    }
+    LibTagRequest *request = scan->tag_request;
+    request->ids[request->count] = id;
+    request->paths[request->count] = path;
+    request->sizes[request->count] = size;
+    request->count += 1;
+    if (request->count == LIB_TAG_BATCH) { lib_scan_tag_flush(scan); }
+}
+
+// Back on the main thread: interning, and the only writes to the tag columns.
+static void lib_scan_apply_tags(LibScan *scan, LibTagBatch *batch) {
+    Library *lib = scan->library;
+    u32 count = 0;
+    while (batch) {
+        for (u32 i = 0; i < batch->count; i += 1) {
+            LibTagResult *item = &batch->items[i];
+            TrackId id = item->id;
+            if (!lib_track_live(lib, id)) { continue; }
+            lib->title_id[id] = lib_intern(&lib->strings, item->title);
+            lib->artist_id[id] = lib_intern(&lib->strings, item->artist);
+            lib->album_id[id] = lib_intern(&lib->strings, item->album);
+            lib->album_artist_id[id] = lib_intern(&lib->strings, item->album_artist);
+            lib->genre_id[id] = lib_intern(&lib->strings, item->genre);
+            lib->cover_hash[id] = item->cover_hash;
+            lib->duration_ms[id] = item->duration_ms;
+            lib->sample_rate[id] = item->sample_rate;
+            lib->track_no[id] = item->track_no;
+            lib->disc_no[id] = item->disc_no;
+            lib->year[id] = item->year;
+            lib->replaygain_track_db[id] = item->replaygain_track_db;
+            lib->channels[id] = item->channels;
+            if (item->codec != LibCodec_Unknown) { lib->codec[id] = (u8)item->codec; }
+            lib->flags[id] &= ~(u32)LibTrackFlag_NeedTag;
+            count += 1;
+        }
+        batch = batch->next ? (LibTagBatch *)(scan->block + (batch->next - 1)) : 0;
+    }
+    scan->tagged += count;
+    if (count) {
+        LibEvent event;
+        StructZero(&event);
+        event.kind = LibEvent_TracksTagged;
+        event.count = count;
+        lib_events_push(scan->events, event);
+    }
+}
+
 // --- the merge, on the main thread -----------------------------------------
 
 static void lib_scan_merge(LibScan *scan, LibScanBatch *batch) {
@@ -157,6 +306,7 @@ static void lib_scan_merge(LibScan *scan, LibScanBatch *batch) {
             TrackId id = lib_find_by_path(lib, entry->path);
             if (id == LIB_TRACK_NONE) {
                 id = lib_track_add(lib, entry->path, entry->size, entry->mtime_us);
+                lib_scan_tag_enqueue(scan, id, entry->path, entry->size);
                 scan->added += 1;
                 added += 1;
             } else if (lib->size[id] != entry->size || lib->mtime_us[id] != entry->mtime_us) {
@@ -165,6 +315,7 @@ static void lib_scan_merge(LibScan *scan, LibScanBatch *batch) {
                 lib->size[id] = entry->size;
                 lib->mtime_us[id] = entry->mtime_us;
                 lib->flags[id] |= LibTrackFlag_NeedTag;
+                lib_scan_tag_enqueue(scan, id, entry->path, entry->size);
                 scan->updated += 1;
             } else {
                 scan->unchanged += 1;
@@ -250,6 +401,8 @@ b32 lib_scan_update(LibScan *scan) {
     if (scan->state != LibScanState_Running) { return 0; }
     LibScanBatch *batch = lib_scan_take_published(scan);
     if (batch) { lib_scan_merge(scan, batch); }
+    LibTagBatch *tags = lib_scan_take_tags(scan);
+    if (tags) { lib_scan_apply_tags(scan, tags); }
 
     LibEvent event;
     StructZero(&event);
@@ -265,6 +418,13 @@ b32 lib_scan_update(LibScan *scan) {
     if (os_atomic_load_u32(&scan->counter.pending) != 0) { return 1; }
     batch = lib_scan_take_published(scan);
     if (batch) { lib_scan_merge(scan, batch); }
+    lib_scan_tag_flush(scan);
+
+    // The tag wave outlives the directory walk: the scan ends when the last job
+    // has published and the last result has been interned.
+    if (os_atomic_load_u32(&scan->tag_counter.pending) != 0) { return 1; }
+    tags = lib_scan_take_tags(scan);
+    if (tags) { lib_scan_apply_tags(scan, tags); }
 
     scan->cancelled = os_atomic_load_u32(&scan->cancel) != 0;
     if (!scan->cancelled) { lib_scan_sweep(scan); }
@@ -279,6 +439,7 @@ b32 lib_scan_update(LibScan *scan) {
     event.added = scan->added;
     event.updated = scan->updated;
     event.removed = scan->removed;
+    event.tagged = scan->tagged;
     event.cancelled = scan->cancelled;
     lib_events_push(scan->events, event);
     return 0;

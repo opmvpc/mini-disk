@@ -96,6 +96,7 @@ static void app_library_build(Arena *arena, AppLibrary *library, u32 count) {
 typedef struct AppTrack {
     String8 title;
     String8 artist;
+    String8 album;
     u32 duration_s;
     u8 mode;
 } AppTrack;
@@ -103,23 +104,30 @@ typedef struct AppTrack {
 static AppTrack app_track(u32 index) {
     AppTrack track;
     if (app_demo.scanned) {
-        String8 path = lib_track_path(&app_demo.library, index);
-        track.title = os_path_filename(path);
-        // The folder the file sits in, relative to the root that was added:
-        // "Artiste\Album" rather than the same 40 characters on every row.
-        String8 folder = os_path_parent(path);
-        if (folder.size > app_demo.root.size && str8_starts_with(folder, app_demo.root)) {
-            folder = str8_skip(folder, app_demo.root.size + 1);
-        } else if (str8_eq(folder, app_demo.root)) {
-            folder = os_path_filename(folder);  // a file sitting in the root itself
+        Library *lib = &app_demo.library;
+        // The tags (T-011), which already carry their own fallbacks: a file
+        // with no tag at all still shows its name and its two parent folders.
+        track.title = lib_string(&lib->strings, lib->title_id[index]);
+        track.artist = lib_string(&lib->strings, lib->artist_id[index]);
+        track.album = lib_string(&lib->strings, lib->album_id[index]);
+        track.duration_s = lib->duration_ms[index] / 1000;
+        if (track.title.size == 0) {
+            // The tag job has not landed yet: the path is all we know.
+            String8 path = lib_track_path(lib, index);
+            track.title = os_path_filename(path);
+            String8 folder = os_path_parent(path);
+            if (folder.size > app_demo.root.size && str8_starts_with(folder, app_demo.root)) {
+                folder = str8_skip(folder, app_demo.root.size + 1);
+            } else if (str8_eq(folder, app_demo.root)) {
+                folder = os_path_filename(folder);
+            }
+            track.artist = folder;
         }
-        track.artist = folder;
-        // No tags yet (T-011): the size at 128 kbit/s is the honest placeholder.
-        track.duration_s = (u32)(app_demo.library.size[index] / 16000);
         track.mode = UI_Mode_SP;
     } else {
         track.title = app_demo.generated.title[index];
         track.artist = app_demo.generated.artist[index];
+        track.album = str8(0, 0);
         track.duration_s = app_demo.generated.duration_s[index];
         track.mode = app_demo.generated.mode[index];
     }
@@ -157,7 +165,8 @@ static void app_filter(void) {
     for (u32 i = 0; i < source_count; i += 1) {
         u32 index = app_source_index(i);
         AppTrack track = app_track(index);
-        if (app_contains_ci(track.title, query) || app_contains_ci(track.artist, query)) {
+        if (app_contains_ci(track.title, query) || app_contains_ci(track.artist, query) ||
+            app_contains_ci(track.album, query)) {
             app_demo.filtered[count] = index;
             count += 1;
         }
@@ -242,9 +251,11 @@ static void app_scan_tick(void) {
     LibEvent event;
     b32 done = 0;
     while (lib_events_next(&app_demo.events, &event)) {
-        app_demo.scan_files = event.files_seen;
-        app_demo.scan_dirs_done = event.dirs_done;
-        app_demo.scan_dirs_total = event.dirs_total;
+        if (event.kind == LibEvent_ScanProgress || event.kind == LibEvent_ScanDone) {
+            app_demo.scan_files = event.files_seen;
+            app_demo.scan_dirs_done = event.dirs_done;
+            app_demo.scan_dirs_total = event.dirs_total;
+        }
         if (event.kind == LibEvent_ScanDone) { done = 1; }
     }
     if (!done) { return; }
@@ -356,7 +367,8 @@ static void app_library_panel(f32 width) {
     }
 
     // Column headers.
-    f32 artist_width = ui_dp(app_demo.scanned ? 220.0f : 180.0f);
+    f32 artist_width = ui_dp(180.0f);
+    f32 album_width = app_demo.scanned ? ui_dp(180.0f) : 0.0f;
     f32 duration_width = ui_dp(64.0f);
     UI_PrefWidth(ui_pct(1.0f, 0.0f))
     UI_PrefHeight(ui_px(ui_dp(theme->row_compact), 1.0f))
@@ -365,8 +377,10 @@ static void app_library_panel(f32 width) {
         UI_Box *header = ui_build_box_from_key(UI_DrawBackground, 0);
         UI_Parent(header) {
             app_column_header(str8_lit("TITRE"), ui_pct(1.0f, 0.0f), UI_TextAlign_Left);
-            app_column_header(app_demo.scanned ? str8_lit("DOSSIER") : str8_lit("ARTISTE"),
-                              ui_px(artist_width, 1.0f), UI_TextAlign_Left);
+            app_column_header(str8_lit("ARTISTE"), ui_px(artist_width, 1.0f), UI_TextAlign_Left);
+            if (app_demo.scanned) {
+                app_column_header(str8_lit("ALBUM"), ui_px(album_width, 1.0f), UI_TextAlign_Left);
+            }
             app_column_header(str8_lit("DUREE"), ui_px(duration_width, 1.0f), UI_TextAlign_Right);
         }
     }
@@ -381,6 +395,9 @@ static void app_library_panel(f32 width) {
         u32 secondary = selected ? theme->fg_primary : theme->fg_secondary;
         app_cell(ui_pct(1.0f, 0.0f), track.title, theme->fg_primary, 0, UI_TextAlign_Left);
         app_cell(ui_px(artist_width, 1.0f), track.artist, secondary, 0, UI_TextAlign_Left);
+        if (app_demo.scanned) {
+            app_cell(ui_px(album_width, 1.0f), track.album, secondary, 0, UI_TextAlign_Left);
+        }
         app_cell_number(duration_width, app_duration(track.duration_s), secondary);
         ui_list_row_end(list);
     }

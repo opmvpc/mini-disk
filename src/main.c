@@ -7,6 +7,7 @@
 #include "platform/platform.h"
 #include "base/base_jobs.h"
 #include "core/library/lib_model.h"
+#include "core/library/tags.h"
 #include "core/library/lib_events.h"
 #include "core/library/lib_scan.h"
 #include "ui/gl_loader.h"
@@ -41,6 +42,12 @@
 #include "platform/win32/win32_font_dwrite.c"
 
 #include "core/library/lib_model.c"
+#include "core/library/tags.c"
+#include "core/library/tags_id3.c"
+#include "core/library/tags_vorbis.c"
+#include "core/library/tags_mp4.c"
+#include "core/library/tags_ape.c"
+#include "core/library/tags_riff.c"
 #include "core/library/lib_scan.c"
 
 #include "ui/gl_loader.c"
