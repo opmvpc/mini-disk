@@ -613,18 +613,6 @@ void os_window_set_title(OsWindow window, String8 title) {
     scratch_end(scratch);
 }
 
-void os_window_fill_black(OsWindow window) {
-    // NOLINTNEXTLINE(performance-no-int-to-ptr)
-    HWND handle = (HWND)window.v;
-    HDC dc = GetDC(handle);
-    RECT client;
-    GetClientRect(handle, &client);
-    // FillRect with a system brush lives in user32: no gdi32 import yet.
-    // NOLINTNEXTLINE(performance-no-int-to-ptr)
-    FillRect(dc, &client, (HBRUSH)(COLOR_WINDOWTEXT + 1));
-    ReleaseDC(handle, dc);
-}
-
 void os_events_pump(b32 blocking, u64 timeout_us) {
     Win32WindowState *state = &win32_window_state;
     if (blocking) {

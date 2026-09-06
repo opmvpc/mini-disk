@@ -134,8 +134,15 @@ void     os_window_destroy(OsWindow window);
 V2       os_window_get_size(OsWindow window);      // client size, physical pixels
 f32      os_window_dpi_scale(OsWindow window);
 void     os_window_set_title(OsWindow window, String8 title);
-// Placeholder until the GL renderer lands (T-003): paints the client area black.
-void     os_window_fill_black(OsWindow window);
+
+// --- opengl ----------------------------------------------------------------
+// opengl32.dll and gdi32.dll are loaded by hand so the import table stays
+// kernel32 + user32. os_gl_init returns 0 when no 3.3 core context can be made
+// (old driver, generic rasterizer): the caller reports and exits, no crash.
+b32   os_gl_init(OsWindow window);
+void  os_gl_shutdown(void);
+void  os_gl_swap(void);              // vsync'd: wglSwapIntervalEXT(1)
+void *os_gl_get_proc(const char *name);
 
 // DropFiles paths are pushed here; the caller clears the arena once per frame,
 // after it has consumed the events of that frame.
@@ -145,7 +152,7 @@ void os_events_set_frame_arena(Arena *arena);
 void os_events_pump(b32 blocking, u64 timeout_us);
 b32  os_event_next(OsEvent *out);   // 0 when the queue is empty
 void os_request_redraw(void);       // thread safe
-b32  os_redraw_requested(void);     // consumes the flag
+b32  os_redraw_requested(void);
 
 // --- clipboard and cursor --------------------------------------------------
 String8 os_clipboard_get(Arena *arena);   // size 0 when there is no text

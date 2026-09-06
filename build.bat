@@ -32,7 +32,7 @@ REM  4189 unused local                               4505 unreferenced static fu
 set WARN=/W4 /wd4201 /wd4189 /wd4100 /wd4505
 set COMMON=/nologo /std:c11 /Zi /Isrc /FC /diagnostics:column %WARN%
 set DEFS=/DUNICODE /D_UNICODE /DWIN32_LEAN_AND_MEAN /DNOMINMAX
-set REL_CL=/DBUILD_DEBUG=0 /DBUILD_NO_CRT=1 /O2 /Oi /Gy /GS- /Gs9999999 /GR- /EHa- /GL
+set REL_CL=/DBUILD_DEBUG=0 /DBUILD_NO_CRT=1 /O2 /Oi /Gy /Gw /GS- /Gs9999999 /GR- /EHa- /GL
 set DBG_CL=/DBUILD_DEBUG=1 /DBUILD_NO_CRT=0 /Od /MTd /fsanitize=address
 set REL_LINK=/LTCG /INCREMENTAL:NO /NODEFAULTLIB /ENTRY:entry_point /SUBSYSTEM:WINDOWS ^
  /OPT:REF /OPT:ICF /MERGE:.rdata=.text /MERGE:.pdata=.text /STACK:0x100000,0x10000 ^
@@ -158,3 +158,4 @@ exit /b 1
 :no_clang_tidy
 echo ERREUR: clang-tidy introuvable: "%CLANG_TIDY%"
 exit /b 1
+

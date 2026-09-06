@@ -6,6 +6,7 @@
 #include "../src/base/base_math.h"
 #include "../src/base/base_hash.h"
 #include "../src/platform/platform.h"
+#include "../src/ui/r_core.h"
 
 #include "../src/base/base_arena.c"
 #include "../src/base/base_string.c"
@@ -13,6 +14,7 @@
 #include "../src/base/base_hash.c"
 #include "../src/platform/win32/win32_platform.c"
 #include "../src/platform/win32/win32_window.c"
+#include "../src/ui/r_core.c"
 
 typedef struct TestState {
     Arena *arena;         // per test case arena, reset between cases
@@ -58,6 +60,7 @@ static void test_check(b32 condition, const char *expression, i32 line) {
 
 #include "test_base.c"
 #include "test_events.c"
+#include "test_render.c"
 
 int main(void) {
     os_init();
@@ -66,6 +69,7 @@ int main(void) {
 
     test_base_run_all();
     test_events_run_all();
+    test_render_run_all();
 
     test_report("%llu case(s), %llu check(s), %llu failure(s)\n", test_state.cases,
                 test_state.checks, test_state.failures);
