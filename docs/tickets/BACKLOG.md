@@ -28,9 +28,13 @@ ont un fichier `T-NNN-*.md` ; les suivants sont des lignes à détailler au mome
 | [T-013](T-013-vue-bibliotheque.md) | Vue Bibliothèque réelle : colonnes, tri, navigateur, recherche, états, prefs | todo |
 | [T-014](T-014-dnd-explorer-pochettes.md) | Drag & drop Explorateur (IDropTarget), pochettes WIC, panneau détail, tag v0.2.0 | todo |
 
-## Phase 3 — Device (lecture)
-T-020 WinUSB + énumération + hotplug · T-021 écran "driver manquant" · T-022 protocole de base (identification,
-capacité, pistes, titres, groupes) · T-023 transport de rejeu + premières transcriptions MZ-N505 · T-024 vue Disque.
+## Phase 3 — Device (lecture et édition) — prérequis : Zadig → WinUSB sur le MZ-N505
+
+| Ticket | Titre | Statut |
+|--------|-------|--------|
+| [T-020](T-020-winusb-enumeration-hotplug.md) | WinUSB dynamique, énumération, control/bulk, hotplug, transport de rejeu, thread device, écran "driver manquant" | todo |
+| [T-021](T-021-protocole-netmd-lecture.md) | Protocole NetMD lecture : trames/poll, identification, capacité, pistes, titres, groupes, charsets, transcriptions MZ-N505 | todo |
+| [T-022](T-022-edition-disque.md) | Édition : renommer, déplacer, effacer, groupes, simulation + sauvegarde TOC, budget TOC, tag v0.3.0 | todo |
 
 ## Phase 4 — Plan & capacité
 T-030 modèle `.mdplan` + undo/redo · T-031 jauge en clusters (validée sur device) · T-032 budget TOC + sanitize
