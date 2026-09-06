@@ -16,10 +16,15 @@ ont un fichier `T-NNN-*.md` ; les suivants sont des lignes à détailler au mome
 | [T-007](T-007-theme-et-widgets.md) | `ui_theme` (tokens 02b) + widgets : bouton, label, champ texte, liste virtualisée 100k lignes, splitter | done |
 | [T-008](T-008-jobs-et-overlay-debug.md) | `base_jobs` (thread pool) + overlay debug F11 (fps, draw calls, mémoire arènes) | doing |
 
-## Phase 2 — Bibliothèque
-T-010 scan récursif multi-thread · T-011 tags ID3/Vorbis/MP4/APE · T-012 index SoA + string table ·
-T-013 recherche incrémentale · T-014 cache binaire mappé · T-015 vue bibliothèque (colonnes, tri, sélection) ·
-T-016 drag & drop Explorer · T-017 pochettes via WIC.
+## Phase 2 — Bibliothèque (cible : 100k pistes, recherche < 5 ms, exe < 250 KB)
+
+| Ticket | Titre | Statut |
+|--------|-------|--------|
+| [T-010](T-010-scan-bibliotheque.md) | Scan multi-thread, modèle SoA + StringTable, dialogue dossier, événements core → UI | todo |
+| [T-011](T-011-tags-audio.md) | Tags ID3v1/v2, Vorbis, MP4, APE, WAV/AIFF + durées exactes, fuzz ASan | todo |
+| [T-012](T-012-index-recherche-cache.md) | Index triés, navigateur par colonnes, recherche incrémentale, cache `.mdlib` mappé | todo |
+| [T-013](T-013-vue-bibliotheque.md) | Vue Bibliothèque réelle : colonnes, tri, navigateur, recherche, états, prefs | todo |
+| [T-014](T-014-dnd-explorer-pochettes.md) | Drag & drop Explorateur (IDropTarget), pochettes WIC, panneau détail, tag v0.2.0 | todo |
 
 ## Phase 3 — Device (lecture)
 T-020 WinUSB + énumération + hotplug · T-021 écran "driver manquant" · T-022 protocole de base (identification,
