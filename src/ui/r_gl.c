@@ -1,6 +1,7 @@
 // r_gl.c - the OpenGL 3.3 back end of r_core: one program, one VAO, one
-// dynamic VBO, a static index buffer, one white texel standing in for the atlas.
+// triple buffered vertex buffer, a static index buffer and the R8 atlas.
 #include "gl_loader.h"
+#include "r_backend.h"
 #include "r_core.h"
 
 #include "../platform/platform.h"
@@ -86,14 +87,25 @@ static const GLchar *r_gl_fragment_source =
         "    frag = c;\n"  // premultiplied: blending is (ONE, ONE_MINUS_SRC_ALPHA)
         "}\n";
 
+// Triple buffering: the CPU writes region N % 3 while the GPU may still be
+// reading the two others (research/03 s4.7 option A).
+#define R_GL_REGIONS       3
+#define R_GL_REGION_QUADS  R_MAX_QUADS
+#define R_GL_REGION_BYTES  ((u64)R_GL_REGION_QUADS * 4 * sizeof(R_Vertex))
+
 typedef struct R_GlState {
     GLuint program;
     GLuint vao;
     GLuint vbo;
     GLuint ibo;
-    GLuint white;
+    GLuint atlas;
     GLint u_viewport;
     GLint u_atlas;
+
+    b32 persistent;             // ARB_buffer_storage available
+    R_Vertex *mapped;           // the whole buffer, R_GL_REGIONS regions
+    GLsync fences[R_GL_REGIONS];
+    u32 region;                 // region the current frame writes into
 } R_GlState;
 
 global R_GlState r_gl;
@@ -160,11 +172,13 @@ static b32 r_gl_build_program(void) {
     return 1;
 }
 
-// Quad pattern 0,1,2, 2,1,3 written once for the whole VBO and never touched again.
+// Quad pattern 0,1,2, 2,1,3 for one batch worth of quads, written once and
+// never touched again. Batches are drawn with a base vertex, so the same
+// 65 536 indices serve every batch of the frame whatever its offset.
 static void r_gl_build_index_buffer(void) {
     ArenaTemp scratch = scratch_begin(0, 0);
-    u16 *indices = push_array(scratch.arena, u16, R_MAX_QUADS * 6);
-    for (u32 quad = 0; quad < R_MAX_QUADS; quad += 1) {
+    u16 *indices = push_array(scratch.arena, u16, R_MAX_BATCH_QUADS * 6);
+    for (u32 quad = 0; quad < R_MAX_BATCH_QUADS; quad += 1) {
         u16 base = (u16)(quad * 4);
         u16 *out = indices + (u64)quad * 6;
         out[0] = base;
@@ -176,8 +190,8 @@ static void r_gl_build_index_buffer(void) {
     }
     glGenBuffers(1, &r_gl.ibo);
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, r_gl.ibo);
-    glBufferData(GL_ELEMENT_ARRAY_BUFFER, (GLsizeiptr)((u64)R_MAX_QUADS * 6 * sizeof(u16)), indices,
-                 GL_STATIC_DRAW);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, (GLsizeiptr)((u64)R_MAX_BATCH_QUADS * 6 * sizeof(u16)),
+                 indices, GL_STATIC_DRAW);
     scratch_end(scratch);
 }
 
@@ -204,7 +218,47 @@ static void r_gl_setup_vertex_layout(void) {
 }
 // NOLINTEND(performance-no-int-to-ptr)
 
-static b32 r_gl_init(void) {
+// The extension strings are the one place we get C strings from the outside;
+// comparing them in place beats building two String8 per candidate.
+static b32 r_gl_name_eq(const char *a, const char *b) {
+    while (*a && *a == *b) {
+        a += 1;
+        b += 1;
+    }
+    return *a == *b;
+}
+
+static b32 r_gl_has_extension(const char *name) {
+    if (glGetStringi == 0) { return 0; }
+    GLint count = 0;
+    glGetIntegerv(GL_NUM_EXTENSIONS, &count);
+    for (GLint i = 0; i < count; i += 1) {
+        const GLubyte *found = glGetStringi(GL_EXTENSIONS, (GLuint)i);
+        if (found && r_gl_name_eq((const char *)found, name)) { return 1; }
+    }
+    return 0;
+}
+
+// Persistent mapping when the driver has ARB_buffer_storage, orphaning
+// otherwise. Both paths hand r_core the same R_Vertex array to fill.
+static void r_gl_create_vertex_buffer(void) {
+    glGenBuffers(1, &r_gl.vbo);
+    glBindBuffer(GL_ARRAY_BUFFER, r_gl.vbo);
+    r_gl.persistent = glBufferStorage != 0 && r_gl_has_extension("GL_ARB_buffer_storage");
+    if (r_gl.persistent) {
+        GLbitfield flags = GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT | GL_MAP_COHERENT_BIT;
+        GLsizeiptr size = (GLsizeiptr)(R_GL_REGION_BYTES * R_GL_REGIONS);
+        glBufferStorage(GL_ARRAY_BUFFER, size, 0, flags);
+        r_gl.mapped = (R_Vertex *)glMapBufferRange(GL_ARRAY_BUFFER, 0, size, flags);
+        r_gl.persistent = r_gl.mapped != 0;
+    }
+    if (!r_gl.persistent) {
+        glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)R_GL_REGION_BYTES, 0, GL_STREAM_DRAW);
+    }
+    r_gl.region = R_GL_REGIONS - 1;
+}
+
+b32 r_backend_init(void) {
     u32 missing = gl_loader_init();
     if (missing) {
         ArenaTemp scratch = scratch_begin(0, 0);
@@ -234,21 +288,18 @@ static b32 r_gl_init(void) {
 
     glGenVertexArrays(1, &r_gl.vao);
     glBindVertexArray(r_gl.vao);
-    glGenBuffers(1, &r_gl.vbo);
+    r_gl_create_vertex_buffer();
     r_gl_setup_vertex_layout();
     r_gl_build_index_buffer();
 
-    // One opaque white texel: the sampler is always complete, even though no
-    // atlas exists yet, so the shader keeps a single code path.
-    u32 white_pixel = 0xFFFFFFFFu;
-    glGenTextures(1, &r_gl.white);
-    glBindTexture(GL_TEXTURE_2D, r_gl.white);
-    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, &white_pixel);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+#if BUILD_DEBUG
+    {
+        ArenaTemp scratch = scratch_begin(0, 0);
+        os_debug_print(str8f(scratch.arena, "opengl: vertex upload = %s\n",
+                             r_gl.persistent ? "persistent map x3" : "orphaning"));
+        scratch_end(scratch);
+    }
+#endif
 
     glEnable(GL_BLEND);
     glBlendFuncSeparate(GL_ONE, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
@@ -256,15 +307,66 @@ static b32 r_gl_init(void) {
     return 1;
 }
 
-static void r_gl_shutdown(void) {
-    glDeleteTextures(1, &r_gl.white);
+void r_backend_shutdown(void) {
+    for (u32 i = 0; i < R_GL_REGIONS; i += 1) {
+        if (r_gl.fences[i]) { glDeleteSync(r_gl.fences[i]); }
+    }
+    if (r_gl.persistent) {
+        glBindBuffer(GL_ARRAY_BUFFER, r_gl.vbo);
+        glUnmapBuffer(GL_ARRAY_BUFFER);
+    }
+    if (r_gl.atlas) { glDeleteTextures(1, &r_gl.atlas); }
     glDeleteBuffers(1, &r_gl.ibo);
     glDeleteBuffers(1, &r_gl.vbo);
     glDeleteVertexArrays(1, &r_gl.vao);
     glDeleteProgram(r_gl.program);
 }
 
-static void r_gl_draw(const R_Frame *frame) {
+u32 r_backend_texture_r8(u32 size) {
+    if (r_gl.atlas) { glDeleteTextures(1, &r_gl.atlas); }
+    glGenTextures(1, &r_gl.atlas);
+    glBindTexture(GL_TEXTURE_2D, r_gl.atlas);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, (GLsizei)size, (GLsizei)size, 0, GL_RED,
+                 GL_UNSIGNED_BYTE, 0);
+    // Linear so subpixel positioning works; the 1 texel padding of the atlas is
+    // what keeps neighbours from bleeding in (research/03 s4.8).
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    return r_gl.atlas;
+}
+
+void r_backend_texture_upload_r8(u32 texture, u32 atlas_size, const u8 *pixels, u32 x, u32 y,
+                                 u32 width, u32 height) {
+    glBindTexture(GL_TEXTURE_2D, texture);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    // GL_UNPACK_ROW_LENGTH lets one call read a sub rectangle straight out of
+    // the atlas buffer: no staging copy, no upload per row.
+    glPixelStorei(GL_UNPACK_ROW_LENGTH, (GLint)atlas_size);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, (GLint)x, (GLint)y, (GLsizei)width, (GLsizei)height, GL_RED,
+                    GL_UNSIGNED_BYTE, pixels + (u64)y * atlas_size + x);
+    glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+}
+
+R_Vertex *r_backend_map_vertices(u32 quad_count) {
+    AssertAlways(quad_count <= R_GL_REGION_QUADS);
+    if (!r_gl.persistent) { return 0; }
+    r_gl.region = (r_gl.region + 1) % R_GL_REGIONS;
+    GLsync fence = r_gl.fences[r_gl.region];
+    if (fence) {
+        // The region was last used two frames ago: in practice the fence is
+        // already signalled and this costs nothing, but it is what makes
+        // writing into mapped memory safe.
+        glClientWaitSync(fence, GL_SYNC_FLUSH_COMMANDS_BIT, 1000000000ull);
+        glDeleteSync(fence);
+        r_gl.fences[r_gl.region] = 0;
+    }
+    return r_gl.mapped + (u64)r_gl.region * R_GL_REGION_QUADS * 4;
+}
+
+void r_backend_draw(const R_Frame *frame) {
     GLsizei width = (GLsizei)frame->viewport.x;
     GLsizei height = (GLsizei)frame->viewport.y;
     glViewport(0, 0, width, height);
@@ -281,28 +383,36 @@ static void r_gl_draw(const R_Frame *frame) {
         glUniform1i(r_gl.u_atlas, 0);
         glActiveTexture(GL_TEXTURE0);
         glBindVertexArray(r_gl.vao);
-
-        // Orphaning: the driver hands us fresh storage instead of stalling on
-        // the frame the GPU may still be reading (research/03 s4.7 option B).
-        GLsizeiptr used = (GLsizeiptr)((u64)frame->quad_count * 4 * sizeof(R_Vertex));
         glBindBuffer(GL_ARRAY_BUFFER, r_gl.vbo);
-        glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)sizeof(frame->vertices), 0, GL_STREAM_DRAW);
-        glBufferSubData(GL_ARRAY_BUFFER, 0, used, frame->vertices);
 
-        // NOLINTBEGIN(performance-no-int-to-ptr) the index offset is a byte
-        // count that GL insists on receiving as a pointer.
+        GLint region_base = 0;
+        if (r_gl.persistent) {
+            // The vertices are already in the buffer: r_core wrote them there.
+            region_base = (GLint)(r_gl.region * R_GL_REGION_QUADS * 4);
+        } else {
+            // Orphaning: the driver hands us fresh storage instead of stalling
+            // on the frame the GPU may still be reading (s4.7 option B).
+            glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)R_GL_REGION_BYTES, 0, GL_STREAM_DRAW);
+            glBufferSubData(GL_ARRAY_BUFFER, 0,
+                            (GLsizeiptr)((u64)frame->quad_count * 4 * sizeof(R_Vertex)),
+                            frame->vertices);
+        }
+
         for (u32 i = 0; i < frame->batch_count; i += 1) {
             const R_Batch *batch = &frame->batches[i];
-            if (batch->index_count == 0) { continue; }
-            glBindTexture(GL_TEXTURE_2D, batch->texture ? batch->texture : r_gl.white);
+            glBindTexture(GL_TEXTURE_2D, batch->texture ? batch->texture : r_gl.atlas);
             // GL scissor counts from the bottom left, our rects from the top left.
             GLint x = (GLint)batch->clip.min.x;
             GLint y = (GLint)(frame->viewport.y - batch->clip.max.y);
             glScissor(x, y, (GLsizei)rect_width(batch->clip), (GLsizei)rect_height(batch->clip));
-            glDrawElements(GL_TRIANGLES, (GLsizei)batch->index_count, GL_UNSIGNED_SHORT,
-                           (const void *)((u64)batch->index_first * sizeof(u16)));
+            glDrawElementsBaseVertex(GL_TRIANGLES, (GLsizei)(batch->quad_count * 6),
+                                     GL_UNSIGNED_SHORT, 0,
+                                     region_base + (GLint)(batch->quad_first * 4));
         }
-        // NOLINTEND(performance-no-int-to-ptr)
+
+        if (r_gl.persistent) {
+            r_gl.fences[r_gl.region] = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+        }
     }
     os_gl_swap();
 }

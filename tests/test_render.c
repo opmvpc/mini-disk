@@ -1,9 +1,42 @@
-// test_render.c - vertex generation of the SDF rect: geometry, UV, batching.
-// The GL back end is stubbed out: r_core.c is pure arithmetic by construction.
+// test_render.c - the renderer without a GPU: vertex generation, clip stack,
+// layer sort, batching, skyline packing and the coverage rasterizer. The back
+// end is stubbed, which is possible precisely because r_core.c is pure
+// arithmetic and r_atlas.c never touches a GL type.
 
-static b32 r_gl_init(void) { return 1; }
-static void r_gl_shutdown(void) {}
-static void r_gl_draw(const R_Frame *frame) { Unused(frame); }
+typedef struct TestBackend {
+    u32 next_texture;
+    u32 upload_count;
+    u32 last_x, last_y, last_width, last_height;
+} TestBackend;
+
+global TestBackend test_backend;
+global Arena *test_render_arena;  // outlives the cases: the atlas lives in it
+
+b32 r_backend_init(void) { return 1; }
+void r_backend_shutdown(void) {}
+R_Vertex *r_backend_map_vertices(u32 quad_count) {
+    Unused(quad_count);
+    return 0;  // no mapped memory: r_core stages the vertices in the frame arena
+}
+void r_backend_draw(const R_Frame *frame) { Unused(frame); }
+
+u32 r_backend_texture_r8(u32 size) {
+    Unused(size);
+    test_backend.next_texture += 1;
+    return test_backend.next_texture;
+}
+
+void r_backend_texture_upload_r8(u32 texture, u32 atlas_size, const u8 *pixels, u32 x, u32 y,
+                                 u32 width, u32 height) {
+    Unused(texture);
+    Unused(atlas_size);
+    Unused(pixels);
+    test_backend.upload_count += 1;
+    test_backend.last_x = x;
+    test_backend.last_y = y;
+    test_backend.last_width = width;
+    test_backend.last_height = height;
+}
 
 static R_RectParams test_render_params(Rect dst) {
     R_RectParams params;
@@ -14,13 +47,13 @@ static R_RectParams test_render_params(Rect dst) {
 }
 
 TEST(render_quad_geometry) {
-    Unused(arena);
-    r_begin_frame(800.0f, 600.0f, 1.0f);
+    r_begin_frame(arena, 800.0f, 600.0f, 1.0f);
     R_RectParams params = test_render_params(rect(10.0f, 20.0f, 110.0f, 70.0f));
     params.corner_radius = 6.0f;
     params.uv0 = v2(0.25f, 0.5f);
     params.uv1 = v2(0.75f, 1.0f);
     r_rect(params);
+    r_end_frame();
 
     const R_Frame *frame = r_frame_state();
     EXPECT(frame->quad_count == 1);
@@ -52,12 +85,12 @@ TEST(render_quad_geometry) {
 }
 
 TEST(render_pixel_alignment) {
-    Unused(arena);
-    r_begin_frame(800.0f, 600.0f, 1.5f);
+    r_begin_frame(arena, 800.0f, 600.0f, 1.5f);
     // Fractional edges and a 1.5 px border, as a 150 % DPI layout produces.
     R_RectParams params = test_render_params(rect(10.4f, 20.6f, 110.2f, 70.7f));
     params.border = 1.5f;
     r_rect(params);
+    r_end_frame();
 
     const R_Vertex *v = r_frame_state()->vertices;
     // Edges snapped to whole pixels: 10, 21, 110, 71 -> centre 60,46 half 50,25.
@@ -67,29 +100,27 @@ TEST(render_pixel_alignment) {
 }
 
 TEST(render_border_never_vanishes) {
-    Unused(arena);
-    r_begin_frame(800.0f, 600.0f, 1.0f);
+    r_begin_frame(arena, 800.0f, 600.0f, 1.0f);
     R_RectParams params = test_render_params(rect(0.0f, 0.0f, 40.0f, 40.0f));
     params.border = 0.4f;  // would round to 0 and silently become a filled rect
     r_rect(params);
+    r_end_frame();
     EXPECT(r_frame_state()->vertices[0].border == 2);  // clamped to 1 px
 }
 
 TEST(render_radius_clamped_to_half_size) {
-    Unused(arena);
-    r_begin_frame(800.0f, 600.0f, 1.0f);
+    r_begin_frame(arena, 800.0f, 600.0f, 1.0f);
     R_RectParams params = test_render_params(rect(0.0f, 0.0f, 40.0f, 20.0f));
     params.corner_radius = 100.0f;  // bigger than the half size: folds the SDF
     r_rect(params);
+    r_end_frame();
     EXPECT(r_frame_state()->vertices[0].corner_radius == 10 * 16);
 }
 
 TEST(render_shadow_packs_softness) {
-    Unused(arena);
-    r_begin_frame(800.0f, 600.0f, 1.0f);
-    R_RectParams params = test_render_params(rect(100.0f, 100.0f, 200.0f, 200.0f));
-    params.softness = 8.0f;
-    r_rect(params);
+    r_begin_frame(arena, 800.0f, 600.0f, 1.0f);
+    r_shadow(rect(100.0f, 100.0f, 200.0f, 200.0f), r_rgb(0x000000), 0.0f, 8.0f, v2(0.0f, 0.0f));
+    r_end_frame();
 
     const R_Vertex *v = r_frame_state()->vertices;
     EXPECT((v[0].flags & R_VertFlag_Shadow) != 0);
@@ -100,39 +131,138 @@ TEST(render_shadow_packs_softness) {
 }
 
 TEST(render_batching_follows_clip) {
-    Unused(arena);
-    r_begin_frame(800.0f, 600.0f, 1.0f);
+    r_begin_frame(arena, 800.0f, 600.0f, 1.0f);
     R_RectParams params = test_render_params(rect(0.0f, 0.0f, 10.0f, 10.0f));
     r_rect(params);
     r_rect(params);
-    EXPECT(r_frame_state()->batch_count == 1);
-    EXPECT(r_frame_state()->batches[0].index_count == 12);
 
     Rect clip = rect(5.0f, 5.0f, 300.0f, 200.0f);
-    r_set_clip(clip);
+    r_push_clip(clip);
     r_rect(params);
+    r_rect(params);
+    r_pop_clip();
+    // Back to the viewport clip: that is a third batch, not a return to the first.
+    r_rect(params);
+    r_end_frame();
+
+    const R_Frame *frame = r_frame_state();
+    EXPECT(frame->batch_count == 3);
+    EXPECT(frame->batches[0].quad_first == 0 && frame->batches[0].quad_count == 2);
+    EXPECT(frame->batches[1].quad_first == 2 && frame->batches[1].quad_count == 2);
+    EXPECT(frame->batches[1].clip.min.x == 5.0f && frame->batches[1].clip.max.y == 200.0f);
+    EXPECT(frame->batches[2].quad_first == 4 && frame->batches[2].quad_count == 1);
+    EXPECT(frame->batches[2].clip.max.x == 800.0f);
+}
+
+TEST(render_batching_follows_texture) {
+    r_begin_frame(arena, 800.0f, 600.0f, 1.0f);
+    Rect dst = rect(0.0f, 0.0f, 10.0f, 10.0f);
+    r_rect(test_render_params(dst));
+    r_rect_textured(dst, 7, v2(0.0f, 0.0f), v2(1.0f, 1.0f), r_rgb(0xFFFFFF), 1);
+    r_rect_textured(dst, 7, v2(0.0f, 0.0f), v2(1.0f, 1.0f), r_rgb(0xFFFFFF), 1);
+    r_rect_textured(dst, 9, v2(0.0f, 0.0f), v2(1.0f, 1.0f), r_rgb(0xFFFFFF), 1);
+    r_end_frame();
+
+    const R_Frame *frame = r_frame_state();
+    EXPECT(frame->batch_count == 3);
+    EXPECT(frame->batches[0].texture == 0 && frame->batches[0].quad_count == 1);
+    EXPECT(frame->batches[1].texture == 7 && frame->batches[1].quad_count == 2);
+    EXPECT(frame->batches[2].texture == 9 && frame->batches[2].quad_count == 1);
+    // A mask is a raw quad multiplied by the R8 coverage: no distance field.
+    EXPECT(frame->vertices[4].flags == (R_VertFlag_NoSdf | R_VertFlag_R8 | R_VertFlag_Texture));
+}
+
+TEST(render_batch_splits_at_index_limit) {
+    // u16 indices cap a batch at 65 536 vertices; one quad more must open a
+    // second draw call even though texture and clip never changed.
+    r_begin_frame(arena, 800.0f, 600.0f, 1.0f);
+    R_RectParams params = test_render_params(rect(0.0f, 0.0f, 10.0f, 10.0f));
+    for (u32 i = 0; i < R_MAX_BATCH_QUADS + 1; i += 1) { r_rect(params); }
+    r_end_frame();
+
     const R_Frame *frame = r_frame_state();
     EXPECT(frame->batch_count == 2);
-    EXPECT(frame->batches[1].index_first == 12);
-    EXPECT(frame->batches[1].index_count == 6);
-    EXPECT(frame->batches[1].clip.min.x == clip.min.x && frame->batches[1].clip.max.y == clip.max.y);
+    EXPECT(frame->batches[0].quad_count == R_MAX_BATCH_QUADS);
+    EXPECT(frame->batches[1].quad_first == R_MAX_BATCH_QUADS);
+    EXPECT(frame->batches[1].quad_count == 1);
+}
 
-    // Same clip again: the batch grows instead of opening a new draw call.
-    r_set_clip(clip);
+TEST(render_clip_stack_intersects) {
+    r_begin_frame(arena, 800.0f, 600.0f, 1.0f);
+    r_push_clip(rect(100.0f, 100.0f, 400.0f, 400.0f));
+    r_push_clip(rect(200.0f, 50.0f, 900.0f, 300.0f));
+    Rect clip = r_clip();
+    EXPECT(clip.min.x == 200.0f && clip.min.y == 100.0f);
+    EXPECT(clip.max.x == 400.0f && clip.max.y == 300.0f);
+
+    // Disjoint children collapse to an empty rect rather than going negative.
+    r_push_clip(rect(0.0f, 0.0f, 50.0f, 50.0f));
+    Rect empty = r_clip();
+    EXPECT(rect_width(empty) == 0.0f && rect_height(empty) == 0.0f);
+    r_pop_clip();
+    r_pop_clip();
+    EXPECT(r_clip().max.x == 400.0f);
+    r_pop_clip();
+    EXPECT(r_clip().max.x == 800.0f);  // back to the viewport
+}
+
+TEST(render_layer_sort_is_stable) {
+    r_begin_frame(arena, 800.0f, 600.0f, 1.0f);
+    // Emitted tooltip, popup, content, content: they must come out content,
+    // content, popup, tooltip, and the two content rects in the order given.
+    R_RectParams params = test_render_params(rect(0.0f, 0.0f, 10.0f, 10.0f));
+    r_set_layer(R_Layer_Tooltip);
+    params.color = 4;
     r_rect(params);
-    EXPECT(r_frame_state()->batch_count == 2);
-    EXPECT(r_frame_state()->batches[1].index_count == 12);
+    r_set_layer(R_Layer_Popup);
+    params.color = 3;
+    r_rect(params);
+    r_set_layer(R_Layer_Content);
+    params.color = 1;
+    r_rect(params);
+    params.color = 2;
+    r_rect(params);
+    r_end_frame();
+
+    const R_Frame *frame = r_frame_state();
+    EXPECT(frame->quad_count == 4);
+    EXPECT(frame->vertices[0].color[0] == 1);
+    EXPECT(frame->vertices[4].color[0] == 2);
+    EXPECT(frame->vertices[8].color[0] == 3);
+    EXPECT(frame->vertices[12].color[0] == 4);
+    // Same texture, same clip everywhere: the sort must not cut the batch.
+    EXPECT(frame->batch_count == 1);
+}
+
+TEST(render_line_1px_snaps) {
+    r_begin_frame(arena, 800.0f, 600.0f, 1.0f);
+    r_line_1px(v2(10.0f, 20.7f), v2(200.0f, 20.7f), r_rgb(0xFFFFFF));
+    r_line_1px(v2(30.4f, 10.0f), v2(30.4f, 90.0f), r_rgb(0xFFFFFF));
+    r_end_frame();
+
+    const R_Frame *frame = r_frame_state();
+    const R_Vertex *h = frame->vertices;
+    const R_Vertex *v = frame->vertices + 4;
+    // No padding on a raw quad, and the row is exactly [20, 21).
+    EXPECT(h[0].dst_pos[0] == 10.0f && h[0].dst_pos[1] == 20.0f);
+    EXPECT(h[3].dst_pos[0] == 200.0f && h[3].dst_pos[1] == 21.0f);
+    EXPECT(h[0].flags == R_VertFlag_NoSdf);
+    EXPECT(v[0].dst_pos[0] == 30.0f && v[3].dst_pos[0] == 31.0f);
 }
 
 TEST(render_frame_resets) {
-    Unused(arena);
-    r_begin_frame(800.0f, 600.0f, 1.0f);
+    r_begin_frame(arena, 800.0f, 600.0f, 1.0f);
     r_rect(test_render_params(rect(0.0f, 0.0f, 10.0f, 10.0f)));
-    r_begin_frame(640.0f, 480.0f, 2.0f);
+    r_push_clip(rect(0.0f, 0.0f, 10.0f, 10.0f));
+    r_set_layer(R_Layer_Popup);
+    r_end_frame();
+
+    r_begin_frame(arena, 640.0f, 480.0f, 2.0f);
     const R_Frame *frame = r_frame_state();
-    EXPECT(frame->quad_count == 0 && frame->batch_count == 0);
+    EXPECT(frame->cmd_count == 0 && frame->quad_count == 0 && frame->batch_count == 0);
     EXPECT(frame->viewport.x == 640.0f && frame->dpi_scale == 2.0f);
-    EXPECT(frame->clip.max.x == 640.0f && frame->clip.max.y == 480.0f);
+    EXPECT(frame->clip_depth == 1 && frame->layer == R_Layer_Content);
+    EXPECT(r_clip().max.x == 640.0f && r_clip().max.y == 480.0f);
 }
 
 TEST(render_premultiplied_color) {
@@ -143,13 +273,168 @@ TEST(render_premultiplied_color) {
     EXPECT(r_rgb(0x112233) == 0xFF332211u);
 }
 
+// --- atlas -----------------------------------------------------------------
+
+static b32 test_atlas_overlap(R_AtlasRect a, R_AtlasRect b) {
+    return a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height &&
+           b.y < a.y + a.height;
+}
+
+TEST(atlas_skyline_packs_without_overlap) {
+    r_atlas_reset();
+    u8 *pixels = push_array(arena, u8, 96 * 96);
+    mem_set(pixels, 0x7F, 96 * 96);
+
+    u32 count = 500;
+    R_AtlasRect *rects = push_array(arena, R_AtlasRect, count);
+    u32 area = 0;
+    u32 max_y = 0;
+    for (u32 i = 0; i < count; i += 1) {
+        u64 noise = hash64_mix(i + 1);
+        u32 w = 16 + (u32)(noise % 80);
+        u32 h = 16 + (u32)((noise >> 9) % 80);
+        rects[i] = r_atlas_add(w, h, pixels);
+        EXPECT(rects[i].width == w && rects[i].height == h);
+        area += w * h;
+        max_y = Max(max_y, (u32)(rects[i].y + rects[i].height));
+    }
+    for (u32 i = 0; i < count; i += 1) {
+        for (u32 j = i + 1; j < count; j += 1) {
+            if (test_atlas_overlap(rects[i], rects[j])) {
+                EXPECT(0);  // two entries would share texels
+                i = count;
+                break;
+            }
+        }
+    }
+    // Fill ratio over the band actually consumed, in percent.
+    u32 fill = (u32)(((u64)area * 100) / ((u64)r_atlas_size() * max_y));
+    EXPECT(fill > 80);
+    EXPECT(area == r_atlas_used_area());
+}
+
+TEST(atlas_uv_and_padding) {
+    r_atlas_reset();
+    u8 pixels[4 * 4];
+    mem_set(pixels, 0xFF, sizeof(pixels));
+    R_AtlasRect a = r_atlas_add(4, 4, pixels);
+    R_AtlasRect b = r_atlas_add(4, 4, pixels);
+    f32 size = (f32)r_atlas_size();
+    // One texel of padding all around: nothing sits at (0,0) and neighbours
+    // are never adjacent, which is what stops bleeding under linear filtering.
+    EXPECT(a.x == 1 && a.y == 1);
+    EXPECT(b.x >= a.x + a.width + 2);
+    EXPECT(a.uv0.x == 1.0f / size && a.uv1.x == 5.0f / size);
+    EXPECT(a.uv0.y == 1.0f / size && a.uv1.y == 5.0f / size);
+}
+
+TEST(atlas_uploads_only_the_dirty_region) {
+    r_atlas_reset();
+    r_atlas_flush();  // the reset dirties the whole page
+    u32 before = test_backend.upload_count;
+
+    u8 pixels[8 * 8];
+    mem_set(pixels, 0xFF, sizeof(pixels));
+    R_AtlasRect a = r_atlas_add(8, 8, pixels);
+    r_atlas_flush();
+    // One upload, and it covers the entry plus its padding, not the page.
+    EXPECT(test_backend.upload_count == before + 1);
+    EXPECT(test_backend.last_width == 10 && test_backend.last_height == 10);
+    EXPECT(test_backend.last_x == (u32)(a.x - 1) && test_backend.last_y == (u32)(a.y - 1));
+
+    // Nothing new: no upload at all.
+    before = test_backend.upload_count;
+    r_atlas_flush();
+    EXPECT(test_backend.upload_count == before);
+}
+
+TEST(atlas_grows_when_full) {
+    r_atlas_reset();
+    u32 size_before = r_atlas_size();
+    u32 texture_before = r_atlas_texture();
+    u8 *pixels = push_array_zero(arena, u8, 1024 * 1024);
+    // 5 x 1024x1024 does not fit in 2048x2048 but fits once the page doubles.
+    R_AtlasRect last;
+    StructZero(&last);
+    for (u32 i = 0; i < 5; i += 1) { last = r_atlas_add(1024, 1024, pixels); }
+    EXPECT(last.width == 1024);
+    EXPECT(r_atlas_size() == size_before * 2);
+    EXPECT(r_atlas_texture() != texture_before);  // a new, bigger texture
+}
+
+// --- rasterizer ------------------------------------------------------------
+
+TEST(raster_square_coverage_is_the_exact_area) {
+    u32 size = 8;
+    u8 *coverage = push_array_zero(arena, u8, size * size);
+    // A square with fractional edges: every pixel it touches must receive the
+    // exact area it covers, not a filtered approximation.
+    V2 points[4] = {v2(1.25f, 1.25f), v2(4.75f, 1.25f), v2(4.75f, 4.75f), v2(1.25f, 4.75f)};
+    u32 contour = 4;
+    r_raster_fill(arena, coverage, size, size, points, &contour, 1);
+
+    EXPECT(coverage[1 * size + 1] == (u8)(0.75f * 0.75f * 255.0f + 0.5f));  // corner: 0.5625
+    EXPECT(coverage[1 * size + 2] == (u8)(0.75f * 255.0f + 0.5f));          // top edge
+    EXPECT(coverage[2 * size + 1] == (u8)(0.75f * 255.0f + 0.5f));          // left edge
+    EXPECT(coverage[2 * size + 2] == 255);                                  // fully inside
+    EXPECT(coverage[4 * size + 4] == (u8)(0.75f * 0.75f * 255.0f + 0.5f));  // far corner
+    EXPECT(coverage[0] == 0 && coverage[5 * size + 5] == 0);                // outside
+}
+
+TEST(raster_hole_is_wound_backwards) {
+    u32 size = 16;
+    u8 *coverage = push_array_zero(arena, u8, size * size);
+    V2 points[8] = {
+            v2(2.0f, 2.0f), v2(14.0f, 2.0f), v2(14.0f, 14.0f), v2(2.0f, 14.0f),   // outer
+            v2(6.0f, 6.0f), v2(6.0f, 10.0f), v2(10.0f, 10.0f), v2(10.0f, 6.0f),   // hole
+    };
+    u32 contours[2] = {4, 4};
+    r_raster_fill(arena, coverage, size, size, points, contours, 2);
+    EXPECT(coverage[3 * size + 3] == 255);  // inside the ring
+    EXPECT(coverage[8 * size + 8] == 0);    // inside the hole
+    EXPECT(coverage[0] == 0);
+}
+
+TEST(icons_land_in_the_atlas) {
+    r_atlas_reset();
+    r_icons_build(arena, 24);
+    for (u32 i = 0; i < R_Icon_COUNT; i += 1) {
+        R_AtlasRect icon = r_icon_rect((R_Icon)i);
+        EXPECT(icon.width == 24 && icon.height == 24);
+        EXPECT(icon.uv1.x > icon.uv0.x && icon.uv1.y > icon.uv0.y);
+    }
+    // Eight distinct placements, no two icons on the same texels.
+    for (u32 i = 0; i < R_Icon_COUNT; i += 1) {
+        for (u32 j = i + 1; j < R_Icon_COUNT; j += 1) {
+            EXPECT(!test_atlas_overlap(r_icon_rect((R_Icon)i), r_icon_rect((R_Icon)j)));
+        }
+    }
+}
+
 static void test_render_run_all(void) {
+    test_render_arena = arena_alloc(MB(256));
+    r_atlas_init(test_render_arena);
+
     RUN(render_quad_geometry);
     RUN(render_pixel_alignment);
     RUN(render_border_never_vanishes);
     RUN(render_radius_clamped_to_half_size);
     RUN(render_shadow_packs_softness);
     RUN(render_batching_follows_clip);
+    RUN(render_batching_follows_texture);
+    RUN(render_batch_splits_at_index_limit);
+    RUN(render_clip_stack_intersects);
+    RUN(render_layer_sort_is_stable);
+    RUN(render_line_1px_snaps);
     RUN(render_frame_resets);
     RUN(render_premultiplied_color);
+    RUN(atlas_skyline_packs_without_overlap);
+    RUN(atlas_uv_and_padding);
+    RUN(atlas_uploads_only_the_dirty_region);
+    RUN(atlas_grows_when_full);
+    RUN(raster_square_coverage_is_the_exact_area);
+    RUN(raster_hole_is_wound_backwards);
+    RUN(icons_land_in_the_atlas);
+
+    arena_release(test_render_arena);
 }

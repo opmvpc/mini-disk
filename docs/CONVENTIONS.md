@@ -43,3 +43,8 @@
 - Les erreurs du domaine (device absent, disque plein, fichier illisible) sont des valeurs de retour typées.
 - Chaque ticket livre ses tests ; chaque bug corrigé ajoute un test de non-régression.
 - `build.bat check` et `build.bat analyze` doivent être verts avant tout commit sur `main`.
+
+## Pièges MSVC sans CRT (vécus)
+- Sous `/GL`, MSVC transforme une boucle de copie de struct en appel `memcpy` que l'éditeur de liens refuse de
+  résoudre sur notre stub (C2268). Écrire la copie champ par champ ou via `mem_copy` explicite (T-004).
+- `__declspec(thread)` exige le répertoire TLS écrit à la main dans `base_crt_stubs.c` (P-003).

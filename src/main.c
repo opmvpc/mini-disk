@@ -7,6 +7,10 @@
 #include "platform/platform.h"
 #include "ui/gl_loader.h"
 #include "ui/r_core.h"
+#include "ui/r_backend.h"
+#include "ui/r_atlas.h"
+#include "ui/r_raster.h"
+#include "ui/r_icons.h"
 
 #if BUILD_NO_CRT
 #include "base/base_crt_stubs.c"
@@ -22,6 +26,9 @@
 #include "platform/win32/win32_gl.c"
 
 #include "ui/gl_loader.c"
+#include "ui/r_atlas.c"
+#include "ui/r_raster.c"
+#include "ui/r_icons.c"
 #include "ui/r_core.c"
 #include "ui/r_gl.c"
 

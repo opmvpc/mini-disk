@@ -7,6 +7,10 @@
 #include "../src/base/base_hash.h"
 #include "../src/platform/platform.h"
 #include "../src/ui/r_core.h"
+#include "../src/ui/r_backend.h"
+#include "../src/ui/r_atlas.h"
+#include "../src/ui/r_raster.h"
+#include "../src/ui/r_icons.h"
 
 #include "../src/base/base_arena.c"
 #include "../src/base/base_string.c"
@@ -14,6 +18,9 @@
 #include "../src/base/base_hash.c"
 #include "../src/platform/win32/win32_platform.c"
 #include "../src/platform/win32/win32_window.c"
+#include "../src/ui/r_atlas.c"
+#include "../src/ui/r_raster.c"
+#include "../src/ui/r_icons.c"
 #include "../src/ui/r_core.c"
 
 typedef struct TestState {

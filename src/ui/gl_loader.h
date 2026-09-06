@@ -17,6 +17,8 @@ typedef char GLchar;
 typedef f32  GLfloat;
 typedef i64  GLintptr;
 typedef i64  GLsizeiptr;
+typedef u64  GLuint64;
+typedef void *GLsync;
 
 #define GL_CALL __stdcall
 
@@ -42,6 +44,7 @@ typedef void(GL_CALL *GLDEBUGPROC)(GLenum source, GLenum type, GLuint id, GLenum
 #define GL_LINEAR                         0x2601
 #define GL_CLAMP_TO_EDGE                  0x812F
 #define GL_UNPACK_ALIGNMENT               0x0CF5
+#define GL_UNPACK_ROW_LENGTH              0x0CF2
 #define GL_COLOR_BUFFER_BIT               0x00004000
 #define GL_BLEND                          0x0BE2
 #define GL_SCISSOR_TEST                   0x0C11
@@ -65,6 +68,22 @@ typedef void(GL_CALL *GLDEBUGPROC)(GLenum source, GLenum type, GLuint id, GLenum
 #define GL_DEBUG_SEVERITY_NOTIFICATION    0x826B
 #define GL_DEBUG_SEVERITY_HIGH            0x9146
 #define GL_DONT_CARE                      0x1100
+#define GL_R8                             0x8229
+#define GL_RED                            0x1903
+#define GL_MAX_TEXTURE_SIZE               0x0D33
+#define GL_NUM_EXTENSIONS                 0x821D
+#define GL_EXTENSIONS                     0x1F03
+#define GL_MAP_READ_BIT                   0x0001
+#define GL_MAP_WRITE_BIT                  0x0002
+#define GL_MAP_PERSISTENT_BIT             0x0040
+#define GL_MAP_COHERENT_BIT               0x0080
+#define GL_DYNAMIC_STORAGE_BIT            0x0100
+#define GL_SYNC_GPU_COMMANDS_COMPLETE     0x9117
+#define GL_SYNC_FLUSH_COMMANDS_BIT        0x00000001
+#define GL_ALREADY_SIGNALED               0x911A
+#define GL_TIMEOUT_EXPIRED                0x911B
+#define GL_CONDITION_SATISFIED            0x911C
+#define GL_WAIT_FAILED                    0x911D
 
 // --- entry points ----------------------------------------------------------
 // GL 1.1 lives in opengl32.dll, the rest comes from the driver; os_gl_get_proc
@@ -76,7 +95,6 @@ typedef void(GL_CALL *GLDEBUGPROC)(GLenum source, GLenum type, GLuint id, GLenum
     X(void, glScissor, (GLint x, GLint y, GLsizei w, GLsizei h))                                  \
     X(void, glEnable, (GLenum cap))                                                               \
     X(void, glDisable, (GLenum cap))                                                              \
-    X(void, glDrawElements, (GLenum mode, GLsizei count, GLenum type, const void *indices))       \
     X(GLenum, glGetError, (void))                                                                 \
     X(const GLubyte *, glGetString, (GLenum name))                                                \
     X(void, glPixelStorei, (GLenum name, GLint param))                                            \
@@ -119,14 +137,27 @@ typedef void(GL_CALL *GLDEBUGPROC)(GLenum source, GLenum type, GLuint id, GLenum
     X(void, glDeleteProgram, (GLuint program))                                                    \
     X(GLint, glGetUniformLocation, (GLuint program, const GLchar *name))                          \
     X(void, glUniform1i, (GLint location, GLint v0))                                              \
-    X(void, glUniform1f, (GLint location, GLfloat v0))                                            \
     X(void, glUniform2f, (GLint location, GLfloat v0, GLfloat v1))                                \
-    X(void, glUniform4fv, (GLint location, GLsizei count, const GLfloat *value))
+    X(void, glGetIntegerv, (GLenum name, GLint * params))                                         \
+    X(const GLubyte *, glGetStringi, (GLenum name, GLuint index))                                 \
+    X(void, glTexSubImage2D,                                                                      \
+      (GLenum target, GLint level, GLint x, GLint y, GLsizei w, GLsizei h, GLenum format,         \
+       GLenum type, const void *pixels))                                                          \
+    X(void, glDrawElementsBaseVertex,                                                             \
+      (GLenum mode, GLsizei count, GLenum type, const void *indices, GLint base_vertex))          \
+    X(void *, glMapBufferRange,                                                                   \
+      (GLenum target, GLintptr offset, GLsizeiptr length, GLbitfield access))                     \
+    X(GLboolean, glUnmapBuffer, (GLenum target))                                                  \
+    X(GLsync, glFenceSync, (GLenum condition, GLbitfield flags))                                  \
+    X(GLenum, glClientWaitSync, (GLsync sync, GLbitfield flags, GLuint64 timeout))                \
+    X(void, glDeleteSync, (GLsync sync))
 
 #define GL_FUNCS_OPTIONAL                                                                    \
     X(void, glDebugMessageCallback, (GLDEBUGPROC callback, const void *user))                \
     X(void, glDebugMessageControl, (GLenum source, GLenum type, GLenum severity, GLsizei n,  \
-                                    const GLuint *ids, GLboolean enabled))
+                                    const GLuint *ids, GLboolean enabled))                   \
+    X(void, glBufferStorage,                                                                 \
+      (GLenum target, GLsizeiptr size, const void *data, GLbitfield flags))
 
 // NOLINTNEXTLINE(bugprone-macro-parentheses) `args` is a parameter list, not an expression
 #define X(ret, name, args) typedef ret(GL_CALL *name##_fn) args; extern name##_fn name;
