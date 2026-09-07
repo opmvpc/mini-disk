@@ -34,7 +34,7 @@ ont un fichier `T-NNN-*.md` ; les suivants sont des lignes à détailler au mome
 |--------|-------|--------|
 | [T-020](T-020-winusb-enumeration-hotplug.md) | WinUSB dynamique, énumération, control/bulk, hotplug, transport de rejeu, thread device, écran "driver manquant" | fait |
 | [T-021](T-021-protocole-netmd-lecture.md) | Protocole NetMD lecture : trames/poll, identification, capacité, pistes, titres, groupes, charsets, transcriptions MZ-N505 | fait (validation device en attente) |
-| [T-022](T-022-edition-disque.md) | Édition : renommer, déplacer, effacer, groupes, simulation + sauvegarde TOC, budget TOC, tag v0.3.0 | doing |
+| [T-022](T-022-edition-disque.md) | Édition : renommer, déplacer, effacer, groupes, simulation + sauvegarde TOC, budget TOC, tag v0.3.0 | fait (aller-retour d'écriture réel en attente, P-013) |
 
 ## Phase 4 — Plan & capacité (le cœur produit : D1, D2, D3) — terminée, tag v0.4.0-phase4
 
@@ -50,8 +50,8 @@ ont un fichier `T-NNN-*.md` ; les suivants sont des lignes à détailler au mome
 |--------|-------|--------|
 | [T-040](T-040-decodeurs.md) | Décodeurs minimp3 / dr_flac / dr_wav+AIFF / stb_vorbis sans CRT + Media Foundation (AAC/ALAC/WMA), interface Decoder f32 planaire | fait |
 | [T-041](T-041-dsp-resampler-r128-dither.md) | DSP : sinc polyphase, EBU R128 + true-peak, trim/fade/gap/mono, dither TPDF, PCM BE 2048 o, pipeline en jobs, aperçu WAV | fait |
-| [T-042](T-042-session-securisee-upload-sp.md) | NetMD : DES/3DES maison, EKB, session key, paquets chiffrés, upload SP, titrage, reprise, validation de MD_MODE_TABLE sur le device | doing |
-| [T-043](T-043-vue-transfert-cache.md) | Vue Transfert (simulation, progression, ETA, annulation, reprise, journal) + cache de transcodage LRU, tag v0.5.0 | todo |
+| [T-042](T-042-session-securisee-upload-sp.md) | NetMD : DES/3DES maison, EKB, session key, paquets chiffrés, upload SP, titrage, reprise, validation de MD_MODE_TABLE sur le device | fait (upload réel validé) |
+| [T-043](T-043-vue-transfert-cache.md) | Vue Transfert (simulation, progression, ETA, annulation, reprise, journal) + cache de transcodage LRU, tag v0.5.0 | doing |
 
 ## Phase 6 — ATRAC3 & LP
 T-050 QMF + MDCT + bitstream writer · T-051 frame silencieuse valide (ffmpeg décode) · T-052 quantif + Huffman ·
@@ -62,6 +62,7 @@ T-060 raccourcis complets · T-061 i18n FR/EN · T-062 thème clair · T-063 toa
 T-064 prefs · T-065 barre de titre custom · T-066 IDropTarget.
 | T-07x | Durée du plan en équivalent disque partout (en-tête = jauge, revue T-032) ; hachures diagonales de la jauge via motif d'atlas ; sauvegarde durable du plan hors du thread de frame (P-009) | todo |
 | T-07x | Panneau Disque : le sous-titre d'en-tête reste « pilote manquant » quand le corps dit « utilisé par une autre application » (état InUse) — un seul état source pour les deux (vu le 2026-09-07) | todo |
+| T-07x | Régime de taille : l'exe est passé de 308 à 602 KB en phase 3+5 (décodeurs 111 KB, DSP+pipeline 106 KB, NetMD ~90 KB). Mesurer par module (`/MAP`), `/O1` sur les unités froides (−17 KB mesuré en P-007), tables DES/sinc au runtime (déjà), retirer `/INCLUDE:codec_open`, viser < 500 KB | todo |
 
 ## Phase 8 — Portabilité
 T-070 `platform/linux` · T-071 `platform/macos`.

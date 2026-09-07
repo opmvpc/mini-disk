@@ -20,10 +20,11 @@ Dernière mise à jour : 2026-09-07
 - **Phase 3** : T-020, T-021 et T-022 mergés. Pilote WinUSB installé (P-001 clos), lecture validée sur le vrai
   MZ-N505 (disque « 202001 »). Restent : l'aller-retour d'écriture d'un titre (P-013, à faire dans l'app par
   l'utilisateur ou le lead), les captures vierge/protégé/aucun disque (P-012), puis tag `v0.3.0-phase3`.
-- **Phase 5** : T-040, T-041 mergés. T-042 (session sécurisée + upload SP) en cours, puis T-043 (vue Transfert
-  + cache). L'utilisateur autorise la gravure de test dans l'espace libre du disque 202001 (56 min libres).
-- **Budget de taille** : exe à 497 664 o après T-022 ; `SIZE_BUDGET_KB` = 600, à resserrer en phase 7
-  (levier `/O1`, P-007).
+- **Phase 5** : T-040, T-041, T-042 mergés — **première piste gravée sur le MZ-N505** (sinus 10 s SP, relu).
+  T-043 (vue Transfert + cache) en cours : dernier ticket avant le premier plan gravé et le tag `v0.5.0-phase5`.
+  L'utilisateur autorise la gravure de test dans l'espace libre du disque 202001.
+- **Budget de taille** : exe à **601 600 o** après T-042 (le pipeline/DSP entre dans l'image via « Graver ») ;
+  `SIZE_BUDGET_KB` relevé à **700** pour T-043 ; ticket de régime en phase 7 (backlog), objectif < 500 KB.
 - UI : splitters verticaux ajoutés (navigateur artistes/albums, panneau Détail), hauteurs persistées.
 - **Phase 3** : T-020 et T-021 mergés. Tout ce qui touche le vrai MZ-N505 (ouverture WinUSB, ping, captures
   `--netmd-trace`, chronométrage) attend le pilote : procédure dans `tools/zadig/README.md` (P-001, P-012).
