@@ -223,6 +223,11 @@ typedef enum OsEventKind {
     OsEvent_FocusLose,
     OsEvent_DropFiles,
     OsEvent_DeviceChange,
+    // The drag itself, so a panel can highlight while the cursor is over it
+    // (T-014). Only `pos` carries meaning; the paths arrive with DropFiles.
+    OsEvent_DragEnter,
+    OsEvent_DragOver,
+    OsEvent_DragLeave,
     OsEvent_COUNT
 } OsEventKind;
 
@@ -342,6 +347,20 @@ f32 os_font_kern(OsFont font, u32 left_glyph, u32 right_glyph);
 // glyph has no ink (space): the metrics are still filled in.
 b32 os_font_rasterize(OsFont font, u32 glyph, f32 subpixel_x, u8 *out, u64 out_capacity,
                       OsGlyphMetrics *out_metrics);
+
+// --- images ----------------------------------------------------------------
+// The decoder is the system's (WIC on Windows), so not one byte of JPEG or PNG
+// decoding ships in the exe (ADR-007). `bytes` is a boundary: it comes from a
+// file somebody else wrote, and every failure is a plain 0 return.
+//
+// `size` 0 keeps the natural dimensions; anything else scales the image to
+// `size` x `size`, which is what the two thumbnail formats (48 and 256) want.
+typedef struct OsImage {
+    u8 *pixels;  // RGBA8 premultiplied, width * height * 4 bytes, in the arena
+    u32 width, height;
+} OsImage;
+
+b32 os_image_decode(Arena *arena, String8 bytes, u32 size, OsImage *out);
 
 // --- clipboard and cursor --------------------------------------------------
 // The system folder picker (IFileDialog): modal on the active window, returns

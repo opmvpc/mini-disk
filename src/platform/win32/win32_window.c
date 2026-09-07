@@ -12,6 +12,17 @@ typedef void(WINAPI *Win32DragAcceptFiles)(HWND, BOOL);
 typedef UINT(WINAPI *Win32DragQueryFileW)(HANDLE, UINT, WCHAR *, UINT);
 typedef void(WINAPI *Win32DragFinish)(HANDLE);
 typedef BOOL(WINAPI *Win32DragQueryPoint)(HANDLE, POINT *);
+// ole32, for the drop target of T-014: the shell only tells us where the
+// cursor is *during* a drag through IDropTarget, and WM_DROPFILES only ever
+// reports the drop itself.
+typedef HRESULT(WINAPI *Win32OleInitialize)(void *reserved);
+typedef HRESULT(WINAPI *Win32RegisterDragDrop)(HWND, void *drop_target);
+typedef HRESULT(WINAPI *Win32RevokeDragDrop)(HWND);
+typedef void(WINAPI *Win32ReleaseStgMedium)(void *medium);
+
+// A dropped selection past this is not a music folder, it is a mistake: the
+// paths land in the frame arena, so the boundary caps them here.
+#define WIN32_DROP_MAX_PATHS 4096
 
 #define WIN32_DWMWA_USE_IMMERSIVE_DARK_MODE     20
 #define WIN32_DWMWA_USE_IMMERSIVE_DARK_MODE_OLD 19  // Win10 before 20H1
@@ -88,6 +99,12 @@ typedef struct Win32WindowState {
 
     HMODULE dwmapi;
     HMODULE shell32;
+    HMODULE ole32;
+    Win32OleInitialize OleInitialize_;
+    Win32RegisterDragDrop RegisterDragDrop_;
+    Win32RevokeDragDrop RevokeDragDrop_;
+    Win32ReleaseStgMedium ReleaseStgMedium_;
+    b32 drop_target_registered;  // 0: WM_DROPFILES is doing the work instead
     Win32DwmSetWindowAttribute DwmSetWindowAttribute_;
     Win32DragAcceptFiles DragAcceptFiles_;
     Win32DragQueryFileW DragQueryFileW_;
@@ -270,14 +287,20 @@ static void win32_push_wheel(WPARAM wparam, LPARAM lparam, b32 horizontal) {
     os_request_redraw();
 }
 
-static void win32_push_drop_files(HANDLE drop) {
+// `drop` is an HDROP, whether it came from WM_DROPFILES or out of the data
+// object of a real OLE drop. Only the first owns it, so only the first finishes
+// it. Both are boundaries: the count and every length come from another process.
+static void win32_push_drop_files(HANDLE drop, b32 finish, const POINT *client_point) {
     Win32WindowState *state = &win32_window_state;
     OsEvent event = win32_event_make(OsEvent_DropFiles);
     POINT point;
-    if (state->DragQueryPoint_ && state->DragQueryPoint_(drop, &point)) {
+    if (client_point) {
+        event.pos = v2((f32)client_point->x, (f32)client_point->y);
+    } else if (state->DragQueryPoint_ && state->DragQueryPoint_(drop, &point)) {
         event.pos = v2((f32)point.x, (f32)point.y);
     }
     u32 count = state->DragQueryFileW_(drop, 0xFFFFFFFFu, 0, 0);
+    if (count > WIN32_DROP_MAX_PATHS) { count = WIN32_DROP_MAX_PATHS; }
     event.paths = push_array(state->frame_arena, String8, count);
     event.path_count = count;
 
@@ -290,10 +313,183 @@ static void win32_push_drop_files(HANDLE drop) {
     }
     scratch_end(scratch);
 
-    state->DragFinish_(drop);
+    if (finish) { state->DragFinish_(drop); }
     win32_event_push(&event);
     os_request_redraw();
 }
+
+// --- the drop target (T-014) -----------------------------------------------
+// IDropTarget is four methods over IUnknown, so it is written out here rather
+// than pulled in from ole2.h: the object is a global that never dies, its
+// reference count is a formality, and the shell only ever calls it from the
+// thread that owns the window.
+typedef struct Win32DropTarget Win32DropTarget;
+typedef struct Win32DropTargetVtbl {
+    HRESULT(WINAPI *QueryInterface)(Win32DropTarget *self, const GUID *iid, void **out);
+    ULONG(WINAPI *AddRef)(Win32DropTarget *self);
+    ULONG(WINAPI *Release)(Win32DropTarget *self);
+    HRESULT(WINAPI *DragEnter)(Win32DropTarget *self, void *data, DWORD keys, POINTL point,
+                               DWORD *effect);
+    HRESULT(WINAPI *DragOver)(Win32DropTarget *self, DWORD keys, POINTL point, DWORD *effect);
+    HRESULT(WINAPI *DragLeave)(Win32DropTarget *self);
+    HRESULT(WINAPI *Drop)(Win32DropTarget *self, void *data, DWORD keys, POINTL point,
+                          DWORD *effect);
+} Win32DropTargetVtbl;
+struct Win32DropTarget { const Win32DropTargetVtbl *lpVtbl; };
+
+// FORMATETC and STGMEDIUM live in objidl.h, which WIN32_LEAN_AND_MEAN keeps
+// out: the two are plain structs, and the layout is the ABI.
+typedef struct Win32FormatEtc {
+    u16 cfFormat;
+    void *ptd;
+    DWORD dwAspect;
+    LONG lindex;
+    DWORD tymed;
+} Win32FormatEtc;
+
+typedef struct Win32StgMedium {
+    DWORD tymed;
+    void *handle;  // the union: hGlobal for TYMED_HGLOBAL, which is all we ask
+    void *unknown_for_release;
+} Win32StgMedium;
+
+#define WIN32_DVASPECT_CONTENT 1u
+#define WIN32_TYMED_HGLOBAL    1u
+
+// IDataObject, down to the one method we call.
+typedef struct Win32DataObject Win32DataObject;
+typedef struct Win32DataObjectVtbl {
+    void *slots_unknown[3];
+    HRESULT(WINAPI *GetData)(Win32DataObject *self, const Win32FormatEtc *format,
+                             Win32StgMedium *medium);
+} Win32DataObjectVtbl;
+struct Win32DataObject { Win32DataObjectVtbl *lpVtbl; };
+
+#define WIN32_DROPEFFECT_NONE 0u
+#define WIN32_DROPEFFECT_COPY 1u
+
+static const GUID win32_iid_drop_target = {
+    0x00000122, 0x0000, 0x0000, {0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46}};
+static const GUID win32_iid_unknown = {
+    0x00000000, 0x0000, 0x0000, {0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46}};
+
+// The HDROP inside the data object, 0 when the payload is not a file list
+// (a text selection dragged out of a browser, say).
+static HANDLE win32_drop_hdrop(void *data, Win32StgMedium *medium) {
+    Win32DataObject *object = (Win32DataObject *)data;
+    Win32FormatEtc format;
+    format.cfFormat = (u16)CF_HDROP;
+    format.ptd = 0;
+    format.dwAspect = WIN32_DVASPECT_CONTENT;
+    format.lindex = -1;
+    format.tymed = WIN32_TYMED_HGLOBAL;
+    StructZero(medium);
+    if (object->lpVtbl->GetData(object, &format, medium) != S_OK) { return 0; }
+    return medium->handle;
+}
+
+static void win32_push_drag(OsEventKind kind, POINTL point) {
+    OsEvent event = win32_event_make(kind);
+    if (kind != OsEvent_DragLeave) {
+        POINT client;
+        client.x = point.x;
+        client.y = point.y;
+        ScreenToClient(win32_window_state.window, &client);
+        event.pos = v2((f32)client.x, (f32)client.y);
+    }
+    win32_event_push(&event);
+    os_request_redraw();
+}
+
+md_inline b32 win32_guid_eq(const GUID *a, const GUID *b) {
+    const u64 *left = (const u64 *)a;
+    const u64 *right = (const u64 *)b;
+    return left[0] == right[0] && left[1] == right[1];
+}
+
+static HRESULT WINAPI win32_drop_query_interface(Win32DropTarget *self, const GUID *iid,
+                                                 void **out) {
+    if (win32_guid_eq(iid, &win32_iid_drop_target) || win32_guid_eq(iid, &win32_iid_unknown)) {
+        *out = self;
+        return S_OK;
+    }
+    *out = 0;
+    return E_NOINTERFACE;
+}
+
+static ULONG WINAPI win32_drop_add_ref(Win32DropTarget *self) {
+    Unused(self);
+    return 1;
+}
+
+static ULONG WINAPI win32_drop_release(Win32DropTarget *self) {
+    Unused(self);
+    return 1;
+}
+
+static HRESULT WINAPI win32_drop_drag_enter(Win32DropTarget *self, void *data, DWORD keys,
+                                            POINTL point, DWORD *effect) {
+    Unused(self);
+    Unused(keys);
+    Win32StgMedium medium;
+    HANDLE drop = win32_drop_hdrop(data, &medium);
+    if (!drop) {
+        *effect = WIN32_DROPEFFECT_NONE;
+        return S_OK;
+    }
+    win32_window_state.ReleaseStgMedium_(&medium);
+    *effect = WIN32_DROPEFFECT_COPY;
+    win32_push_drag(OsEvent_DragEnter, point);
+    return S_OK;
+}
+
+static HRESULT WINAPI win32_drop_drag_over(Win32DropTarget *self, DWORD keys, POINTL point,
+                                           DWORD *effect) {
+    Unused(self);
+    Unused(keys);
+    *effect = WIN32_DROPEFFECT_COPY;
+    win32_push_drag(OsEvent_DragOver, point);
+    return S_OK;
+}
+
+static HRESULT WINAPI win32_drop_drag_leave(Win32DropTarget *self) {
+    Unused(self);
+    POINTL zero;
+    zero.x = 0;
+    zero.y = 0;
+    win32_push_drag(OsEvent_DragLeave, zero);
+    return S_OK;
+}
+
+static HRESULT WINAPI win32_drop_drop(Win32DropTarget *self, void *data, DWORD keys, POINTL point,
+                                      DWORD *effect) {
+    Unused(self);
+    Unused(keys);
+    *effect = WIN32_DROPEFFECT_NONE;
+    Win32StgMedium medium;
+    HANDLE drop = win32_drop_hdrop(data, &medium);
+    // The drag ends whatever the payload was: the highlight must go away even
+    // when the drop brought nothing we can use.
+    POINTL zero;
+    zero.x = 0;
+    zero.y = 0;
+    win32_push_drag(OsEvent_DragLeave, zero);
+    if (!drop) { return S_OK; }
+    POINT client;
+    client.x = point.x;
+    client.y = point.y;
+    ScreenToClient(win32_window_state.window, &client);
+    win32_push_drop_files(drop, 0, &client);
+    win32_window_state.ReleaseStgMedium_(&medium);
+    *effect = WIN32_DROPEFFECT_COPY;
+    return S_OK;
+}
+
+static const Win32DropTargetVtbl win32_drop_target_vtbl = {
+    win32_drop_query_interface, win32_drop_add_ref,  win32_drop_release, win32_drop_drag_enter,
+    win32_drop_drag_over,       win32_drop_drag_leave, win32_drop_drop,
+};
+global Win32DropTarget win32_drop_target = {&win32_drop_target_vtbl};
 
 static void win32_push_char(WPARAM wparam) {
     Win32WindowState *state = &win32_window_state;
@@ -499,7 +695,7 @@ static LRESULT CALLBACK win32_window_proc(HWND window, UINT message, WPARAM wpar
         } break;
 
         // NOLINTNEXTLINE(performance-no-int-to-ptr)
-        case WM_DROPFILES: win32_push_drop_files((HANDLE)wparam); return 0;
+        case WM_DROPFILES: win32_push_drop_files((HANDLE)wparam, 1, 0); return 0;
 
         case WM_DEVICECHANGE: {
             OsEvent event = win32_event_make(OsEvent_DeviceChange);
@@ -524,6 +720,16 @@ static void win32_window_load_optional_modules(Win32WindowState *state) {
         state->DwmSetWindowAttribute_ = (Win32DwmSetWindowAttribute)GetProcAddress(
                 state->dwmapi, "DwmSetWindowAttribute");
     }
+    state->ole32 = LoadLibraryW(L"ole32.dll");
+    if (state->ole32) {
+        state->OleInitialize_ = (Win32OleInitialize)GetProcAddress(state->ole32, "OleInitialize");
+        state->RegisterDragDrop_ =
+                (Win32RegisterDragDrop)GetProcAddress(state->ole32, "RegisterDragDrop");
+        state->RevokeDragDrop_ =
+                (Win32RevokeDragDrop)GetProcAddress(state->ole32, "RevokeDragDrop");
+        state->ReleaseStgMedium_ =
+                (Win32ReleaseStgMedium)GetProcAddress(state->ole32, "ReleaseStgMedium");
+    }
     state->shell32 = LoadLibraryW(L"shell32.dll");
     if (state->shell32) {
         state->DragAcceptFiles_ =
@@ -534,6 +740,21 @@ static void win32_window_load_optional_modules(Win32WindowState *state) {
         state->DragQueryPoint_ =
                 (Win32DragQueryPoint)GetProcAddress(state->shell32, "DragQueryPoint");
     }
+}
+
+// The real drop target when ole32 gives us one, WM_DROPFILES otherwise: the
+// fallback still delivers the drop, it just cannot say where the cursor is
+// while the drag is in flight.
+static void win32_window_register_drop_target(Win32WindowState *state, HWND window) {
+    if (state->OleInitialize_ && state->RegisterDragDrop_) {
+        // S_FALSE: the thread was already an apartment, which is fine.
+        state->OleInitialize_(0);
+        if (state->RegisterDragDrop_(window, &win32_drop_target) == S_OK) {
+            state->drop_target_registered = 1;
+            return;
+        }
+    }
+    if (state->DragAcceptFiles_) { state->DragAcceptFiles_(window, TRUE); }
 }
 
 // Dark title bar, rounded corners, matching border. Every failure is ignored:
@@ -622,7 +843,7 @@ OsWindow os_window_create(String8 title, u32 width, u32 height) {
 
     state->dpi_scale = (f32)GetDpiForWindow(window) / 96.0f;
     win32_window_apply_dark_frame(state, window);
-    if (state->DragAcceptFiles_) { state->DragAcceptFiles_(window, TRUE); }
+    win32_window_register_drop_target(state, window);
 
     RECT client;
     GetClientRect(window, &client);
@@ -702,7 +923,11 @@ void os_window_destroy(OsWindow window) {
     state->window = 0;
     CloseHandle(state->wake_event);
     state->wake_event = 0;
+    if (state->drop_target_registered && state->RevokeDragDrop_) {
+        state->RevokeDragDrop_(state->window);
+    }
     if (state->dwmapi) { FreeLibrary(state->dwmapi); }
+    if (state->ole32) { FreeLibrary(state->ole32); }
     if (state->shell32) { FreeLibrary(state->shell32); }
     arena_release(state->arena);
     state->arena = 0;

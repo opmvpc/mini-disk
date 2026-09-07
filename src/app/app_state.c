@@ -165,15 +165,14 @@ void app_scan_tick(void) {
 }
 
 // --- start up ----------------------------------------------------------------
-static String8 app_cache_path(Arena *arena) {
+static String8 app_cache_dir(Arena *arena) {
     ArenaTemp scratch = scratch_begin(&arena, 1);
     String8 folder = os_known_folder(scratch.arena, OsKnownFolder_LocalAppData);
     if (folder.size == 0) { folder = os_known_folder(scratch.arena, OsKnownFolder_Temp); }
-    String8 dir = os_path_join(scratch.arena, folder, str8_lit("minidisk"));
+    String8 dir = os_path_join(arena, folder, str8_lit("minidisk"));
     os_dir_create(dir);
-    String8 path = os_path_join(arena, dir, str8_lit("library.mdlib"));
     scratch_end(scratch);
-    return path;
+    return dir;
 }
 
 // "--scan <folder>" and "--query <text>": the same paths the button and the
@@ -208,7 +207,9 @@ void app_init(Arena *permanent, f32 scale) {
     app.index_arena = arena_alloc(GB(2));
     lib_browser_init(&app.browser, permanent, APP_TRACK_MAX);
     lib_search_init(&app.finder, permanent, APP_TRACK_MAX);
-    app.cache_path = app_cache_path(permanent);
+    app.cache_dir = app_cache_dir(permanent);
+    app.cache_path = os_path_join(permanent, app.cache_dir, str8_lit("library.mdlib"));
+    lib_covers_init(&app.covers, permanent, app.cache_dir);
 
     u64 selection_words = (APP_TRACK_MAX + 63) / 64;
     ui_list_init(&app.list, push_array_zero(permanent, u64, selection_words), selection_words);

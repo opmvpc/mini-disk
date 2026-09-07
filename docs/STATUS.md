@@ -2,7 +2,7 @@
 
 Dernière mise à jour : 2026-09-07
 
-## Phase actuelle : 2 · Bibliothèque — T-009..T-013, T-015 faits, T-014 en cours (dernier de la phase)
+## Phase actuelle : 4 · Plan & capacité — T-030 en cours (phase 3 en attente du driver WinUSB via Zadig)
 
 ### Fait (phase 0 terminée)
 - 4 rapports de recherche livrés (`research/01..04`, ~10 700 lignes) + tokens de design (`02b`).
@@ -16,9 +16,28 @@ Dernière mise à jour : 2026-09-07
 - Repo GitHub : https://github.com/opmvpc/mini-disk
 
 ### En cours
-- T-014 : drag & drop Explorateur (IDropTarget), pochettes WIC, panneau détail, fin de phase 2 (prompt `prompts/I-014`).
+- T-030 : modèle `.mdplan`, commandes réversibles, undo/redo, autosave (prompt `prompts/I-030`).
+- Phase 3 (device) : bloquée tant que Zadig → WinUSB n'est pas installé sur le MZ-N505 (P-001).
+  reste l'action utilisateur préalable.
 
 ### Fait en phase 2
+- T-014 livré (dernier de la phase) : **drag & drop depuis l'Explorateur** par un `IDropTarget`
+  minimal écrit à la main (`ole32` chargée dynamiquement, `RegisterDragDrop`), qui donne la position
+  du curseur pendant le survol — le panneau Bibliothèque se met en surbrillance et dit « Déposez pour
+  ajouter à la bibliothèque » — avec **WM_DROPFILES en repli** ; un dossier déposé est un dossier
+  surveillé, un fichier désigne son dossier parent (`lib_drop_folder`, testé). **Pochettes par WIC** :
+  `os_image_decode` (COM en C, `windowscodecs.dll` dynamique, conversion en `32bppPBGRA`, mise à
+  l'échelle Fant vers 48 et 256 px) — **aucun octet de décodeur dans l'exe**, imports toujours
+  kernel32 + user32. Source embarquée (APIC / PICTURE / covr, y compris **tag ID3 unsynchronisé**
+  grâce à un tampon de capture dans `Tags`) avant `cover.*` > `folder.*` > `front.*` du dossier ;
+  décodage en jobs (64 en vol au plus, la vue redemande chaque frame, donc aucune file à purger),
+  cache disque `covers/<clé>.raw` (48² + 256² RGBA8, écriture atomique, relu **mappé**), **atlas de
+  vignettes RGBA8 2048² séparé** en grille de cellules fixes avec **LRU** par bande, branché sur
+  `r_rect_textured`. Vue : colonne pochette 48 px activable par le menu de l'en-tête et **panneau
+  Détail repliable** (pochette 256 px texel pour texel, titre, artiste, album, année, format, durée,
+  taille, chemin en ellipsis du milieu). **1,31 ms de décodage + mise à l'échelle par pochette**,
+  15 µs par vignette versée dans l'atlas, 8 cas de test ajoutés (**119 cas / 3 344 checks**),
+  **exe 229 376 o**, **46,9 ms de CPU sur 12 s au repos (inchangé)**. Capture : `build/demo.png`.
 - T-013 livré : vue Bibliothèque réelle (la démo factice de 100 000 pistes est supprimée) — huit colonnes
   `#` / Titre / Artiste / Album / Durée / Format (badge codec + kHz) / Année / Ajouté, en-têtes triables
   avec indicateur, largeurs redimensionnables à la poignée et **persistées**, largeurs calculées une fois
@@ -119,23 +138,26 @@ Dernière mise à jour : 2026-09-07
 | Jobs | 910 ns par job vide (7 workers), speedup 4,35x sur un parallel-for | < 1 µs, > 3x | 2026-09-06 |
 | CPU au repos, 12 s | 31 à 78 ms, **0 ms sur nos threads** (0 réveil, 0 message) ; le reste est un thread du pilote GL | 0 % | 2026-09-06 |
 | Tests | 70 cas, **1 378 checks**, 0 échec (ASan) | verts | 2026-09-06 |
-| Budget CI (`SIZE_BUDGET_KB`) | 128 KB (phase 2 : 250 KB ; `/O1` = −16,9 Ko reste un levier, cf. P-007) | — | 2026-09-06 |
+| Budget CI (`SIZE_BUDGET_KB`) | 350 KB (phase 4) ; historique : 128 KB fin de phase 1, 250 KB phase 2 (phase 2 : 250 KB ; `/O1` = −16,9 Ko reste un levier, cf. P-007) | — | 2026-09-06 |
 
-## KPI — phase 2 en cours (même machine)
+## KPI — phase 2 terminée (même machine)
 | Métrique | Valeur | Cible | Date |
 |----------|--------|-------|------|
-| Taille exe release | **207 872 o**, marge 37 888 o sous la cible de T-013 | < 240 KB (CI 250 KB) | 2026-09-07 |
+| Taille exe release | **229 376 o**, marge 26 624 o | budget CI 250 KB | 2026-09-07 |
 | Scan bibliothèque | 50 000 fichiers / 500 dossiers : **168 ms à froid**, **63 ms à chaud** (7 workers) | < 2 s / < 300 ms | 2026-09-06 |
 | Mémoire bibliothèque | **74 o/piste** → 7,4 MB pour 100 000 pistes (hors chaînes), 0 allocation par piste | < 40 MB | 2026-09-06 |
 | Annulation du scan | < 100 ms (test) | < 100 ms | 2026-09-06 |
 | Lecture des tags | **2,13 µs/fichier** (parsing), 2 lectures de 64 Ko par fichier | < 3 s / 10 000 | 2026-09-06 |
 | Scan + tags, 50 000 fichiers | **2,38 s à froid**, **73 ms à chaud** (0 fichier ouvert au rescan) | < 3 s / 10 000 | 2026-09-06 |
 | Fuzz des parseurs | 22 vecteurs x 10 000 mutations, **0 crash, 0 rapport ASan** | 0 | 2026-09-06 |
-| Tests | **111 cas, 1 875 checks**, 0 échec (ASan) | verts | 2026-09-07 |
+| Tests | **119 cas, 3 344 checks**, 0 échec (ASan) | verts | 2026-09-07 |
 | Tri de la bibliothèque | 100 000 pistes par artiste : **22,8 ms** (fusion stable sur clés normalisées) | < 30 ms | 2026-09-07 |
 | Recherche incrémentale | « the » sur 100 000 pistes : **4,09 ms** ; raffinée « the b » : **0,978 ms**, 0 allocation | < 5 ms / < 1 ms | 2026-09-07 |
 | Cache `library.mdlib` | 100 000 pistes, fichier de 12,04 Mo : **chargé en 26,9 ms**, écrit en 53 ms | < 50 ms | 2026-09-07 |
 | Clic de tri (en-tête), 100 000 pistes | **36,45 ms** : ordre construit + 100 000 ids réémis dans la liste | < 50 ms perçu | 2026-09-07 |
 | Trois panneaux visibles | jusqu'à **1024 × 640 logique** (biblio 597 px, plan 357, disque 300 à 125 %) | 1024 x 640 | 2026-09-07 |
 | Préférences | fichier de 789 o, aller-retour sérialisation + parsing en 13 µs, écriture atomique | — | 2026-09-07 |
-| CPU au repos, 12 s, après un scan | **46,9 et 78,1 ms** sur deux mesures, soit 0,4 à 0,65 % d'un cœur (0,05 à 0,08 % des 8 threads) — même résidu de thread pilote GL qu'en T-008 (P-005) | 0 % | 2026-09-07 |
+| Pochettes | **1,31 ms** par pochette (décodage WIC + mise à l'échelle vers 256 et 48), 10 000 pochettes = ~1,9 s réparties sur 7 workers, 64 en vol au plus | 10 000 sans jank | 2026-09-07 |
+| Atlas de vignettes | 2048² RGBA8, 1 400 cellules de 48 px + 7 de 256 px, **15 µs** par vignette versée (16 par frame au plus : 0,24 ms), LRU par bande | vignettes < 100 ms après un scroll | 2026-09-07 |
+| Cache pochettes | 271 376 o par pochette, relu mappé, **0 décodage au deuxième lancement** | — | 2026-09-07 |
+| CPU au repos, 12 s, après un scan | **46,9 et 78,1 ms** sur trois mesures (46,9 ms après T-014 : le drop target OLE ne réveille rien), soit 0,4 à 0,65 % d'un cœur — même résidu de thread pilote GL qu'en T-008 (P-005) | 0 % | 2026-09-07 |

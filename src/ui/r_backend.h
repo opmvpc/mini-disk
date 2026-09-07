@@ -23,4 +23,10 @@ u32  r_backend_texture_r8(u32 size);
 void r_backend_texture_upload_r8(u32 texture, u32 atlas_size, const u8 *pixels, u32 x, u32 y,
                                  u32 width, u32 height);
 
+// RGBA8 texture of `size` x `size` for the cover thumbnails (T-014). It lives
+// beside the R8 atlas, not instead of it: one atlas per pixel format.
+u32  r_backend_texture_rgba8(u32 size);
+void r_backend_texture_upload_rgba8(u32 texture, u32 atlas_size, const u8 *pixels, u32 x, u32 y,
+                                    u32 width, u32 height);
+
 #endif // R_BACKEND_H

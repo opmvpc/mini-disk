@@ -26,7 +26,7 @@ ont un fichier `T-NNN-*.md` ; les suivants sont des lignes à détailler au mome
 | [T-011](T-011-tags-audio.md) | Tags ID3v1/v2, Vorbis, MP4, APE, WAV/AIFF + durées exactes, fuzz ASan | done |
 | [T-012](T-012-index-recherche-cache.md) | Index triés, navigateur par colonnes, recherche incrémentale, cache `.mdlib` mappé | done |
 | [T-013](T-013-vue-bibliotheque.md) | Vue Bibliothèque réelle : colonnes, tri, navigateur, recherche, états, prefs | done |
-| [T-014](T-014-dnd-explorer-pochettes.md) | Drag & drop Explorateur (IDropTarget), pochettes WIC, panneau détail, tag v0.2.0 | doing |
+| [T-014](T-014-dnd-explorer-pochettes.md) | Drag & drop Explorateur (IDropTarget), pochettes WIC, panneau détail, tag v0.2.0 | done |
 
 ## Phase 3 — Device (lecture et édition) — prérequis : Zadig → WinUSB sur le MZ-N505
 
@@ -40,7 +40,7 @@ ont un fichier `T-NNN-*.md` ; les suivants sont des lignes à détailler au mome
 
 | Ticket | Titre | Statut |
 |--------|-------|--------|
-| [T-030](T-030-modele-plan-undo.md) | Modèle `.mdplan` multi-disques, commandes réversibles, undo/redo, autosave, résolution des pistes | todo |
+| [T-030](T-030-modele-plan-undo.md) | Modèle `.mdplan` multi-disques, commandes réversibles, undo/redo, autosave, résolution des pistes | doing |
 | [T-031](T-031-capacite-clusters-budget-toc.md) | Capacité en clusters, budget TOC 255×7, sanitize/raccourcissement des titres, titrage auto, first-fit | todo |
 | [T-032](T-032-vue-plan-jauge.md) | Vue Plan : DnD interne, modes, groupes, jauge de capacité au pixel, barre TOC, tag v0.4.0 | todo |
 

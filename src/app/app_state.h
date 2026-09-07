@@ -11,6 +11,7 @@
 
 #include "../base/base.h"
 #include "../core/library/lib_cache.h"
+#include "../core/library/lib_covers.h"
 #include "../core/library/lib_events.h"
 #include "../core/library/lib_index.h"
 #include "../core/library/lib_model.h"
@@ -55,6 +56,7 @@ typedef struct AppState {
     LibIndex index;
     LibBrowser browser;
     LibSearch finder;
+    LibCovers covers;
 
     // --- widgets whose state outlives the frame -----------------------------
     UI_TextInput search;
@@ -73,6 +75,7 @@ typedef struct AppState {
     Prefs prefs;
     String8 prefs_path;
     String8 cache_path;
+    String8 cache_dir;
     b32 prefs_dirty;
 
     // --- the scan -----------------------------------------------------------
@@ -96,6 +99,12 @@ typedef struct AppState {
     UI_ContextMenu header_menu;
     u32 header_drag;         // AppColumn being resized, + 1; 0 when idle
     f32 header_drag_origin;  // its width in dp when the drag started
+
+    // --- the drag from the Explorer (T-014) ----------------------------------
+    // A drag in flight and where its cursor is, so the library panel can say
+    // "here" before the user lets go. Cleared by DragLeave and by the drop.
+    b32 drag_active;
+    V2 drag_pos;
 } AppState;
 
 // One instance, named by everything above app/: the unity build defines it in
@@ -127,6 +136,10 @@ void     app_query_set(String8 query);
 
 // view_library.c
 void app_library_panel(f32 width);
+// The thumbnail of a track, uploaded into the atlas the frame it is ready.
+// 0 when nothing can be drawn yet; the request has been made either way.
+b32 app_cover_rect(TrackId id, u32 size, R_AtlasRect *out);
+void app_covers_begin_frame(void);
 void app_library_context_menu(void);
 
 #endif // APP_STATE_H

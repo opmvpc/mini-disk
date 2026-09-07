@@ -37,6 +37,7 @@ enum {
     UI_FloatingY      = 1u << 9,
     UI_Disabled       = 1u << 10,  // no signal, drawn dimmed by the widget
     UI_DrawIcon       = 1u << 11,  // `icon` (R_Icon + 1) is stamped from the atlas
+    UI_DrawImage      = 1u << 12,  // `image_*` is stretched over the whole rect
 };
 
 // Horizontal alignment of the drawn text inside the box. Durations, sizes and
@@ -133,6 +134,10 @@ struct UI_Box {
     u8 text_flags;   // UI_TextFlag_*
     u8 text_align;   // UI_TextAlign_*
     OsFont font;
+    // A cover thumbnail (T-014). Six bytes, not a rect of floats: UI_Box is
+    // walked twice per frame over the whole tree, and the thumbnail atlas is
+    // square, so a corner and an edge say everything.
+    u16 image_x, image_y, image_size;
 
     // -- cold: retained across frames -----------------------------------
     V2 view_off_target;

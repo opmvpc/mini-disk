@@ -199,8 +199,12 @@ void tags_fallback_from_path(Tags *tags, String8 path) {
     tags_set_artist(tags, os_path_filename(os_path_parent(folder)));
 }
 
-b32 tags_read_file(Tags *tags, String8 path, u64 size, u8 *head, u8 *tail) {
+// The shared body: `capture` is 0 for the tag wave, a buffer for a cover job.
+static b32 tags_read_file_capture(Tags *tags, String8 path, u64 size, u8 *head, u8 *tail,
+                                  u8 *capture, u32 capture_size) {
     tags_init(tags);
+    tags->cover_capture = capture;
+    tags->cover_capture_size = capture_size;
     TagsFile file;
     StructZero(&file);
     file.size = size;
@@ -227,4 +231,14 @@ b32 tags_read_file(Tags *tags, String8 path, u64 size, u8 *head, u8 *tail) {
         tags->codec = (u8)lib_codec_from_extension(os_path_extension(path));
     }
     return parsed;
+}
+
+b32 tags_read_file(Tags *tags, String8 path, u64 size, u8 *head, u8 *tail) {
+    return tags_read_file_capture(tags, path, size, head, tail, 0, 0);
+}
+
+String8 tags_read_cover(Tags *tags, String8 path, u64 size, u8 *head, u8 *tail, u8 *cover,
+                        u32 cover_capacity) {
+    tags_read_file_capture(tags, path, size, head, tail, cover, cover_capacity);
+    return str8(cover, tags->cover_captured);
 }

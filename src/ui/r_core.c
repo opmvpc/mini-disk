@@ -5,6 +5,7 @@
 
 #include "r_atlas.h"
 #include "r_backend.h"
+#include "r_thumbs.h"
 
 // One command is one future quad. They are stored in chunks so the frame arena
 // can be used by the caller between two r_rect calls without splitting the list.
@@ -37,6 +38,7 @@ u32 r_draw_call_count(void) { return r_frame.batch_count; }
 b32 r_init(Arena *persistent) {
     if (!r_backend_init()) { return 0; }
     r_atlas_init(persistent);
+    r_thumbs_init(persistent);
     return 1;
 }
 
@@ -260,6 +262,7 @@ static R_Cmd **r_sort_commands(void) {
 
 void r_end_frame(void) {
     r_atlas_flush();
+    r_thumbs_flush();
     if (r_frame.cmd_count == 0) {
         r_backend_draw(&r_frame);
         return;

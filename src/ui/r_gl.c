@@ -99,6 +99,7 @@ typedef struct R_GlState {
     GLuint vbo;
     GLuint ibo;
     GLuint atlas;
+    GLuint thumbs;
     GLint u_viewport;
     GLint u_atlas;
     GLint u_text_gamma;
@@ -318,6 +319,7 @@ void r_backend_shutdown(void) {
         glUnmapBuffer(GL_ARRAY_BUFFER);
     }
     if (r_gl.atlas) { glDeleteTextures(1, &r_gl.atlas); }
+    if (r_gl.thumbs) { glDeleteTextures(1, &r_gl.thumbs); }
     glDeleteBuffers(1, &r_gl.ibo);
     glDeleteBuffers(1, &r_gl.vbo);
     glDeleteVertexArrays(1, &r_gl.vao);
@@ -349,6 +351,30 @@ void r_backend_texture_upload_r8(u32 texture, u32 atlas_size, const u8 *pixels, 
     glPixelStorei(GL_UNPACK_ROW_LENGTH, (GLint)atlas_size);
     glTexSubImage2D(GL_TEXTURE_2D, 0, (GLint)x, (GLint)y, (GLsizei)width, (GLsizei)height, GL_RED,
                     GL_UNSIGNED_BYTE, pixels + (u64)y * atlas_size + x);
+    glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+}
+
+u32 r_backend_texture_rgba8(u32 size) {
+    if (r_gl.thumbs) { glDeleteTextures(1, &r_gl.thumbs); }
+    glGenTextures(1, &r_gl.thumbs);
+    glBindTexture(GL_TEXTURE_2D, r_gl.thumbs);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, (GLsizei)size, (GLsizei)size, 0, GL_RGBA,
+                 GL_UNSIGNED_BYTE, 0);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    return r_gl.thumbs;
+}
+
+void r_backend_texture_upload_rgba8(u32 texture, u32 atlas_size, const u8 *pixels, u32 x, u32 y,
+                                    u32 width, u32 height) {
+    glBindTexture(GL_TEXTURE_2D, texture);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+    glPixelStorei(GL_UNPACK_ROW_LENGTH, (GLint)atlas_size);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, (GLint)x, (GLint)y, (GLsizei)width, (GLsizei)height, GL_RGBA,
+                    GL_UNSIGNED_BYTE, pixels + ((u64)y * atlas_size + x) * 4);
     glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
 }
 

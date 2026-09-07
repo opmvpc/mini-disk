@@ -112,6 +112,11 @@ b32  lib_scan_update(LibScan *scan);
 void lib_scan_cancel(LibScan *scan);
 void lib_scan_end(LibScan *scan);  // releases the block, after the scan is done
 
+// What a drop from the Explorer means (T-014): a folder is a library folder, a
+// file is the folder that holds it. One function, because it is what the tests
+// pin down and what the two drop paths (OLE and WM_DROPFILES) share.
+String8 lib_drop_folder(String8 path, b32 is_dir);
+
 md_inline b32 lib_scan_running(const LibScan *scan) {
     return scan->state == LibScanState_Running;
 }

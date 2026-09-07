@@ -44,11 +44,29 @@ typedef struct Tags {
     u64 cover_offset;         // absolute file offset of the picture bytes
     u32 cover_size;
     u32 cover_hashed;         // bytes of it we had in the window and hashed
+    // Optional capture, for the cover jobs of T-014: when a buffer is set, the
+    // parser copies the picture bytes into it. It is the only way to reach the
+    // picture of an unsynchronised ID3 tag, whose bytes exist nowhere on disk
+    // in that form (cover_offset is then 0).
+    u8 *cover_capture;
+    u32 cover_capture_size;
+    u32 cover_captured;
     u8 text[TAGS_TEXT_CAPACITY];
     u32 text_size;
 } Tags;
 
 void tags_init(Tags *tags);
+
+// Copies the picture bytes into the capture buffer when the caller set one and
+// they fit. A picture that does not fit is simply not captured: the row falls
+// back to the folder image, which is the point of the two sources.
+md_inline void tags_cover_capture(Tags *tags, String8 data) {
+    if (tags->cover_capture && data.size <= (u64)tags->cover_capture_size) {
+        mem_copy(tags->cover_capture, data.str, data.size);
+        tags->cover_captured = (u32)data.size;
+    }
+}
+
 // Dispatches on the signature, never on the extension. Returns 0 when nothing
 // recognised the bytes; the Tags are still canonical (empty) in that case.
 b32  tags_parse(Tags *tags, const TagsFile *file);
@@ -58,6 +76,10 @@ void tags_fallback_from_path(Tags *tags, String8 path);
 // The whole job for one file: at most two reads of TAGS_BLOCK_SIZE.
 // `head` and `tail` are caller owned buffers of TAGS_BLOCK_SIZE bytes each.
 b32  tags_read_file(Tags *tags, String8 path, u64 size, u8 *head, u8 *tail);
+// The same two reads, with the embedded picture copied into `cover`. Returns
+// the picture, empty when the file carries none or it does not fit.
+String8 tags_read_cover(Tags *tags, String8 path, u64 size, u8 *head, u8 *tail, u8 *cover,
+                        u32 cover_capacity);
 
 // --- the format parsers ----------------------------------------------------
 // One per container, each its own boundary. They are declared here so that the

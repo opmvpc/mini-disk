@@ -12,6 +12,7 @@
 #                                                 screenshot of the demo
 import argparse
 import os
+import zlib
 import struct
 import sys
 
@@ -80,9 +81,47 @@ def txxx_frame(name, value, version=3):
     body = b"\x00" + name.encode("latin-1") + b"\x00" + value.encode("latin-1")
     return id3v2_frame("TXXX", body, version)
 
-def apic_frame(data, version=3):
-    body = b"\x00" + b"image/jpeg\x00" + b"\x03" + b"cover\x00" + data
+def apic_frame(data, version=3, mime="image/jpeg"):
+    body = b"\x00" + mime.encode() + b"\x00" + b"\x03" + b"cover\x00" + data
     return id3v2_frame("APIC", body, version)
+
+# --- PNG -------------------------------------------------------------------
+# Written by hand through zlib, like every other vector here: no encoder, no
+# dependency, and the same bytes on every machine. T-014 needs real images
+# (WIC decodes them for us), both as test vectors and in the demo tree.
+
+def png_chunk(kind, payload):
+    body = kind + payload
+    return be32(len(payload)) + body + be32(zlib.crc32(body) & 0xFFFFFFFF)
+
+def png_image(width, height, pixel):
+    raw = bytearray()
+    for y in range(height):
+        raw.append(0)  # filter: none
+        for x in range(width):
+            raw.extend(pixel(x, y))
+    header = struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0)  # 8 bit RGBA
+    return (b"\x89PNG\r\n\x1a\n" + png_chunk(b"IHDR", header)
+            + png_chunk(b"IDAT", zlib.compress(bytes(raw), 9)) + png_chunk(b"IEND", b""))
+
+# The 2 x 2 the decoding test checks pixel by pixel: red, green, blue, white,
+# in that order, so a swapped channel or a flipped row is visible.
+COVER_2X2 = [(255, 0, 0, 255), (0, 255, 0, 255), (0, 0, 255, 255), (255, 255, 255, 255)]
+
+def png_2x2():
+    return png_image(2, 2, lambda x, y: COVER_2X2[y * 2 + x])
+
+# A cover that reads as one at 48 px: a dark border and a diagonal pattern over
+# a colour keyed on the album, so no two albums share a picture.
+def png_cover(size, seed):
+    base = ((seed * 61) % 200 + 40, (seed * 113) % 200 + 40, (seed * 197) % 200 + 40)
+    step = max(size // 4, 1)
+    def pixel(x, y):
+        if x < 2 or y < 2 or x >= size - 2 or y >= size - 2:
+            return (16, 16, 20, 255)
+        shade = 255 if (x + y) % step < max(size // 8, 1) else 170
+        return (base[0] * shade // 255, base[1] * shade // 255, base[2] * shade // 255, 255)
+    return png_image(size, size, pixel)
 
 def unsynchronise(data):
     out = bytearray()
@@ -301,6 +340,9 @@ def build_vectors():
         text_frame("TCON", "(17)", 0, version=4),
         text_frame("TRCK", "3", 0, version=4),
         text_frame("TDRC", "2019-04-01", 3, version=4),
+        # A picture inside an unsynchronised tag: its bytes exist nowhere on
+        # disk in that form, which is the case T-014's capture buffer is for.
+        apic_frame(png_cover(16, 5), version=4, mime="image/png"),
     ]
     files["id3v24_unsync.mp3"] = (id3v2_tag(frames, version=4, unsync=True)
                                   + xing_frame(1500) + mpeg_frames(4))
@@ -371,6 +413,10 @@ def build_vectors():
                                     + b"\x00\x00\x00\x00moov")
     files["broken_ape.mp3"] = mpeg_frames(4) + b"APETAGEX" + le32(2000) + le32(0xFFFFFFF0) \
                               + le32(4096) + le32(0) + b"\x00" * 8
+    files["cover_2x2.png"] = png_2x2()
+    files["cover_16.png"] = png_cover(16, 3)
+    # The bench decodes this one: the size a real album cover is.
+    files["cover_256.png"] = png_cover(256, 7)
     files["empty.mp3"] = b""
     files["tiny.mp3"] = b"ID"
 
@@ -405,9 +451,15 @@ def safe(name):
 
 def write_demo(root):
     count = 0
-    for artist, album, year, genre, titles in DEMO:
+    for album_index, (artist, album, year, genre, titles) in enumerate(DEMO):
         folder = os.path.join(root, safe(artist), safe(album))
         os.makedirs(folder, exist_ok=True)
+        # Half the albums carry their picture in the tag, half next to the
+        # files: the two sources of T-014, both on screen in one capture.
+        embedded = png_cover(128, album_index + 1) if album_index % 2 == 0 else None
+        if embedded is None:
+            with open(os.path.join(folder, "cover.png"), "wb") as handle:
+                handle.write(png_cover(256, album_index + 1))
         for index, title in enumerate(titles, start=1):
             frames = [
                 text_frame("TIT2", title, 1),
@@ -420,6 +472,8 @@ def write_demo(root):
             ]
             seconds = 150 + 37 * index + 11 * count
             frames_count = seconds * MPEG_RATE // MPEG_SAMPLES
+            if embedded is not None:
+                frames.append(apic_frame(embedded, mime="image/png"))
             data = id3v2_tag(frames) + xing_frame(frames_count) + mpeg_frames(4)
             path = os.path.join(folder, "%02d - %s.mp3" % (index, safe(title)))
             with open(path, "wb") as handle:

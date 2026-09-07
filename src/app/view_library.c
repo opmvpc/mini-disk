@@ -15,6 +15,14 @@ static String8 app_duration(u32 seconds) {
 
 md_inline f32 app_cell_padding(void) { return ui_dp(ui_theme()->space[UI_Space_8]); }
 
+// The cover column is not part of the column model: it is never sorted, never
+// resized and never dropped, so it lives beside it.
+md_inline f32 app_thumb_column_width(void) { return ui_dp((f32)LIB_COVER_SMALL + 8.0f); }
+md_inline f32 app_row_height(void) {
+    return app.prefs.thumbnails ? ui_dp((f32)LIB_COVER_SMALL + 8.0f)
+                                : ui_dp(ui_theme()->row_compact);
+}
+
 // One cell of a row: a single box, whatever the alignment.
 static void app_cell(UI_Size width, String8 text, u32 color, u32 text_flags, UI_TextAlign align) {
     UI_PrefWidth(width)
@@ -120,6 +128,7 @@ static const AppColumn app_column_drop_order[] = {
 // are dropped from the right of that list, and only then does the rest shrink.
 static void app_columns_measure(f32 panel_width) {
     f32 available = max_f32(panel_width - ui_dp(ui_theme()->scrollbar_width), 0.0f);
+    if (app.prefs.thumbnails) { available = max_f32(available - app_thumb_column_width(), 0.0f); }
     f32 title_min = ui_dp(APP_TITLE_MIN_DP);
     f32 fixed = 0.0f;
     for (u32 i = 0; i < AppColumn_COUNT; i += 1) {
@@ -204,6 +213,76 @@ static void app_column_header(AppColumn column) {
     if (signal.double_clicked) { app.header_drag = 0; }
 }
 
+
+// --- covers ------------------------------------------------------------------
+// The view states what it wants and takes what is there: a thumbnail that is
+// not decoded yet is a request and an empty cell, never a wait. The uploads are
+// capped per frame so a scroll over a cold library stays a scroll - at 16 per
+// frame a full screen of rows is complete in two frames.
+#define APP_COVER_UPLOADS_PER_FRAME 16
+
+static u32 app_cover_uploads;
+
+void app_covers_begin_frame(void) { app_cover_uploads = 0; }
+
+b32 app_cover_rect(TrackId id, u32 size, R_AtlasRect *out) {
+    Library *lib = &app.library;
+    String8 path = lib_track_path(lib, id);
+    u64 key = lib_cover_key(lib->cover_hash[id], os_path_parent(path));
+    if (key == 0) { return 0; }
+    if (r_thumbs_lookup(key, size, out)) { return 1; }
+
+    u32 state = lib_covers_state(&app.covers, key);
+    if (state == LibCoverState_Missing) {
+        // A cover already in the disk cache is ready the instant it is asked
+        // for, so the state is read again: the row draws in this very frame
+        // rather than waiting for whatever wakes the loop next.
+        lib_covers_request(&app.covers, key, path, lib->size[id]);
+        state = lib_covers_state(&app.covers, key);
+    }
+    if (state != LibCoverState_Ready) { return 0; }
+    if (app_cover_uploads >= APP_COVER_UPLOADS_PER_FRAME) {
+        os_request_redraw();  // the rest of them lands in the next frame
+        return 0;
+    }
+    OsFileMap map;
+    if (!lib_covers_open(&app.covers, key, &map)) { return 0; }
+    *out = r_thumbs_add(key, size, lib_cover_pixels(&map, size));
+    os_file_unmap(&map);
+    app_cover_uploads += 1;
+    return 1;
+}
+
+// The cover cell of a row: the image when it is there, the empty plate of the
+// theme when it is not, so the column never jumps as thumbnails arrive.
+static void app_cell_cover(f32 width, TrackId id) {
+    const UI_Theme *theme = ui_theme();
+    f32 side = ui_dp((f32)LIB_COVER_SMALL);
+    R_AtlasRect thumb;
+    StructZero(&thumb);
+    b32 ready = app_cover_rect(id, LIB_COVER_SMALL, &thumb);
+    UI_PrefWidth(ui_px(width, 1.0f))
+    UI_PrefHeight(ui_pct(1.0f, 1.0f)) {
+        UI_Box *cell = ui_build_box_from_key(0, 0);
+        UI_Parent(cell)
+        UI_FixedX(round_f32((width - side) * 0.5f))
+        UI_FixedY(round_f32((app_row_height() - side) * 0.5f))
+        UI_PrefWidth(ui_px(side, 1.0f))
+        UI_PrefHeight(ui_px(side, 1.0f))
+        UI_BgColor(theme->control)
+        UI_CornerRadius(ui_dp(3.0f)) {
+            UI_Flags flags = UI_FloatingX | UI_FloatingY |
+                             (ready ? (UI_Flags)UI_DrawImage : (UI_Flags)UI_DrawBackground);
+            UI_Box *image = ui_build_box_from_key(flags, 0);
+            if (ready) {
+                image->image_x = thumb.x;
+                image->image_y = thumb.y;
+                image->image_size = thumb.width;
+            }
+        }
+    }
+}
+
 // --- one row of the list -------------------------------------------------------
 static const char *app_codec_names[LibCodec_COUNT] = {
     "", "MP3", "FLAC", "WAV", "AIFF", "OGG", "M4A", "AAC", "ALAC", "WMA", "OPUS",
@@ -221,7 +300,7 @@ static void app_cell_format(f32 width, u8 codec, u32 sample_rate) {
                                sample_rate / 1000, (sample_rate % 1000) / 100)
                        : str8_cstr(app_codec_names[codec]);
     f32 badge_height = ui_dp(15.0f);
-    f32 row_height = ui_dp(theme->row_compact);
+    f32 row_height = app_row_height();
     UI_PrefWidth(ui_px(width, 1.0f))
     UI_PrefHeight(ui_pct(1.0f, 1.0f)) {
         UI_Box *cell = ui_build_box_from_key(0, 0);
@@ -264,6 +343,7 @@ static void app_library_row(u64 row, TrackId id, b32 selected) {
     const UI_Theme *theme = ui_theme();
     AppTrack track = app_track(id);
     u32 secondary = selected ? theme->fg_primary : theme->fg_secondary;
+    if (app.prefs.thumbnails) { app_cell_cover(app_thumb_column_width(), id); }
     for (u32 slot = 0; slot < AppColumn_COUNT; slot += 1) {
         AppColumn column = app_column_at(slot);
         if (app.column_px[column] <= 0.0f) { continue; }
@@ -523,6 +603,192 @@ static void app_scan_progress(void) {
     }
 }
 
+
+// --- the detail panel ---------------------------------------------------------
+// The bottom of the library panel, collapsible: the 256 px cover and the facts
+// a track has. It reads the cursor row, which is where the keyboard and the
+// last click agree the selection is.
+static String8 app_bytes_human(u64 bytes) {
+    // Under a megabyte the decimal says nothing: kilobytes do.
+    if (bytes < MB(1)) {
+        return str8f(ui_frame_arena(), app_str_c(Str_DetailSizeKb), (u32)((bytes + 512) >> 10));
+    }
+    u64 tenths = (bytes * 10 + (1 << 19)) >> 20;  // MiB, one decimal, rounded
+    return str8f(ui_frame_arena(), app_str_c(Str_DetailSize), (u32)(tenths / 10),
+                 (u32)(tenths % 10));
+}
+
+// A path shown whole at both ends: the drive says where, the file name says
+// what, and the middle is what goes. Binary search on how much each end keeps.
+static String8 app_path_ellipsis(String8 path, OsFont font, f32 max_width) {
+    if (path.size == 0 || ui_text_width(font, path, 0) <= max_width) { return path; }
+    u64 low = 0;
+    u64 high = path.size / 2;
+    String8 best = str8_lit("...");
+    while (low <= high) {
+        u64 keep = (low + high) / 2;
+        u64 head = keep;
+        u64 tail = keep;
+        // Never cut a codepoint in half: back up to the lead byte.
+        while (head > 0 && (path.str[head] & 0xC0) == 0x80) { head -= 1; }
+        while (tail > 0 && (path.str[path.size - tail] & 0xC0) == 0x80) { tail -= 1; }
+        String8 candidate = str8f(ui_frame_arena(), "%S...%S", str8_prefix(path, head),
+                                  str8_skip(path, path.size - tail));
+        if (ui_text_width(font, candidate, 0) <= max_width) {
+            best = candidate;
+            low = keep + 1;
+        } else {
+            if (keep == 0) { break; }
+            high = keep - 1;
+        }
+    }
+    return best;
+}
+
+static void app_detail_line(String8 text, UI_FontStyle style, u32 color) {
+    const UI_Theme *theme = ui_theme();
+    UI_PrefWidth(ui_pct(1.0f, 0.0f))
+    UI_PrefHeight(ui_px(ui_dp(theme->row_compact), 1.0f))
+    UI_Font(ui_font(style))
+    UI_TextColor(color)
+    UI_TextPadding(0.0f) {
+        UI_Box *box = ui_build_box_from_key(UI_DrawText, 0);
+        box->display_string = text;
+    }
+}
+
+static void app_detail_facts(UI_Box *facts, TrackId id, f32 padding) {
+    const UI_Theme *theme = ui_theme();
+    AppTrack track = app_track(id);
+    UI_Parent(facts) {
+        ui_spacer(ui_px(padding, 1.0f));
+        app_detail_line(track.title, UI_FontStyle_Heading, theme->fg_primary);
+        app_detail_line(track.artist, UI_FontStyle_Emphasis, theme->fg_secondary);
+        String8 album = track.year ? str8f(ui_frame_arena(), "%S (%u)", track.album, track.year)
+                                   : track.album;
+        app_detail_line(album, UI_FontStyle_Ui, theme->fg_secondary);
+        String8 format = str8f(ui_frame_arena(), "%s %u.%u kHz \xC2\xB7 %S \xC2\xB7 %S",
+                               app_codec_names[track.codec], track.sample_rate / 1000,
+                               (track.sample_rate % 1000) / 100, app_duration(track.duration_s),
+                               app_bytes_human(app.library.size[id]));
+        app_detail_line(format, UI_FontStyle_Caption, theme->fg_muted);
+        f32 text_width = max_f32(rect_width(facts->rect) - padding, ui_dp(80.0f));
+        String8 path = app_path_ellipsis(lib_track_path(&app.library, id),
+                                         ui_font(UI_FontStyle_Caption), text_width);
+        app_detail_line(path, UI_FontStyle_Caption, theme->fg_disabled);
+    }
+}
+
+static void app_detail_panel(f32 width) {
+    const UI_Theme *theme = ui_theme();
+    ui_separator();
+    UI_PrefWidth(ui_pct(1.0f, 0.0f))
+    UI_PrefHeight(ui_px(ui_dp(theme->row_standard), 1.0f))
+    UI_ChildLayoutAxis(Axis2_X)
+    UI_BgColor(theme->panel) {
+        UI_Box *bar = ui_build_box_from_key(UI_DrawBackground, 0);
+        UI_Parent(bar) {
+            ui_spacer(ui_px(ui_dp(theme->space[UI_Space_4]), 1.0f));
+            UI_PrefHeight(ui_px(ui_dp(theme->row_compact), 1.0f)) {
+                R_Icon icon = app.prefs.detail_collapsed ? R_Icon_ChevronRight : R_Icon_ChevronDown;
+                if (ui_button_icon(icon, str8_lit("###detailtoggle")).clicked) {
+                    app.prefs.detail_collapsed = !app.prefs.detail_collapsed;
+                    app.prefs_dirty = 1;
+                }
+                ui_tooltip(app_str(app.prefs.detail_collapsed ? Str_DetailShow : Str_DetailHide));
+            }
+            UI_Font(ui_font(UI_FontStyle_Caption))
+            UI_TextPadding(app_cell_padding()) {
+                ui_label_styled(UI_FontStyle_Caption, theme->fg_disabled,
+                                app_str(Str_DetailTitle));
+            }
+        }
+    }
+    if (app.prefs.detail_collapsed) { return; }
+
+    ui_separator();
+    f32 padding = ui_dp(theme->space[UI_Space_12]);
+    // 256 *physical* pixels, not 256 dp: that is the size the cache holds, and
+    // one texel per pixel is the only way an image is ever sharp. A narrow
+    // panel shrinks it rather than pushing the facts off screen.
+    f32 side = min_f32((f32)LIB_COVER_LARGE, max_f32(width * 0.4f - padding * 2.0f, 64.0f));
+    // Nothing clicked yet: the first row of the current sort is what the panel
+    // is about, which is also what the user is looking at.
+    b32 has_row = app.index_ready && app_row_count() > 0;
+    u64 row = (app.list.has_cursor && app.list.cursor < app_row_count()) ? app.list.cursor : 0;
+    TrackId id = has_row ? app_rows()[row] : LIB_TRACK_NONE;
+    R_AtlasRect thumb;
+    StructZero(&thumb);
+    b32 ready = has_row && app_cover_rect(id, LIB_COVER_LARGE, &thumb);
+
+    UI_PrefWidth(ui_pct(1.0f, 0.0f))
+    UI_PrefHeight(ui_px(side + padding * 2.0f, 1.0f))
+    UI_ChildLayoutAxis(Axis2_X)
+    UI_BgColor(theme->surface) {
+        UI_Box *body = ui_build_box(UI_DrawBackground | UI_Clip, str8_lit("###detail"));
+        UI_Parent(body) {
+            ui_spacer(ui_px(padding, 1.0f));
+            UI_PrefWidth(ui_px(side, 1.0f))
+            UI_PrefHeight(ui_pct(1.0f, 1.0f)) {
+                UI_Box *slot = ui_build_box_from_key(0, 0);
+                UI_Parent(slot)
+                UI_FixedY(padding)
+                UI_PrefWidth(ui_px(side, 1.0f))
+                UI_PrefHeight(ui_px(side, 1.0f))
+                UI_BgColor(theme->control)
+                UI_TextColor(theme->fg_muted)
+                UI_TextAlign(UI_TextAlign_Center)
+                UI_Font(ui_font(UI_FontStyle_Caption))
+                UI_CornerRadius(ui_dp(4.0f)) {
+                    UI_Flags flags =
+                        UI_FloatingY | (ready ? (UI_Flags)UI_DrawImage
+                                              : (UI_Flags)(UI_DrawBackground | UI_DrawText));
+                    UI_Box *image = ui_build_box_from_key(flags, 0);
+                    if (ready) {
+                        image->image_x = thumb.x;
+                        image->image_y = thumb.y;
+                        image->image_size = thumb.width;
+                    } else {
+                        image->display_string =
+                            app_str(has_row ? Str_DetailNoCover : Str_DetailEmpty);
+                    }
+                }
+            }
+            ui_spacer(ui_px(padding, 1.0f));
+            UI_PrefWidth(ui_pct(1.0f, 0.0f))
+            UI_PrefHeight(ui_pct(1.0f, 1.0f))
+            UI_ChildLayoutAxis(Axis2_Y) {
+                UI_Box *facts = ui_build_box(UI_Clip, str8_lit("###detailfacts"));
+                if (has_row) { app_detail_facts(facts, id, padding); }
+            }
+        }
+    }
+}
+
+// While the Explorer holds a drag over the panel, the panel says so: an accent
+// ring and the one sentence that tells the user what letting go does.
+static void app_drop_overlay(UI_Box *panel) {
+    const UI_Theme *theme = ui_theme();
+    if (!app.drag_active || !rect_contains(panel->rect, app.drag_pos)) { return; }
+    // Built last inside the panel: within a layer the order of the calls is the
+    // order of the drawing, so the ring lands over the rows without a layer.
+    UI_Parent(panel)
+    UI_FixedX(0.0f)
+    UI_FixedY(0.0f)
+    UI_PrefWidth(ui_px(rect_width(panel->rect), 1.0f))
+    UI_PrefHeight(ui_px(rect_height(panel->rect), 1.0f))
+    UI_BorderColor(theme->accent)
+    UI_BorderThickness(ui_dp(2.0f))
+    UI_TextColor(theme->fg_primary)
+    UI_TextAlign(UI_TextAlign_Center)
+    UI_Font(ui_font(UI_FontStyle_Emphasis))
+    UI_TextPadding(0.0f) {
+        UI_Box *ring = ui_build_box(UI_FloatingX | UI_FloatingY | UI_DrawBorder | UI_DrawText,
+                                    str8_lit("###droptarget"));
+        ring->display_string = app_str(Str_DropHint);
+    }
+}
+
 // --- the panel -------------------------------------------------------------------
 void app_library_panel(f32 width) {
     const UI_Theme *theme = ui_theme();
@@ -547,8 +813,8 @@ void app_library_panel(f32 width) {
                     app.scan_dirs_done, app.scan_dirs_total)
             : str8f(ui_frame_arena(), app_str_c(Str_LibraryCount), app_row_count(),
                     app_track_count());
-    app_panel_begin(str8_lit("###library"), ui_px(width, 1.0f), app_str(Str_LibraryTitle),
-                    subtitle);
+    UI_Box *panel = app_panel_begin(str8_lit("###library"), ui_px(width, 1.0f),
+                                    app_str(Str_LibraryTitle), subtitle);
 
     UI_PrefWidth(ui_pct(1.0f, 0.0f))
     UI_PrefHeight(ui_px(ui_dp(theme->row_comfortable), 1.0f))
@@ -575,6 +841,7 @@ void app_library_panel(f32 width) {
 
     if (empty) {
         app_library_empty_state();
+        app_drop_overlay(panel);
         app_panel_end();
         return;
     }
@@ -586,6 +853,7 @@ void app_library_panel(f32 width) {
     UI_BgColor(theme->panel) {
         UI_Box *header = ui_build_box_from_key(UI_DrawBackground, 0);
         UI_Parent(header) {
+            if (app.prefs.thumbnails) { ui_spacer(ui_px(app_thumb_column_width(), 1.0f)); }
             for (u32 slot = 0; slot < AppColumn_COUNT; slot += 1) {
                 AppColumn column = app_column_at(slot);
                 if (app.column_px[column] > 0.0f) { app_column_header(column); }
@@ -597,13 +865,15 @@ void app_library_panel(f32 width) {
 
     if (app_row_count() == 0 && app.query_size != 0) {
         app_library_no_results();
+        app_detail_panel(width);
+        app_drop_overlay(panel);
         app_panel_end();
         return;
     }
 
     // The list itself: only the visible rows become boxes.
     const u32 *rows = app_rows();
-    ui_list_begin(list, app_row_count(), ui_dp(theme->row_compact));
+    ui_list_begin(list, app_row_count(), app_row_height());
     UI_ListEachRow(list, i) {
         ui_list_row_begin(list, i);
         app_library_row(i, rows[i], ui_list_selected(list, i));
@@ -613,6 +883,8 @@ void app_library_panel(f32 width) {
 
     if (list->context) { ui_context_menu_open(&app.menu, list->context_pos, list->context_row); }
     if (list->activated) { app_plan_add_selection(); }
+    app_detail_panel(width);
+    app_drop_overlay(panel);
     app_panel_end();
 }
 
@@ -620,6 +892,15 @@ void app_library_panel(f32 width) {
 // title is not a row, and the width model gives it whatever is left anyway.
 static void app_header_menu(void) {
     if (!ui_context_menu_begin(&app.header_menu)) { return; }
+    {
+        String8 label = str8f(ui_frame_arena(), "%s %S", app.prefs.thumbnails ? "â" : "Â ",
+                              app_str(Str_MenuThumbnails));
+        if (ui_context_menu_item(&app.header_menu, label)) {
+            app.prefs.thumbnails = !app.prefs.thumbnails;
+            app.prefs_dirty = 1;
+        }
+    }
+    ui_context_menu_separator(&app.header_menu);
     for (u32 slot = 0; slot < AppColumn_COUNT; slot += 1) {
         AppColumn column = app_column_at(slot);
         if (app_column_flexible(column)) { continue; }

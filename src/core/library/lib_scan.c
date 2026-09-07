@@ -147,6 +147,11 @@ static void lib_scan_dir_job(void *data, u64 begin, u64 end) {
 }
 
 // --- the tag jobs (T-011) --------------------------------------------------
+String8 lib_drop_folder(String8 path, b32 is_dir) {
+    if (path.size == 0) { return str8(0, 0); }
+    return is_dir ? path : os_path_parent(path);
+}
+
 // The directory walk does not read file contents: it would open 50 000 files
 // on a rescan where nothing changed. The merge decides which tracks are new or
 // changed, and those - and only those - become tag jobs. Each one costs at

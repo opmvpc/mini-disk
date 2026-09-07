@@ -14,9 +14,11 @@
 #include "../src/core/library/lib_index.h"
 #include "../src/core/library/lib_search.h"
 #include "../src/core/library/lib_cache.h"
+#include "../src/core/library/lib_covers.h"
 #include "../src/ui/r_core.h"
 #include "../src/ui/r_backend.h"
 #include "../src/ui/r_atlas.h"
+#include "../src/ui/r_thumbs.h"
 #include "../src/ui/r_raster.h"
 #include "../src/ui/r_icons.h"
 #include "../src/ui/ui_font.h"
@@ -36,7 +38,9 @@
 #include "../src/platform/win32/win32_file.c"
 #include "../src/platform/win32/win32_thread.c"
 #include "../src/platform/win32/win32_window.c"
+#include "../src/platform/win32/win32_image.c"
 #include "../src/ui/r_atlas.c"
+#include "../src/ui/r_thumbs.c"
 #include "../src/ui/r_raster.c"
 #include "../src/ui/r_icons.c"
 #include "../src/ui/r_core.c"
@@ -58,6 +62,7 @@
 #include "../src/core/library/lib_index.c"
 #include "../src/core/library/lib_search.c"
 #include "../src/core/library/lib_cache.c"
+#include "../src/core/library/lib_covers.c"
 #include "../src/app/prefs.c"
 
 typedef struct TestState {
@@ -113,6 +118,7 @@ static void test_check(b32 condition, const char *expression, i32 line) {
 #include "test_tags.c"
 #include "test_index.c"
 #include "test_prefs.c"
+#include "test_covers.c"
 
 int main(void) {
     os_init();
@@ -130,6 +136,7 @@ int main(void) {
     test_tags_run_all();
     test_index_run_all();
     test_prefs_run_all();
+    test_covers_run_all();
 
     test_report("%llu case(s), %llu check(s), %llu failure(s)\n", test_state.cases,
                 test_state.checks, test_state.failures);

@@ -38,6 +38,21 @@ void r_backend_texture_upload_r8(u32 texture, u32 atlas_size, const u8 *pixels, 
     test_backend.last_height = height;
 }
 
+// The thumbnail atlas of T-014 has its own texture: the stub hands out ids the
+// same way, so r_thumbs is exercised without a driver.
+u32 r_backend_texture_rgba8(u32 size) {
+    Unused(size);
+    static u32 next_texture = 100;
+    next_texture += 1;
+    return next_texture;
+}
+
+void r_backend_texture_upload_rgba8(u32 texture, u32 atlas_size, const u8 *pixels, u32 x, u32 y,
+                                    u32 width, u32 height) {
+    Unused(texture); Unused(atlas_size); Unused(pixels);
+    Unused(x); Unused(y); Unused(width); Unused(height);
+}
+
 static R_RectParams test_render_params(Rect dst) {
     R_RectParams params;
     StructZero(&params);

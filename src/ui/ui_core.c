@@ -8,6 +8,7 @@
 
 #include "r_atlas.h"
 #include "r_icons.h"
+#include "r_thumbs.h"
 #include "ui_font.h"
 #include "ui_text.h"
 #include "ui_theme.h"
@@ -776,6 +777,16 @@ static void ui_draw_box(UI_Box *box) {
         r_rect(params);
     }
 
+    if (box->flags & UI_DrawImage) {
+        Assert(box->image_size != 0);
+        // Opaque colour, raw quad: the image replaces the colour, and the
+        // rounding of a cover is the row's business, not the sampler's.
+        f32 inv = 1.0f / (f32)R_THUMBS_SIZE;
+        V2 uv0 = v2((f32)box->image_x * inv, (f32)box->image_y * inv);
+        V2 uv1 = v2((f32)(box->image_x + box->image_size) * inv,
+                    (f32)(box->image_y + box->image_size) * inv);
+        r_rect_textured(box->rect, r_thumbs_texture(), uv0, uv1, 0xFFFFFFFFu, 0);
+    }
     f32 text_x = box->rect.min.x + box->text_padding;
     if (box->flags & UI_DrawIcon) {
         Assert(box->icon != 0);

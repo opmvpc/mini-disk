@@ -21,6 +21,7 @@ void prefs_defaults(Prefs *prefs) {
         prefs->columns[i].visible = 1;
     }
     prefs->sort_column = 0;  // LibSort_Title
+    prefs->thumbnails = 1;
     prefs->window_width = 1360;
     prefs->window_height = 820;
 }
@@ -95,6 +96,14 @@ static void prefs_apply_pair(Prefs *prefs, String8 key, String8 value) {
     if (str8_eq(key, str8_lit("sort.desc"))) { prefs_read_b32(value, &prefs->sort_desc); return; }
     if (str8_eq(key, str8_lit("browser.collapsed"))) {
         prefs_read_b32(value, &prefs->browser_collapsed);
+        return;
+    }
+    if (str8_eq(key, str8_lit("library.thumbnails"))) {
+        prefs_read_b32(value, &prefs->thumbnails);
+        return;
+    }
+    if (str8_eq(key, str8_lit("library.detail_collapsed"))) {
+        prefs_read_b32(value, &prefs->detail_collapsed);
         return;
     }
     if (str8_eq(key, str8_lit("window.x"))) { prefs_read_i32(value, &prefs->window_x); return; }
@@ -205,6 +214,10 @@ String8 prefs_serialize(Arena *arena, const Prefs *prefs) {
     str8_list_push(arena, &lines, str8f(arena, "sort.desc=%u", prefs->sort_desc ? 1u : 0u));
     str8_list_push(arena, &lines,
                    str8f(arena, "browser.collapsed=%u", prefs->browser_collapsed ? 1u : 0u));
+    str8_list_push(arena, &lines,
+                   str8f(arena, "library.thumbnails=%u", prefs->thumbnails ? 1u : 0u));
+    str8_list_push(arena, &lines, str8f(arena, "library.detail_collapsed=%u",
+                                        prefs->detail_collapsed ? 1u : 0u));
     for (u32 i = 0; i < AppColumn_COUNT; i += 1) {
         const PrefsColumn *column = &prefs->columns[i];
         const char *name = prefs_column_names[i];

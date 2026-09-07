@@ -230,6 +230,7 @@ static void tags_id3_picture(Tags *tags, String8 body, u64 file_offset, b32 v22)
     tags->cover_size = (u32)data.size;
     tags->cover_hashed = (u32)data.size;
     tags->cover_hash = hash64(data.str, data.size);
+    tags_cover_capture(tags, data);
 }
 
 static void tags_id3_text_frame(Tags *tags, String8 id, u64 id_size, String8 body) {

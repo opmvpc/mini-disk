@@ -85,6 +85,7 @@ static void tags_flac_picture(Tags *tags, String8 block, u64 block_offset) {
     tags->cover_size = size;
     tags->cover_hashed = (u32)data.size;
     tags->cover_hash = hash64(data.str, data.size);
+    tags_cover_capture(tags, data);
 }
 
 b32 tags_flac_parse(Tags *tags, const TagsFile *file) {

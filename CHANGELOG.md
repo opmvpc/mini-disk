@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+### Phase 2 — Bibliothèque (T-009..T-015), terminée
+Une bibliothèque qui tient 100 000 pistes dans un exe de 229 376 octets, toujours sans CRT et sans
+autres imports que kernel32 et user32 :
+- **Scan** (T-010) : un job par sous-dossier, allocateur bump sans verrou, pile de Treiber vers le
+  thread principal, tombstones et `TrackId` stables — 50 000 fichiers en **168 ms à froid**.
+- **Tags** (T-011) : ID3v1/v2.2/2.3/2.4 (unsync), Vorbis, MP4, APEv2, WAV, AIFF, en-têtes MPEG
+  Xing/VBRI, écrits à la main, **deux lectures de 64 Ko par fichier**, 2,13 µs de parsing chacun,
+  lus dans une seconde vague de jobs sur les seules pistes nouvelles ou modifiées.
+- **Index, recherche, cache** (T-012) : tris stables par colonne sur clés normalisées, navigateur
+  Artiste → Album, recherche incrémentale SSE2 sans allocation (4,09 ms sur 100 000, 0,978 ms en
+  raffinement), cache binaire mappé `library.mdlib` chargé en 26,9 ms.
+- **Vue bibliothèque** (T-013) : huit colonnes triables, redimensionnables et persistées, navigateur
+  repliable, liste virtualisée sans aucune copie, états vide / scan / aucun résultat, préférences en
+  texte écrites atomiquement, 48 chaînes FR/EN.
+- **Drag & drop et pochettes** (T-014) : `IDropTarget` maison sur `ole32` dynamique (surbrillance du
+  panneau pendant le survol, WM_DROPFILES en repli), `os_image_decode` par **WIC** (aucun décodeur
+  dans l'exe), source embarquée > `cover|folder|front` du dossier, décodage en jobs (1,31 ms par
+  pochette), cache disque `covers/<clé>.raw` mappé, **atlas de vignettes RGBA8 2048² à LRU**, colonne
+  de vignettes 48 px et panneau détail repliable avec pochette 256 px.
+- **DPI et overlay** (T-015), **tri des draw calls par texture** (T-009).
+- Qualité : **119 cas de test / 3 344 checks** sous ASan (dont un fuzz de 220 000 mutations sur les
+  parseurs de tags), `check` et `analyze` verts, 19 bancs de mesure. **46,9 ms de CPU sur 12 s au
+  repos**, inchangé depuis la phase 1.
+
 ### Phase 1 — Fondations (T-001..T-008), terminée
 Une application Windows autonome de 107 008 octets, sans CRT, qui n'importe que kernel32 et user32 :
 - `base/` : arènes sur mémoire virtuelle réservée, scratch arenas par thread, `String8` et formatage

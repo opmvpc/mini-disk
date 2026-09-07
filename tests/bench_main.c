@@ -14,10 +14,12 @@
 #include "../src/core/library/lib_index.h"
 #include "../src/core/library/lib_search.h"
 #include "../src/core/library/lib_cache.h"
+#include "../src/core/library/lib_covers.h"
 #include "../src/app/prefs.h"
 #include "../src/ui/r_core.h"
 #include "../src/ui/r_backend.h"
 #include "../src/ui/r_atlas.h"
+#include "../src/ui/r_thumbs.h"
 #include "../src/ui/r_raster.h"
 #include "../src/ui/r_icons.h"
 #include "../src/ui/ui_font.h"
@@ -33,7 +35,9 @@
 #include "../src/platform/win32/win32_platform.c"
 #include "../src/platform/win32/win32_file.c"
 #include "../src/platform/win32/win32_thread.c"
+#include "../src/platform/win32/win32_image.c"
 #include "../src/ui/r_atlas.c"
+#include "../src/ui/r_thumbs.c"
 #include "../src/ui/r_raster.c"
 #include "../src/ui/r_icons.c"
 #include "../src/ui/r_core.c"
@@ -53,6 +57,7 @@
 #include "../src/core/library/lib_index.c"
 #include "../src/core/library/lib_search.c"
 #include "../src/core/library/lib_cache.c"
+#include "../src/core/library/lib_covers.c"
 #include "../src/app/prefs.c"
 
 // The renderer benches measure r_core and r_atlas, not the driver: the back end
@@ -67,6 +72,24 @@ void r_backend_texture_upload_r8(u32 texture, u32 atlas_size, const u8 *pixels, 
     Unused(texture); Unused(atlas_size); Unused(pixels);
     Unused(x); Unused(y); Unused(width); Unused(height);
 }
+
+// The thumbnail atlas of T-014 has its own texture: the stub hands out ids the
+// same way, so r_thumbs is exercised without a driver.
+u32 r_backend_texture_rgba8(u32 size) {
+    Unused(size);
+    static u32 next_texture = 100;
+    next_texture += 1;
+    return next_texture;
+}
+
+void r_backend_texture_upload_rgba8(u32 texture, u32 atlas_size, const u8 *pixels, u32 x, u32 y,
+                                    u32 width, u32 height) {
+    Unused(texture); Unused(atlas_size); Unused(pixels);
+    Unused(x); Unused(y); Unused(width); Unused(height);
+}
+
+// The cover jobs ask for a redraw when they land; the bench has no window.
+void os_request_redraw(void) {}
 
 typedef struct BenchResult {
     const char *name;
@@ -1057,6 +1080,88 @@ static BenchResult bench_prefs_round_trip(void) {
     return result;
 }
 
+
+// --- T-014: covers ---------------------------------------------------------
+// What one cover costs end to end on the decode side: the system decoder twice
+// over the same bytes, once to 256 px and once to 48 px. 10 000 of them have to
+// go through the worker threads without the frame loop ever noticing, so the
+// number that matters is the per cover cost, not the total.
+static BenchResult bench_cover_decode(void) {
+    ArenaTemp scratch = scratch_begin(0, 0);
+    String8 bytes = os_file_read_all(scratch.arena, str8_lit("tests\\data\\cover_256.png"));
+    if (bytes.size == 0) {
+        BenchResult skipped;
+        skipped.name = "cover decode (no vector)";
+        skipped.cycles = 0;
+        skipped.micros = 0;
+        skipped.bytes = 0;
+        scratch_end(scratch);
+        return skipped;
+    }
+
+    u32 iterations = 200;
+    OsImage image;
+    // One decode outside the loop: it loads windowscodecs.dll and builds the
+    // apartment, which no cover but the first ever pays for.
+    os_image_decode(scratch.arena, bytes, LIB_COVER_LARGE, &image);
+
+    u64 start_cycles = __rdtsc();
+    u64 start_us = os_time_now_us();
+    for (u32 i = 0; i < iterations; i += 1) {
+        ArenaTemp inner = arena_temp_begin(scratch.arena);
+        AssertAlways(os_image_decode(scratch.arena, bytes, LIB_COVER_LARGE, &image));
+        AssertAlways(os_image_decode(scratch.arena, bytes, LIB_COVER_SMALL, &image));
+        arena_temp_end(inner);
+    }
+    u64 end_us = os_time_now_us();
+    u64 end_cycles = __rdtsc();
+    bench_line("cover decode + scale to 256 and 48 (WIC)", (end_us - start_us) / iterations,
+               (end_cycles - start_cycles) / iterations, bytes.size, "bytes of source");
+    scratch_end(scratch);
+
+    BenchResult result;
+    result.name = "cover decode x200";
+    result.cycles = end_cycles - start_cycles;
+    result.micros = end_us - start_us;
+    result.bytes = bytes.size * iterations;
+    return result;
+}
+
+// The other half of the cost, the one a scroll pays: looking a thumbnail up in
+// the atlas and pushing it into a cell. 10 000 covers over 1 400 cells means
+// the LRU evicting on nearly every add, which is the case measured here.
+static BenchResult bench_cover_atlas(void) {
+    r_thumbs_init(bench_arena);
+    u32 count = 10000;
+    u8 *pixels = push_array(bench_arena, u8, (u64)R_THUMB_SMALL * R_THUMB_SMALL * 4);
+    mem_set(pixels, 0x55, (u64)R_THUMB_SMALL * R_THUMB_SMALL * 4);
+
+    u64 start_cycles = __rdtsc();
+    u64 start_us = os_time_now_us();
+    R_AtlasRect rect;
+    u32 hits = 0;
+    for (u32 i = 0; i < count; i += 1) {
+        u64 key = 1 + i;
+        if (r_thumbs_lookup(key, R_THUMB_SMALL, &rect)) {
+            hits += 1;
+        } else {
+            r_thumbs_add(key, R_THUMB_SMALL, pixels);
+        }
+    }
+    u64 end_us = os_time_now_us();
+    u64 end_cycles = __rdtsc();
+    AssertAlways(hits == 0 && r_thumbs_evictions() > 0);
+    bench_line("thumbnail atlas: 10 000 adds through a 1 400 cell LRU",
+               end_us - start_us, end_cycles - start_cycles, count, "covers");
+
+    BenchResult result;
+    result.name = "thumbnail atlas 10k";
+    result.cycles = end_cycles - start_cycles;
+    result.micros = end_us - start_us;
+    result.bytes = (u64)count * R_THUMB_SMALL * R_THUMB_SMALL * 4;
+    return result;
+}
+
 int main(void) {
     os_init();
     bench_arena = arena_alloc(GB(1));
@@ -1078,5 +1183,7 @@ int main(void) {
     bench_print(bench_library_cache());
     bench_print(bench_view_sort_click());
     bench_print(bench_prefs_round_trip());
+    bench_print(bench_cover_decode());
+    bench_print(bench_cover_atlas());
     return 0;
 }

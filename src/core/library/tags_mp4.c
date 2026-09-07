@@ -124,6 +124,7 @@ static void tags_mp4_ilst(Tags *tags, const TagsFile *file, u64 offset, u64 size
                 tags->cover_size = (u32)value.size;
                 tags->cover_hashed = (u32)value.size;
                 tags->cover_hash = hash64(value.str, value.size);
+                tags_cover_capture(tags, value);
             }
             continue;
         }

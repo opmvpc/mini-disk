@@ -67,6 +67,16 @@ typedef enum Str {
 
     Str_StatusBoxes,           // "%u pistes : %llu boxes ... %llu"
     Str_StatusKeys,
+
+    Str_DetailTitle,
+    Str_DetailEmpty,
+    Str_DetailNoCover,
+    Str_DetailShow,
+    Str_DetailHide,
+    Str_DetailSize,            // "%u,%u Mo"
+    Str_DetailSizeKb,          // "%u Ko"
+    Str_MenuThumbnails,
+    Str_DropHint,
     Str_COUNT
 } Str;
 
@@ -135,6 +145,16 @@ static const char *app_strings_fr[Str_COUNT] = {
 
     "%u pistes · %llu boxes pour %llu lignes visibles · %llu boxes dans la frame",
     "Tab navigue · Ctrl+F recherche · Ctrl+A tout sélectionner · Entrée ajoute au plan",
+
+    "Détail",
+    "Sélectionnez une piste pour voir sa pochette.",
+    "Pas de pochette",
+    "Afficher le détail",
+    "Masquer le détail",
+    "%u,%u Mo",
+    "%u Ko",
+    "Pochettes",
+    "Déposez pour ajouter à la bibliothèque",
 };
 
 static const char *app_strings_en[Str_COUNT] = {
@@ -192,6 +212,16 @@ static const char *app_strings_en[Str_COUNT] = {
 
     "%u tracks · %llu boxes for %llu visible rows · %llu boxes in the frame",
     "Tab moves · Ctrl+F search · Ctrl+A select all · Enter adds to the plan",
+
+    "Details",
+    "Select a track to see its cover.",
+    "No cover",
+    "Show the details",
+    "Hide the details",
+    "%u.%u MB",
+    "%u KB",
+    "Cover art",
+    "Drop to add to the library",
 };
 
 global StrLang app_lang = APP_LANG_DEFAULT;

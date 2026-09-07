@@ -293,14 +293,21 @@ static void app_build_ui(void) {
 // A dropped folder is a library folder; a dropped file means the folder it is
 // in. This is the other half of the empty state's invitation.
 static void app_drop(const OsEvent *event) {
+    app.drag_active = 0;
     if (event->path_count == 0) { return; }
-    String8 path = event->paths[0];
-    OsFileInfo info;
-    StructZero(&info);
-    if (!os_file_stat(path, &info)) { return; }
-    String8 folder = info.is_dir ? path : os_path_parent(path);
-    if (prefs_add_folder(&app.prefs, folder)) { app.prefs_dirty = 1; }
-    app_scan_folder(folder);
+    // Every dropped path is a folder to watch; the same folder twice is one.
+    // The scan queue of app_scan_tick takes them one after the other.
+    for (u64 i = 0; i < event->path_count; i += 1) {
+        OsFileInfo info;
+        StructZero(&info);
+        if (!os_file_stat(event->paths[i], &info)) { continue; }
+        String8 folder = lib_drop_folder(event->paths[i], info.is_dir);
+        if (prefs_add_folder(&app.prefs, folder)) { app.prefs_dirty = 1; }
+        if (!app.scan_active) {
+            app_scan_folder(folder);
+            app.scan_folder = app.prefs.folder_count;
+        }
+    }
 }
 
 static void app_save_placement(OsWindow window) {
@@ -397,8 +404,14 @@ static void app_run(void) {
                 ui_debug_overlay_toggle();
             }
             if (event.kind == OsEvent_DropFiles) { app_drop(&event); }
+            if (event.kind == OsEvent_DragEnter || event.kind == OsEvent_DragOver) {
+                app.drag_active = 1;
+                app.drag_pos = event.pos;
+            }
+            if (event.kind == OsEvent_DragLeave) { app.drag_active = 0; }
             if (event.kind == OsEvent_DpiChanged) {
                 r_atlas_reset();
+                r_thumbs_reset();
                 ui_text_reset();
                 scale = event.dpi_scale;
                 r_icons_build(frame_arena, (u32)(16.0f * scale));
@@ -420,6 +433,7 @@ static void app_run(void) {
             V2 size = os_window_get_size(window);
             r_begin_frame(frame_arena, size.x, size.y, scale);
             r_clear(ui_theme()->canvas);
+            app_covers_begin_frame();
             ui_begin(frame_arena, events, event_count, dt, size, scale);
             app_build_ui();
             ui_debug_overlay_build();
