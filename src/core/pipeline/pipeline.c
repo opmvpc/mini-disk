@@ -335,3 +335,25 @@ void pipeline_run_many(PipelineTask *tasks, u32 count) {
     for (u32 i = 0; i < count; i += 1) { jobs_push(&counter, pipeline_job, &tasks[i]); }
     jobs_wait(&counter);
 }
+
+// --- the decoder adapter (T-042) --------------------------------------------
+
+static u64 pipeline_decoder_read(void *user, f32 *const *planar, u64 max_frames) {
+    Decoder *decoder = (Decoder *)user;
+    u32 want = (u32)Min(max_frames, (u64)CODEC_BLOCK_FRAMES);
+    return codec_read_f32_planar(decoder, planar, want);
+}
+
+static b32 pipeline_decoder_rewind(void *user) { return codec_seek((Decoder *)user, 0); }
+
+b32 pipeline_source_from_decoder(PipelineSource *out, Decoder *decoder) {
+    if (decoder->info.channels == 0 || decoder->info.channels > 2) { return 0; }
+    StructZero(out);
+    out->read = pipeline_decoder_read;
+    out->rewind = pipeline_decoder_rewind;
+    out->user = decoder;
+    out->sample_rate = decoder->info.sample_rate;
+    out->channels = decoder->info.channels;
+    out->total_frames = decoder->info.total_frames;
+    return 1;
+}

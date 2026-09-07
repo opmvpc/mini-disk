@@ -2,7 +2,7 @@
 
 Dernière mise à jour : 2026-09-07
 
-## Phase actuelle : 3 + 5 en parallèle — T-020, T-021, T-040, T-041 mergés dans main ; T-022 et T-042 en cours (validation device en attente de Zadig)
+## Phase actuelle : 3 + 5 en parallèle — T-020, T-021, T-040, T-041 mergés dans main ; T-042 fait et **validé sur le vrai MZ-N505** (le pilote WinUSB est lié, P-001 levé), T-022 en cours
 
 ### Fait (phase 0 terminée)
 - 4 rapports de recherche livrés (`research/01..04`, ~10 700 lignes) + tokens de design (`02b`).
@@ -19,10 +19,11 @@ Dernière mise à jour : 2026-09-07
 - **Phase 3** : T-020 et T-021 mergés. Tout ce qui touche le vrai MZ-N505 (ouverture WinUSB, ping, captures
   `--netmd-trace`, chronométrage) attend le pilote : procédure dans `tools/zadig/README.md` (P-001, P-012).
   T-022 (édition du disque) en cours.
-- **Phase 5** : T-040 (décodeurs) et T-041 (DSP + pipeline) mergés. T-042 (session sécurisée + upload SP)
-  en cours, puis T-043 (vue Transfert + cache).
-- **Budget de taille** : exe à 469 504 o après les quatre merges ; `SIZE_BUDGET_KB` relevé à **600** pour
-  laisser passer T-022/T-042/T-043 (DES, session, vue Transfert), à resserrer en phase 7 (levier `/O1`, P-007).
+- **Phase 5** : T-040 (décodeurs) et T-041 (DSP + pipeline) mergés, T-042 (session sécurisée +
+  upload SP) livré et validé sur l'appareil. Reste T-043 (vue Transfert + cache).
+- **Budget de taille** : exe à **575 488 o** après T-042 (469 504 avant) ; le saut vient du pipeline et
+  du DSP de T-041 qui deviennent atteignables depuis `app/` par le bouton « Graver », pas de DES.
+  `SIZE_BUDGET_KB` reste à **600**, à resserrer en phase 7 (levier `/O1`, P-007).
 - Ordre de merge du 2026-09-07 : T-020 → T-041 → T-040 → T-021 (conflits d'includes résolus en gardant les deux côtés).
 
 ### Fait en phase 3
@@ -56,6 +57,38 @@ Dernière mise à jour : 2026-09-07
   branchement/débranchement restent **en attente de Zadig** (P-001).
 
 ### Fait en phase 5
+- T-042 livré : **la session sécurisée, DES maison, l'upload SP et le titrage**. `netmd_des.c` porte
+  DES, 3DES et le MAC ISO 9797-1 alg. 3 écrits depuis les tables de la FIPS 46-3 et de rien d'autre
+  (ADR-008) ; les 34 Ko de tables dérivées — boîtes SP et les trois permutations en tables indexées
+  par octet — sont **construites au premier usage** sous un verrou CAS, pas figées dans l'exe.
+  Vérification croisée à trois : les tables normalisées, un DES en Python pur
+  (`tools/netmd_crypto_check.py`, d'où sortent toutes les constantes NetMD du test C) et **Windows
+  CNG** (`--cng`), qui confirme les dix vecteurs à réponse connue, l'exemple ECB de la FIPS 81 et le
+  bloc 3DES. `netmd_secure.c` fait toute la séquence de research/01 §4 — démontage préventif,
+  acquire, `setTrackProtection`, `enterSecureSession`, leaf ID, EKB open-source `0x26422642`,
+  échange de nonces, clé de session par retailMAC, `setupDownload` (contentID + KEK en DES-CBC de
+  32 o), paquets **DES-CBC chaînés d'un paquet à l'autre** avec la clé de données obtenue par
+  *déchiffrement* ECB sous la KEK, `totalBytes = frameSize × frames + 24`, `commitTrack` — et un
+  **chemin de nettoyage garanti sur toutes les sorties** (succès, erreur, annulation) : forget,
+  leave, release, relecture de l'état. Le nonce hôte et la clé de paquet sont **injectables**, ce qui
+  rend une transcription de download rejouable octet par octet malgré le chiffrement ; trois
+  transcriptions sont rejouées en test (nominal, annulation, reprise). `netmd_upload.c` orchestre le
+  plan : capacité relue **sur le device** avant de commencer, une piste à la fois, **titre puis
+  commit** (§4.12), titre de disque écrit une seule fois à la fin (§6.5, il porte les groupes),
+  annulation entre deux paquets, **reprise** (les pistes déjà committées sont conservées, jamais
+  effacées « pour faire propre »), `os_power_keep_awake` pendant la gravure et un drapeau
+  « gravure en cours ». Thread device : commandes `UploadPlan` / `CancelUpload`, événements
+  `UploadProgress` / `TrackDone` / `UploadDone` / `UploadError` ; le bouton « Graver le disque » les
+  poste et une ligne de progression apparaît dans le panneau Disque (la vraie vue Transfert est
+  T-043). Le rejeu a trouvé un vrai bug : la charge utile d'une réponse sécurisée commençait un
+  octet trop tôt, décalant le nonce du device et donnant une clé de session fausse.
+  **Validé sur le vrai MZ-N505** : le pilote WinUSB est enfin lié (P-001 levé) et un sinus de 10 s
+  en SP est arrivé sur le disque avec son titre, relu à 10 000 ms exactement en encodage SP, sans
+  rien effacer. Écarts assumés (détail dans le ticket) : exe à 575 488 o parce que le pipeline de
+  T-041 entre enfin dans l'image, paquets de 256 Ko plutôt que 1 Mio pour la granularité
+  d'annulation, audio rendu en mémoire jusqu'à T-043, titres half-width seulement, et l'écart de
+  `MD_MODE_TABLE` mesuré mais **non corrigé** sur un seul point de mesure.
+
 - T-041 livré : **tout le DSP et le pipeline par piste** (`src/core/dsp/`, `src/core/pipeline/`).
   `dsp_math` fournit sin/cos/tan/exp/log/pow/I0/sinc en `f64` sans libm (réduction d'argument + Taylor,
   exécutés au montage des tables, pas dans une boucle d'échantillons) — on lie `/NODEFAULTLIB`, ces
@@ -81,6 +114,20 @@ Dernière mise à jour : 2026-09-07
   gain (le seuil de trim est un niveau absolu), et le banc « pipeline complet < 0,5 s » non tenu à
   669 ms — la passe de rendu seule est à 195 ms, c'est la passe de mesure R128 qui coûte les 403 ms
   restants. Détail et justifications dans `tickets/T-041-dsp-resampler-r128-dither.md`.
+
+## KPI — phase 5, T-042 (i7-8550U, 4 cœurs / 8 threads, Windows 11 ; MZ-N505 sous WinUSB)
+| Métrique | Valeur | Cible | Date |
+|----------|--------|-------|------|
+| Taille exe release | **575 488 o** — **non tenu** contre les 510 Ko du ticket, sous le budget CI de 600 Ko. Les +105 984 o viennent du **pipeline et du DSP de T-041 qui entrent enfin dans l'image** (rien dans `app/` ne les appelait, `/OPT:REF` les élaguait) ; DES + session + upload en représentent une fraction | < 510 KB | 2026-09-07 |
+| Tests | **216 cas, 6 344 checks**, 0 échec sous ASan (11 cas ajoutés par `test_netmd_secure.c`) | verts | 2026-09-07 |
+| Cibles `build.bat` | debug, release, test, check, analyze, bench toutes vertes (`bench` réparé : accolade perdue dans `bench_dsp_pipeline_jobs` au merge de phase 5) | vertes | 2026-09-07 |
+| Imports | **kernel32 + user32** (table d'import lue dans le PE ; bcrypt chargé par `LoadLibraryW`) | 2 DLL | 2026-09-07 |
+| DES, vecteurs à réponse connue | **10/10** plus les 4 clés faibles involutives, FIPS 81 ECB et CBC, 3DES EDE — concordants avec un DES Python indépendant **et** avec Windows CNG | exacts | 2026-09-07 |
+| DES-CBC, 8 Mo, un cœur | **35 Mo/s** (238 ms) — **203 ×** les 172 Ko/s dont SP a besoin | > 10 Mo/s | 2026-09-07 |
+| Rejeu du download complet | 3 transcriptions (nominal, annulation, reprise) rejouées **octet par octet**, nonce hôte injecté | exact | 2026-09-07 |
+| **Upload réel, MZ-N505** | sinus de 10 s SP, **1 765 376 o en 13 708 ms**, relu sur le disque avec son titre, 10 000 ms, encodage SP | la piste arrive titrée | 2026-09-07 |
+| Débit de transfert réel | **0,729 × temps réel** (~129 Ko/s) — la borne est l'encodeur ATRAC1 de l'appareil | 1,0 à 1,5 × (research §6.1) | 2026-09-07 |
+| `MD_MODE_TABLE`, écart mesuré | 10 s de SP ont coûté **12 875 ms** de temps libre contre 10 000 prédits (+2 875 ms, ~1,4 cluster) — **table non modifiée**, un seul point ne distingue pas un surcoût fixe d'un effet de fragmentation | ±1 cluster | 2026-09-07 |
 
 ## KPI — phase 5, T-041 (i7-8550U, 4 cœurs / 8 threads, Windows 11 ; **machine partagée avec l'agent T-040 pendant les mesures**, meilleur de trois passes)
 | Métrique | Valeur | Cible | Date |

@@ -25,6 +25,7 @@
 #include "../dsp/dsp_edit.h"
 #include "../dsp/dsp_loudness.h"
 #include "../dsp/dsp_resample.h"
+#include "../codecs/codec.h"
 
 #define PIPELINE_BLOCK_FRAMES 4096u  // ~93 ms, 32 KB of stereo f32: L2 resident
 
@@ -87,6 +88,14 @@ typedef struct PipelineTask {
     volatile long long *progress;  // output frames done so far, atomic
     PipelineResult result;
 } PipelineTask;
+
+// T-040 and T-041 were written in parallel, so the decoder never learned what a
+// PipelineSource is. This is the adapter, and it is three function pointers:
+// codec_read_f32_planar already hands back planar f32 in blocks of at most
+// CODEC_BLOCK_FRAMES, which is PIPELINE_BLOCK_FRAMES. 0 when the file has more
+// than two channels - the pipeline's downmix is stereo to mono and nothing
+// wider, and silently dropping channels would be the wrong kind of quiet.
+b32 pipeline_source_from_decoder(PipelineSource *out, Decoder *decoder);
 
 void pipeline_run(PipelineTask *task);
 // One job per track through base_jobs; returns when every track is done.

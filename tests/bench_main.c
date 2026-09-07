@@ -24,6 +24,9 @@
 #include "../src/core/netmd/netmd_proto.h"
 #include "../src/core/netmd/netmd_disc.h"
 #include "../src/core/netmd/netmd_control.h"
+#include "../src/core/netmd/netmd_des.h"
+#include "../src/core/netmd/netmd_secure.h"
+#include "../src/core/netmd/netmd_upload.h"
 #include "../src/core/netmd/netmd_replay.h"
 #include "../src/core/netmd/netmd_device.h"
 #include "../src/core/dsp/dsp_math.h"
@@ -91,6 +94,9 @@
 #include "../src/core/netmd/netmd_proto.c"
 #include "../src/core/netmd/netmd_disc.c"
 #include "../src/core/netmd/netmd_control.c"
+#include "../src/core/netmd/netmd_des.c"
+#include "../src/core/netmd/netmd_secure.c"
+#include "../src/core/netmd/netmd_upload.c"
 #include "../src/core/netmd/netmd_replay.c"
 #include "../src/core/netmd/netmd_device.c"
 #include "../src/core/dsp/dsp_math.c"
@@ -1830,6 +1836,8 @@ static BenchResult bench_dsp_pipeline_jobs(void) {
     result.micros = micros;
     result.bytes = total_bytes;
     return result;
+}
+
 // --- codecs (T-040) --------------------------------------------------------
 // Decode speed in multiples of realtime, the number ADR-007 sets a target for:
 // >= 100x for MP3 and >= 300x for FLAC, on one core, one file at a time. The
@@ -1875,6 +1883,33 @@ static void bench_codec_decode(const char *label, const char *path, u32 iteratio
     arena_temp_end(scratch);
 }
 
+// T-042: DES-CBC is on the path of every byte that reaches a disc. SP needs
+// 176 KB/s; anything above that is free, but a number is the only way to know.
+static BenchResult bench_netmd_des(void) {
+    u64 size = MB(8);
+    u8 *plain = push_array(bench_arena, u8, size);
+    u8 *cipher = push_array(bench_arena, u8, size);
+    for (u64 i = 0; i < size; i += 1) { plain[i] = (u8)(i * 31u + 7u); }
+    u8 key[8] = {0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF};
+    DesKey schedule;
+    des_key_init(&schedule, key);
+    u8 iv[8];
+    mem_zero(iv, sizeof(iv));
+    u64 start_us = os_time_now_us();
+    u64 start_cycles = __rdtsc();
+    des_cbc_encrypt(&schedule, iv, plain, cipher, size);
+    u64 end_cycles = __rdtsc();
+    u64 end_us = os_time_now_us();
+    AssertAlways(cipher[size - 1] != plain[size - 1] || cipher[0] != plain[0]);
+
+    BenchResult result;
+    result.name = "netmd DES-CBC 8 MB";
+    result.cycles = end_cycles - start_cycles;
+    result.micros = end_us - start_us;
+    result.bytes = size;
+    return result;
+}
+
 int main(void) {
     os_init();
     bench_arena = arena_alloc(GB(1));
@@ -1902,6 +1937,7 @@ int main(void) {
     bench_print(bench_plan_capacity());
     bench_print(bench_plan_gauge_layout());
     bench_print(bench_plan_view_frame());
+    bench_print(bench_netmd_des());
     bench_print(bench_dsp_resampler());
     bench_print(bench_dsp_r128());
     bench_print(bench_dsp_pipeline());

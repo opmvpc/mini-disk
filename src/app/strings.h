@@ -62,6 +62,10 @@ typedef enum Str {
     Str_DiscTitle,
     Str_DiscBurn,
     Str_DiscBurnHint,
+    Str_BurnProgress,   // "Gravure : piste %u/%u - %u %% - %S restantes"
+    Str_BurnStop,
+    Str_BurnDone,
+    Str_BurnFailed,
     Str_DiscClear,
     Str_DiscClearHint,
 
@@ -242,6 +246,10 @@ static const char *app_strings_fr[Str_COUNT] = {
     "Disque",
     "Graver le disque",
     "Écrit le plan sur le disque inséré",
+    "Gravure : piste %u/%u · %u %% · %S restantes",
+    "Arrêter la gravure",
+    "Gravure terminée : %u piste(s)",
+    "Gravure interrompue (erreur %u)",
     "Vider",
     "Retire toutes les pistes du plan",
 
@@ -405,6 +413,10 @@ static const char *app_strings_en[Str_COUNT] = {
     "Disc",
     "Burn disc",
     "Writes the plan to the inserted disc",
+    "Burning: track %u/%u · %u %% · %S left",
+    "Stop burning",
+    "Burn finished: %u track(s)",
+    "Burn interrupted (error %u)",
     "Clear",
     "Removes every track from the plan",
 

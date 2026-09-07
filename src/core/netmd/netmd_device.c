@@ -347,6 +347,49 @@ static void netmd_device_transport_cmd(NetmdDevice *device, const NetmdCmd *cmd)
     netmd_event_push(device, &event);
 }
 
+// --- the burn (T-042) --------------------------------------------------------
+
+static void netmd_device_upload_event(void *user, const NetmdUploadPlan *plan,
+                                      const NetmdUploadState *state, u32 upload_event) {
+    NetmdDevice *device = (NetmdDevice *)user;
+    Unused(plan);
+    static const u32 kinds[4] = {NetmdEvent_UploadProgress, NetmdEvent_TrackDone,
+                                 NetmdEvent_UploadDone, NetmdEvent_UploadError};
+    NetmdEvent event = netmd_event_make(device, kinds[upload_event & 3u], 0);
+    if (device->open_index < device->device_count) {
+        netmd_event_fill_device(&event, &device->devices[device->open_index]);
+    }
+    event.entry = os_atomic_load_u32((volatile u32 *)&state->entry);
+    event.track_count = os_atomic_load_u32((volatile u32 *)&state->done);
+    event.bytes_done = (u64)os_atomic_load_u64((volatile u64 *)&state->bytes_done) +
+                       (u64)os_atomic_load_u64((volatile u64 *)&state->track_bytes);
+    event.bytes_total = (u64)os_atomic_load_u64((volatile u64 *)&state->bytes_total);
+    event.eta_s = netmd_upload_eta_s(state);
+    event.result = state->result;
+    netmd_event_push(device, &event);
+}
+
+static void netmd_device_upload_run(NetmdDevice *device, const NetmdCmd *cmd) {
+    if (!device->open || !netmd_transport_bound(&device->transport) || !device->upload_plan) {
+        NetmdEvent event = netmd_event_make(device, NetmdEvent_UploadError, cmd);
+        event.error = OsUsbError_NotOpen;
+        event.result = NetmdResult_Usb;
+        netmd_event_push(device, &event);
+        return;
+    }
+    ArenaTemp scratch = arena_temp_begin(device->arena);
+    (void)netmd_upload_run(&device->session, device->arena, device->upload_plan, &device->upload,
+                           netmd_device_upload_event, device);
+    arena_temp_end(scratch);
+    // The disc gained tracks: whatever the UI is showing is stale, and re-reading
+    // it here means the panel is right by the time the run's last event lands.
+    NetmdCmd reread;
+    StructZero(&reread);
+    reread.kind = NetmdCmd_ReadDisc;
+    reread.issued_us = os_time_now_us();
+    netmd_device_read_disc(device, &reread);
+}
+
 // Windows announces one plug several times (the node, then every interface it
 // exposes). Wait out the burst, swallow what it left in the queue, walk the bus
 // once: 200 ms of latency against five enumerations.
@@ -379,6 +422,10 @@ static void netmd_device_exec(NetmdDevice *device, const NetmdCmd *cmd) {
         case NetmdCmd_Next:
         case NetmdCmd_Prev:
         case NetmdCmd_Eject: netmd_device_transport_cmd(device, cmd); break;
+        case NetmdCmd_UploadPlan: netmd_device_upload_run(device, cmd); break;
+        // Handled by the poster, which sets the flag the packet loop reads: by
+        // the time this arrives the thread is already inside the transfer.
+        case NetmdCmd_CancelUpload: break;
         case NetmdCmd_Quit: os_atomic_store_u32(&device->running, 0); break;
         default: break;
     }
@@ -469,12 +516,31 @@ void netmd_device_stop(NetmdDevice *device) {
     device->started = 0;
 }
 
+b32 netmd_device_upload(NetmdDevice *device, NetmdUploadPlan *plan) {
+    if (netmd_upload_active(&device->upload)) { return 0; }
+    device->upload_plan = plan;
+    StructZero(&device->upload);
+    // Marked active here, on the main thread, and not when the device thread
+    // picks the command up: otherwise a second click between the two would
+    // start a second burn.
+    os_atomic_store_u32(&device->upload.active, 1);
+    return netmd_device_post(device, NetmdCmd_UploadPlan, 0);
+}
+
+const NetmdUploadState *netmd_device_upload_state(const NetmdDevice *device) {
+    return &device->upload;
+}
+
 b32 netmd_device_post(NetmdDevice *device, u32 kind, u32 device_index) {
     NetmdCmd cmd;
     StructZero(&cmd);
     cmd.kind = kind;
     cmd.device = device_index;
     cmd.issued_us = os_time_now_us();
+    // The cancel flag is set on the way in, not when the command is popped: the
+    // device thread is busy inside the packet loop and will not pop anything
+    // until the transfer ends, which is exactly what we are trying to stop.
+    if (kind == NetmdCmd_CancelUpload) { os_atomic_store_u32(&device->upload.cancel, 1); }
     if (!netmd_cmd_push(device, &cmd)) { return 0; }
     os_semaphore_signal(device->wake, 1);
     return 1;

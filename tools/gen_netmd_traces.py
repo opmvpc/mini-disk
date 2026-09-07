@@ -217,6 +217,188 @@ def disc_title(trace, wide, title):
     close(trace, "contents")
 
 
+# --- T-042: the secure download (s4) -----------------------------------------
+# The frames below are the ones netmd_secure.c and netmd_upload.c emit, in the
+# order they emit them, and the ciphertext is computed by netmd_crypto_check.py
+# from the same standard tables - never read back from the C code. A test that
+# passes here means the C agrees with research/01 s4 and with an independent DES.
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import netmd_crypto_check as crypto
+
+SEC_HDR = b(0x18, 0x00, 0x08, 0x00, 0x46, 0xF0, 0x03, 0x01, 0x03)
+
+# What the injected test RNG hands out, first call then second: the same two
+# constants are spelled out in test_netmd_secure.c.
+HOST_NONCE = bytes.fromhex("0011223344556677")
+DEV_NONCE = bytes.fromhex("8899aabbccddeeff")
+RAW_KEY = bytes.fromhex("0123456789abcdef")
+SESSION_KEY = crypto.retail_mac(crypto.EKB_ROOT_KEY, HOST_NONCE + DEV_NONCE)
+DATA_KEY = crypto.des_block(crypto.KEK, RAW_KEY, decrypt=True)
+ZERO8 = bytes(8)
+
+EKB_CHAIN = bytes.fromhex("2545064deaca14f996bdc8a406c22b81"
+                          "fb60bddd0dbcab848a005e03194d3eda")
+EKB_SIGNATURE = bytes.fromhex("8f2bc352e86c5ed306dcae18d2f38c7f89b5e18555a105ea")
+LEAF_ID = bytes.fromhex("0100002 1cf060000".replace(" ", ""))
+
+
+def poll_idle(trace):
+    """One bare poll with nothing waiting: the closing poll of s4.11."""
+    trace.lines.append("> c1 01 00 00 00 00 04 00")
+    trace.lines.append("< " + POLL_IDLE)
+
+
+def secure(trace, cmd, data=b"", reply=None, placeholder=0x00, status=0x09):
+    request = b(0x00) + SEC_HDR + bytes((cmd, 0xFF)) + data
+    body = data if reply is None else reply
+    trace.command(request, bytes((status,)) + SEC_HDR + bytes((cmd, placeholder)) + body)
+
+
+def bulk(trace, payload):
+    """A bulk OUT on EP 0x02, as netmd_replay.c serialises it: endpoint, bytes."""
+    trace.lines.append("> 02 " + hexs(payload))
+
+
+def operating_status(trace, raw=0xC5FF):
+    trace.comment("s3.14 operating status, read before every setupDownload")
+    descriptor(trace, "status", 0x01)
+    request = b(0x00, 0x18, 0x09, 0x80, 0x01, 0x03, 0x30, 0x88, 0x02, 0x00, 0x30, 0x88, 0x05,
+                0x00, 0x30, 0x88, 0x06, 0x00, 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00)
+    reply = (b(0x09, 0x18, 0x09, 0x80, 0x01, 0x03, 0x30, 0x88, 0x02, 0x00, 0x30, 0x88, 0x05,
+               0x00, 0x30, 0x88, 0x06, 0x00, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x06,
+               0x88, 0x06) + u16(2) + u16(raw))
+    trace.command(request, reply)
+    close(trace, "status")
+
+
+def acquire(trace):
+    frame = b(0x00, 0xFF, 0x01, 0x0C) + bytes([0xFF] * 12)
+    trace.command(frame, b(0x09) + frame[1:])
+
+
+def release(trace):
+    frame = b(0x00, 0xFF, 0x01, 0x00) + bytes([0xFF] * 12)
+    trace.command(frame, b(0x09) + frame[1:])
+
+
+def session_begin(trace):
+    trace.comment("s4.14 preventive teardown: a session left open rejects the next one")
+    secure(trace, 0x21, b(0, 0, 0))
+    secure(trace, 0x81)
+    acquire(trace)
+    trace.comment("s4.13 new tracks must not come out checked-out")
+    secure(trace, 0x2B, b(0x00, 0x01))
+    trace.comment("s4.3 enter, leaf id, EKB, nonces")
+    secure(trace, 0x80)
+    secure(trace, 0x11, b"", reply=LEAF_ID)
+    ekb = (u16(0x48) + b(0x00, 0x00) + u16(0x48) + b(0x00, 0x00, 0x00, 0x02) +
+           b(0x00, 0x00, 0x00, 0x09) + b(0x26, 0x42, 0x26, 0x42) + b(0x00, 0x00, 0x00, 0x00) +
+           EKB_CHAIN + EKB_SIGNATURE)
+    secure(trace, 0x12, ekb, reply=u16(0x48) + b(0x00, 0x00) + u16(0x48) + b(0x00, 0x00),
+           placeholder=0x01)
+    secure(trace, 0x20, b(0, 0, 0) + HOST_NONCE, reply=b(0, 0, 0) + DEV_NONCE)
+
+
+def session_end(trace):
+    trace.comment("s4.14 teardown, unconditional, then the status that proves it came back")
+    secure(trace, 0x21, b(0, 0, 0))
+    secure(trace, 0x81)
+    release(trace)
+    operating_status(trace)
+
+
+def setup_download(trace):
+    plain = b(0x01, 0x01, 0x01, 0x01) + crypto.CONTENT_ID + crypto.KEK
+    cipher = crypto.des_cbc_encrypt(SESSION_KEY, ZERO8, plain)
+    trace.comment("s4.7 setupDownload: contentID + KEK, DES-CBC under the session key")
+    secure(trace, 0x22, b(0x00, 0x00) + cipher, reply=b(0x00, 0x00, 0x00))
+
+
+def send_track(trace, audio, track_number):
+    frames = len(audio) // 2048
+    total = len(audio) + 24
+    trace.comment("s4.11 sendTrack: %d frames, totalBytes %d" % (frames, total))
+    request = (b(0x00) + SEC_HDR + b(0x28, 0xFF) +
+               b(0x00, 0x01, 0x00, 0x10, 0x01, 0xFF, 0xFF, 0x00, 0x00, 0x06) +
+               frames.to_bytes(4, "big") + total.to_bytes(4, "big"))
+    interim_body = b(0x00, 0x01, 0x00, 0x10, 0x01, 0xFF, 0xFF, 0x00)
+    trace.command(request, b(0x0F) + SEC_HDR + b(0x28, 0x00) + interim_body)
+    header = b(0, 0, 0, 0) + len(audio).to_bytes(4, "big") + DATA_KEY + ZERO8
+    bulk(trace, header)
+    bulk(trace, crypto.des_cbc_encrypt(RAW_KEY, ZERO8, audio))
+    blob = crypto.des_cbc_encrypt(SESSION_KEY, ZERO8,
+                                  bytes(range(8)) + bytes(4) + crypto.CONTENT_ID)
+    body = b(0x00, 0x01, 0x00, 0x10, 0x01) + u16(track_number) + b(0x00) + bytes(10) + blob
+    reply = b(0x09) + SEC_HDR + b(0x28, 0x00) + body
+    trace.lines.append("> c1 01 00 00 00 00 04 00")
+    trace.lines.append("< 01 81 %02x 00" % len(reply))
+    trace.lines.append("> c1 81 00 00 00 00 %02x 00" % len(reply))
+    trace.lines.append("< " + hexs(reply))
+    trace.comment("s4.11 the extra poll that keeps the device in step")
+    poll_idle(trace)
+
+
+def write_track_title(trace, track_number, title):
+    payload = title.encode("cp932")
+    trace.comment("s3.9 read the old title, then write the new one")
+    open_read(trace, "utoc1")
+    track_title(trace, track_number, False, "")
+    close(trace, "utoc1")
+    descriptor(trace, "utoc1", 0x03)
+    request = (b(0x00, 0x18, 0x07, 0x02, 0x20, 0x18, 0x02) + u16(track_number) +
+               b(0x30, 0x00, 0x0A, 0x00, 0x50, 0x00) + u16(len(payload)) + b(0x00, 0x00) +
+               u16(0) + payload)
+    trace.command(request, b(0x09) + request[1:len(request) - len(payload)])
+    close(trace, "utoc1")
+
+
+def write_disc_title(trace, title):
+    payload = title.encode("cp932")
+    trace.comment("s6.5 the disc title, once, at the end - it carries the groups")
+    disc_title(trace, False, "")
+    descriptor(trace, "disc_title", 0x03)
+    request = (b(0x00, 0x18, 0x07, 0x02, 0x20, 0x18, 0x01, 0x00, 0x00) +
+               b(0x30, 0x00, 0x0A, 0x00, 0x50, 0x00) + u16(len(payload)) + b(0x00, 0x00) +
+               u16(0) + payload)
+    trace.command(request, b(0x09) + request[1:len(request) - len(payload)])
+    close(trace, "disc_title")
+    trace.comment("s3.9 the read round trip that flushes the TOC cache")
+    open_read(trace, "disc_title")
+    close(trace, "disc_title")
+
+
+def capacity_check(trace, disc):
+    trace.comment("s7.2 the free time, re-read from the device before writing")
+    open_read(trace, "root")
+    disc_capacity(trace, disc["recorded"], disc["total"], disc["available"])
+    close(trace, "root")
+
+
+TEST_AUDIO = bytes((i * 7 + 3) & 0xFF for i in range(2 * 2048))
+
+
+def upload_trace(title, tracks, cancel_after=None, disc_title_text=None):
+    trace = Trace(title)
+    capacity_check(trace, BLANK)
+    session_begin(trace)
+    auth = crypto.des_block(SESSION_KEY, ZERO8)
+    for index, name in enumerate(tracks):
+        operating_status(trace)
+        setup_download(trace)
+        send_track(trace, TEST_AUDIO, index)
+        write_track_title(trace, index, name)
+        trace.comment("s4.12 commit: DES-ECB(0^8, sessionKey)")
+        secure(trace, 0x48, b(0x00, 0x10, 0x01) + u16(index) + auth,
+               reply=b(0x00, 0x10, 0x01, 0x00, 0x00))
+        if cancel_after is not None and index == cancel_after:
+            break
+    if disc_title_text is not None:
+        write_disc_title(trace, disc_title_text)
+    session_end(trace)
+    return trace
+
+
 # --- a whole netmd_read_disc -------------------------------------------------
 
 def read_disc(trace, disc):
@@ -323,6 +505,22 @@ def main():
             os.path.join(here, "..", "tests", "netmd"))
     if not os.path.isdir(out_dir):
         os.makedirs(out_dir)
+    uploads = [
+        ("mzn505_upload_sp.trace",
+         upload_trace("MZ-N505, one SP track downloaded and titled", ["Test"],
+                      disc_title_text="Demo")),
+        ("mzn505_upload_cancel.trace",
+         upload_trace("MZ-N505, two tracks, cancelled after the first", ["Test", "Second"],
+                      cancel_after=0)),
+        ("mzn505_upload_resume.trace",
+         upload_trace("MZ-N505, resume: the first track is already committed", ["Second"],
+                      disc_title_text="Demo")),
+    ]
+    for name, trace in uploads:
+        path = os.path.join(out_dir, name)
+        with open(path, "w", encoding="ascii", newline="\n") as f:
+            f.write(trace.text())
+        print("%s: %d lines" % (path, len(trace.lines)))
     for name, title, disc in SCENARIOS:
         trace = Trace(title)
         read_disc(trace, disc)

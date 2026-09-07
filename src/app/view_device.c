@@ -33,6 +33,10 @@ typedef struct AppDevice {
     // reached us, and the moment the panel changed because of it.
     u64 change_us;
     b32 change_pending;
+    // T-042: what the last burn ended with, so the panel can say so after the
+    // run's state struct has gone quiet.
+    u32 burn_result;
+    u32 burn_done;
 } AppDevice;
 
 global AppDevice app_device;
@@ -128,6 +132,15 @@ void app_device_tick(void) {
                 os_debug_print(str8f(scratch.arena, "device: disc read in %u ms (%u tracks)\n",
                                      event.elapsed_ms, event.track_count));
                 scratch_end(scratch);
+            } break;
+            // T-042: the run's own state carries the live numbers, so these
+            // only record how it ended and keep the panel awake.
+            case NetmdEvent_UploadProgress: break;
+            case NetmdEvent_TrackDone: app_device.burn_done = event.track_count; break;
+            case NetmdEvent_UploadDone:
+            case NetmdEvent_UploadError: {
+                app_device.burn_result = event.result;
+                app_device.burn_done = event.track_count;
             } break;
             case NetmdEvent_Transport: {
                 // Ejecting flushes the TOC and empties the bay (s6.3): whatever
@@ -443,6 +456,86 @@ static void app_disc_group_row(const DiscLayout *disc, u32 group) {
     }
 }
 
+// --- the burn (T-042) -------------------------------------------------------
+// The plan handed to the device thread lives here, not on a frame arena: the
+// thread reads it for the whole length of the transfer, which is minutes.
+
+global NetmdUploadPlan app_burn_plan;
+global NetmdUploadEntry app_burn_entries[PLAN_ENTRY_MAX];
+
+b32 app_burn_running(void) {
+    return netmd_upload_active(netmd_device_upload_state(&app_device.thread));
+}
+
+// Builds the upload plan out of the current disc tab and posts it. The full
+// Transfer view is T-043; this is the one line of UI that proves the chain from
+// the plan to the disc is connected.
+void app_plan_burn(void) {
+    if (app_burn_running()) { return; }
+    if (app_device.state != AppDeviceState_Connected) { return; }
+    const PlanDisc *disc = &app.plan.discs[app.plan_disc];
+    StructZero(&app_burn_plan);
+    app_burn_plan.entries = app_burn_entries;
+    for (u32 i = 0; i < disc->entry_count; i += 1) {
+        String8 path = lib_track_path(&app.library, disc->track_id[i]);
+        // A missing source is skipped rather than aborting the burn: the plan
+        // view already shows it in red, and the rest of the disc is still good.
+        if (path.size == 0 || path.size > NETMD_UPLOAD_PATH_MAX) { continue; }
+        NetmdUploadEntry *entry = &app_burn_entries[app_burn_plan.count];
+        StructZero(entry);
+        entry->path_size = (u32)path.size;
+        mem_copy(entry->path, path.str, path.size);
+        PlanTitlePreview *preview = push_struct(ui_frame_arena(), PlanTitlePreview);
+        plan_toc_preview(plan_entry_title(&app.plan, &app.library, app.plan_disc, i), 0, preview);
+        entry->title_size = (u32)Min(preview->size, (u64)NETMD_TITLE_MAX);
+        mem_copy(entry->title, preview->text, entry->title_size);
+        entry->duration_ms = disc->duration_ms[i];
+        pipeline_config_defaults(&entry->config);
+        entry->config.format = PIPELINE_FORMAT_SP_BE;
+        app_burn_plan.count += 1;
+    }
+    if (app_burn_plan.count == 0) { return; }
+    // s3.10: the disc title carries the groups, compiled once against whatever
+    // the TOC budget leaves after the track titles.
+    PlanTocBudget *budget = push_struct(ui_frame_arena(), PlanTocBudget);
+    plan_toc_budget(&app.plan, &app.library, app.plan_disc, budget);
+    app_burn_plan.disc_title_size = (u32)Min(budget->raw_size, (u64)NETMD_DISC_TITLE_MAX);
+    mem_copy(app_burn_plan.disc_title, budget->raw, app_burn_plan.disc_title_size);
+    app_burn_plan.write_disc_title = app_burn_plan.disc_title_size != 0;
+    netmd_device_upload(&app_device.thread, &app_burn_plan);
+}
+
+// One line in the Disc panel while a burn runs: which track, how far, how long
+// left, and the way to stop it.
+static void app_device_burn_line(void) {
+    const UI_Theme *theme = ui_theme();
+    const NetmdUploadState *state = netmd_device_upload_state(&app_device.thread);
+    if (!netmd_upload_active(state)) {
+        if (app_device.burn_result == NetmdResult_Ok && app_device.burn_done != 0) {
+            app_device_line(UI_FontStyle_Caption, theme->fg_secondary,
+                            str8f(ui_frame_arena(), app_str_c(Str_BurnDone),
+                                  app_device.burn_done));
+        } else if (app_device.burn_result != NetmdResult_Ok) {
+            app_device_line(UI_FontStyle_Caption, theme->warning,
+                            str8f(ui_frame_arena(), app_str_c(Str_BurnFailed),
+                                  app_device.burn_result));
+        }
+        return;
+    }
+    u64 total = (u64)os_atomic_load_u64((volatile u64 *)&state->bytes_total);
+    u64 done = (u64)os_atomic_load_u64((volatile u64 *)&state->bytes_done) +
+               (u64)os_atomic_load_u64((volatile u64 *)&state->track_bytes);
+    u32 percent = (total != 0) ? (u32)((done * 100u) / total) : 0;
+    u32 entry = os_atomic_load_u32((volatile u32 *)&state->entry);
+    app_device_line(UI_FontStyle_Ui, theme->fg_primary,
+                    str8f(ui_frame_arena(), app_str_c(Str_BurnProgress), entry + 1,
+                          app_burn_plan.count, percent,
+                          app_duration(netmd_upload_eta_s(state))));
+    if (ui_button(str8f(ui_frame_arena(), "%S###burnstop", app_str(Str_BurnStop))).clicked) {
+        netmd_device_post(&app_device.thread, NetmdCmd_CancelUpload, 0);
+    }
+}
+
 // The whole panel below the device status: title, gauge, transport, tracks.
 void app_device_disc_panel(void) {
     const UI_Theme *theme = ui_theme();
@@ -478,6 +571,7 @@ void app_device_disc_panel(void) {
         app_device_line(UI_FontStyle_Caption, theme->warning, app_str(Str_DiscProtected));
     }
 
+    app_device_burn_line();
     app_disc_build_capacity(disc, &app_disc_capacity);
     ui_spacer(ui_px(ui_dp(theme->space[UI_Space_4]), 1.0f));
     app_disc_gauge(&app_disc_capacity);

@@ -25,9 +25,12 @@
 #include "../../platform/platform.h"
 #include "netmd_transport.h"
 
-// The longest frame v1 sends is sendKeyData at ~90 bytes; 512 leaves room for
-// the bulk headers of T-021 without making the struct heavy.
-#define NETMD_REPLAY_MAX_BYTES 512
+// The longest control frame v1 sends is sendKeyData at ~90 bytes, but T-042 puts
+// whole audio packets on the bulk pipe and a transcript has to pin those down
+// byte for byte too. 8 KB covers a four SP frame packet plus its header, which
+// is what the download fixtures use - a real 1 MB packet would make a 3 MB text
+// file and prove nothing more.
+#define NETMD_REPLAY_MAX_BYTES 8192
 
 typedef enum NetmdReplayFail {
     NetmdReplayFail_None = 0,

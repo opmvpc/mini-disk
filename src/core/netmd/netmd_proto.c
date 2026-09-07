@@ -294,8 +294,11 @@ static u32 netmd_status_result(u8 status) {
     }
 }
 
-u32 netmd_exchange(NetmdSession *session, Arena *arena, String8 request, u32 budget_ms,
-                   String8 *out_reply) {
+// Send and receive are split out of netmd_exchange because one command does not
+// fit "one frame out, one frame in": sendTrack (0x28) answers INTERIM, then
+// expects megabytes of audio on the bulk pipe, and only then answers for real
+// (research/01 s4.11). netmd_secure.c drives that half by half.
+u32 netmd_send_frame(NetmdSession *session, Arena *arena, String8 request) {
     if (!netmd_transport_bound(&session->transport)) {
         session->usb_error = OsUsbError_NotOpen;
         return NetmdResult_Usb;
@@ -326,9 +329,15 @@ u32 netmd_exchange(NetmdSession *session, Arena *arena, String8 request, u32 bud
                              (u32)request.size, NETMD_TRANSFER_TIMEOUT_MS);
     if (got < 0) { return netmd_usb_fail(session, got); }
     session->exchanges += 1;
+    return NetmdResult_Ok;
+}
 
-    // s3.2: an INTERIM is not an answer, it is a promise of one. Poll again for
-    // the real reply rather than resending, which would queue a second command.
+// s3.2: an INTERIM is not an answer, it is a promise of one. Poll again for the
+// real reply rather than resending, which would queue a second command.
+// `follow_interim` off returns the INTERIM itself, which is what sendTrack
+// needs: it is the go-ahead for the bulk transfer, not a failure.
+u32 netmd_receive_frame(NetmdSession *session, Arena *arena, u32 budget_ms, b32 follow_interim,
+                        String8 *out_reply) {
     for (u32 attempt = 0;; attempt += 1) {
         u8 reply_request = NETMD_REQ_READ;
         u8 reply_length = 0;
@@ -338,9 +347,11 @@ u32 netmd_exchange(NetmdSession *session, Arena *arena, String8 request, u32 bud
         result = netmd_read_reply(session, arena, reply_request, reply_length, &reply);
         if (result != NetmdResult_Ok) { return result; }
         session->last_status = reply.str[0];
-        if (reply.str[0] != NetmdStatus_Interim && reply.str[0] != NetmdStatus_InTransition) {
+        b32 pending = (reply.str[0] == NetmdStatus_Interim ||
+                       reply.str[0] == NetmdStatus_InTransition);
+        if (!pending || !follow_interim) {
             *out_reply = reply;
-            return netmd_status_result(reply.str[0]);
+            return pending ? NetmdResult_Ok : netmd_status_result(reply.str[0]);
         }
         if (attempt >= NETMD_INTERIM_RETRIES) {
             *out_reply = reply;
@@ -349,6 +360,13 @@ u32 netmd_exchange(NetmdSession *session, Arena *arena, String8 request, u32 bud
         // s3.2: 100 * (2^n - 1) ms between attempts - 0, 100, 300, 700, 1500.
         os_sleep_us((u64)100000u * (((u64)1 << attempt) - 1u));
     }
+}
+
+u32 netmd_exchange(NetmdSession *session, Arena *arena, String8 request, u32 budget_ms,
+                   String8 *out_reply) {
+    u32 result = netmd_send_frame(session, arena, request);
+    if (result != NetmdResult_Ok) { return result; }
+    return netmd_receive_frame(session, arena, budget_ms, 1, out_reply);
 }
 
 u32 netmd_command(NetmdSession *session, Arena *arena, u32 budget_ms, String8 *out_reply,

@@ -299,11 +299,14 @@ b32 netmd_trace_write(NetmdTrace *trace, String8 path) {
 
 b32 netmd_replay_done(const NetmdReplay *replay) {
     if (replay->fail != NetmdReplayFail_None) { return 0; }
-    // A copy walks what is left: asking the question must not consume it.
-    // mem_copy and not an assignment: /GL turns a struct copy into a memcpy the
-    // no-CRT link cannot resolve (CONVENTIONS, T-004).
-    NetmdReplay tail;
-    mem_copy(&tail, replay, sizeof(tail));
-    NetmdReplayLine line = netmd_replay_next_line(&tail);
+    // Asking the question must not consume what is left, so the cursor is put
+    // back afterwards. It used to be a copy of the whole struct; since T-042 a
+    // transcript can hold an audio packet and that copy is 16 KB of stack.
+    NetmdReplay *cursor = (NetmdReplay *)replay;
+    u64 at = cursor->at;
+    u64 line_number = cursor->line;
+    NetmdReplayLine line = netmd_replay_next_line(cursor);
+    cursor->at = at;
+    cursor->line = line_number;
     return line.kind == 0;
 }

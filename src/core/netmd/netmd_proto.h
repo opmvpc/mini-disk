@@ -47,6 +47,8 @@ typedef enum NetmdResult {
     NetmdResult_Timeout,         // the budget ran out with no reply
     NetmdResult_Usb,             // the transport failed; `usb_error` says how
     NetmdResult_Malformed,       // the reply does not fit the pattern
+    NetmdResult_Cancelled,       // T-042: the user stopped a transfer in flight
+    NetmdResult_NoSpace,         // T-042: less free time on the disc than the plan needs
     NetmdResult_COUNT
 } NetmdResult;
 
@@ -102,6 +104,13 @@ md_inline u32 netmd_bcd_to_u8(u8 b) { return (u32)((b >> 4) * 10u + (b & 0x0Fu))
 // document's ("09 1806 ...").
 u32 netmd_exchange(NetmdSession *session, Arena *arena, String8 request, u32 budget_ms,
                    String8 *out_reply);
+// The two halves of an exchange, for the one command that has something to do
+// between them: sendTrack answers INTERIM, takes the audio on the bulk pipe,
+// and answers again (research/01 s4.11). `follow_interim` off hands the INTERIM
+// back instead of waiting past it.
+u32 netmd_send_frame(NetmdSession *session, Arena *arena, String8 request);
+u32 netmd_receive_frame(NetmdSession *session, Arena *arena, u32 budget_ms, b32 follow_interim,
+                        String8 *out_reply);
 // The same, building the request from a format string in one call.
 u32 netmd_command(NetmdSession *session, Arena *arena, u32 budget_ms, String8 *out_reply,
                   const char *fmt, ...);
