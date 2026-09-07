@@ -112,6 +112,9 @@ u64 netmd_sjis_to_utf8(const u8 *in, u64 size, u8 *out, u64 capacity);
 
 // --- time --------------------------------------------------------------------
 NetmdTime netmd_time_make(u32 hours, u32 minutes, u32 seconds, u32 frames);
+// The other way round: a TOC frame count back into hh:mm:ss:ff (netmd_backup.c
+// stores frames, because that is the one lossless form).
+NetmdTime netmd_time_from_frames(u32 total);
 
 // --- the group syntax of s3.10 ----------------------------------------------
 // Takes the raw disc title (UTF-8, half or full width) and fills in `title`,
@@ -134,6 +137,12 @@ u32 netmd_get_track_info(NetmdSession *session, Arena *arena, u32 track, NetmdTr
 u32 netmd_get_track_title(NetmdSession *session, Arena *arena, u32 track, b32 wide, String8 *out);
 // Paginated by 255 bytes, because that is all a poll length byte can say (s3.8.1).
 u32 netmd_get_disc_title(NetmdSession *session, Arena *arena, b32 wide, String8 *out);
+// The same two, plus the raw Shift-JIS bytes the TOC holds. Only a writer wants
+// them: `oldLen` counts those bytes and nothing else (s3.9, netmd_edit.c).
+u32 netmd_get_track_title_ex(NetmdSession *session, Arena *arena, u32 track, b32 wide,
+                             String8 *out, String8 *out_sjis);
+u32 netmd_get_disc_title_ex(NetmdSession *session, Arena *arena, b32 wide, String8 *out,
+                            String8 *out_sjis);
 
 // The whole disc in one call: what the device thread runs on ReadDisc.
 u32 netmd_read_disc(NetmdSession *session, Arena *arena, DiscLayout *out);

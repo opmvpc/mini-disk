@@ -24,6 +24,24 @@ typedef struct AppDevice {
     u32 disc_result;
     u32 disc_elapsed_ms;
     u32 group_collapsed;  // one bit per group, NETMD_GROUP_MAX <= 32
+    // T-022, editing. The selection is over track indices (the same mask an
+    // edit request carries), and the cursor is where the keyboard is.
+    u32 selection[NETMD_MASK_WORDS];
+    u32 cursor;
+    u32 rename_track;  // the track being renamed, + 1
+    UI_TextInput rename;
+    b32 focus_editor;
+    UI_Key rows_key;  // the box the disc keys are routed to
+    b32 drag;
+    u32 drag_from;
+    u32 drag_to;
+    // The edit waiting for the user to confirm it, and the simulation behind
+    // the panel that asks (ADR-011 D4). Nothing is posted before Apply.
+    NetmdEditRequest pending;
+    b32 confirm;
+    u32 last_refusal;
+    u32 last_writes;
+    b32 toc_dirty;
     u16 vid;
     u16 pid;
     i32 error;
@@ -36,6 +54,37 @@ typedef struct AppDevice {
 } AppDevice;
 
 global AppDevice app_device;
+// The layout the edit would produce and the diff the panel draws. 70 KB of BSS
+// rather than a stack frame or an arena: it is written once per gesture and
+// read for as long as the confirmation panel is up.
+global DiscLayout app_disc_after;
+global DiscDiff app_disc_diff;
+
+// --- the selection (T-022) ----------------------------------------------------
+// It is the mask an edit request carries, so a gesture is one memcpy away from
+// being an edit: nothing translates between "what is selected" and "what will
+// be erased".
+
+static void app_device_clear_selection(void) {
+    for (u32 i = 0; i < NETMD_MASK_WORDS; i += 1) { app_device.selection[i] = 0; }
+}
+
+static b32 app_device_selected(u32 track) { return netmd_mask_get(app_device.selection, track); }
+
+static u32 app_device_selected_count(void) {
+    return netmd_mask_count(app_device.selection, NETMD_TRACK_MAX);
+}
+
+static void app_device_select_only(u32 track) {
+    app_device_clear_selection();
+    netmd_mask_set(app_device.selection, track);
+    app_device.cursor = track;
+}
+
+static void app_device_select_toggle(u32 track) {
+    app_device.selection[track >> 5] ^= 1u << (track & 31u);
+    app_device.cursor = track;
+}
 
 static String8 app_device_name(void) {
     return str8(app_device.name, app_device.name_size);
@@ -94,6 +143,9 @@ void app_device_tick(void) {
         if (app_device.name_size != 0) {
             mem_copy(app_device.name, event.name, app_device.name_size);
         }
+        // s6.3: every event carries it, so the banner and the refusal to close
+        // never lag a frame behind the device thread.
+        app_device.toc_dirty = (b32)event.toc_dirty;
         switch (event.kind) {
             case NetmdEvent_Devices: {
                 if (event.device_count == 0) {
@@ -137,6 +189,15 @@ void app_device_tick(void) {
                     netmd_device_post(&app_device.thread, NetmdCmd_ReadDisc, 0);
                 }
             } break;
+            case NetmdEvent_Edit: {
+                // The device thread answers every edit exactly once, and again
+                // when it has confirmed the write by reading the disc back.
+                app_device.last_refusal = event.refusal;
+                app_device.last_writes = event.writes;
+                if (event.refusal == NetmdEditRefusal_None && event.result == NetmdResult_Ok) {
+                    app_device_clear_selection();
+                }
+            } break;
             case NetmdEvent_Closed: app_device_set_state(AppDeviceState_None); break;
             case NetmdEvent_Error: {
                 app_device.error = event.error;
@@ -147,6 +208,7 @@ void app_device_tick(void) {
         }
     }
 }
+
 
 // The panel header line, right of the title.
 String8 app_device_subtitle(void) {
@@ -366,13 +428,227 @@ static void app_disc_transport_bar(void) {
     }
 }
 
+
+// --- editing the disc (T-022) ---------------------------------------------------
+// Every gesture below does exactly one thing: it fills in a request and asks
+// netmd_edit_simulate what it would do. Nothing is posted to the device thread
+// until the user has seen that answer and pressed Apply (ADR-011 D4).
+
+static void app_device_rename_open(u32 track) {
+    const DiscLayout *disc = netmd_device_disc(&app_device.thread);
+    if (!disc || track >= disc->track_count) { return; }
+    app_device.rename_track = track + 1;
+    ui_text_input_init(&app_device.rename,
+                       str8((u8 *)disc->tracks[track].title, disc->tracks[track].title_size));
+    ui_text_input_select_all(&app_device.rename);
+    app_device.focus_editor = 1;
+}
+
+static void app_device_edit_prepare(u32 kind, u32 track, u32 dest, String8 title,
+                                    const u32 *mask) {
+    const DiscLayout *disc = netmd_device_disc(&app_device.thread);
+    if (!disc) { return; }
+    NetmdEditRequest *request = &app_device.pending;
+    StructZero(request);
+    request->kind = kind;
+    request->track = track;
+    request->dest = dest;
+    request->title_size = (u32)Min(title.size, (u64)NETMD_TITLE_MAX);
+    if (request->title_size != 0) { mem_copy(request->title, title.str, request->title_size); }
+    if (mask) {
+        for (u32 i = 0; i < NETMD_MASK_WORDS; i += 1) { request->mask[i] = mask[i]; }
+    }
+    netmd_edit_simulate(disc, request, &app_disc_after, &app_disc_diff);
+    app_device.last_refusal = app_disc_diff.refusal;
+    app_device.last_writes = 0;
+    // A refused edit is not a modal: the reason goes under the track list and
+    // the user is left exactly where they were.
+    app_device.confirm = app_disc_diff.allowed ? 1 : 0;
+}
+
+static void app_device_rename_commit(b32 keep) {
+    if (app_device.rename_track == 0) { return; }
+    u32 track = app_device.rename_track - 1;
+    app_device.rename_track = 0;
+    if (!keep) { return; }
+    // One editor, two targets: the row number NETMD_TRACK_MAX + 1 is the disc
+    // title itself, which no track index can ever be.
+    if (track == NETMD_TRACK_MAX) {
+        app_device_edit_prepare(NetmdEditKind_RenameDisc, 0, 0,
+                                ui_text_input_string(&app_device.rename), 0);
+        return;
+    }
+    app_device_edit_prepare(NetmdEditKind_RenameTrack, track, 0,
+                            ui_text_input_string(&app_device.rename), 0);
+}
+
+// The one place a refusal turns into a sentence. Every value of the enum has
+// one: "it did not work" is not something a user can act on.
+static Str app_device_refusal_string(u32 refusal) {
+    switch (refusal) {
+        case NetmdEditRefusal_NoDisc: return Str_DiscRefusedNoDisc;
+        case NetmdEditRefusal_Protected: return Str_DiscRefusedProtected;
+        case NetmdEditRefusal_TrackProtected: return Str_DiscRefusedTrackProtected;
+        case NetmdEditRefusal_Budget: return Str_DiscRefusedBudget;
+        case NetmdEditRefusal_Nothing: return Str_DiscRefusedNothing;
+        case NetmdEditRefusal_Grouped: return Str_DiscRefusedGrouped;
+        case NetmdEditRefusal_Backup: return Str_DiscRefusedBackup;
+        default: return Str_DiscRefusedRange;
+    }
+}
+
+// The verb of the confirmation panel: what is about to happen, said in words
+// and with the numbers in it ("Erase 3 tracks"), never "Are you sure?".
+static String8 app_device_edit_verb(void) {
+    const NetmdEditRequest *request = &app_device.pending;
+    switch (request->kind) {
+        case NetmdEditKind_RenameDisc: return app_str(Str_DiscVerbRenameDisc);
+        case NetmdEditKind_RenameTrack:
+            return str8f(ui_frame_arena(), app_str_c(Str_DiscVerbRenameTrack),
+                         request->track + 1);
+        case NetmdEditKind_MoveTrack:
+            return str8f(ui_frame_arena(), app_str_c(Str_DiscVerbMove), request->track + 1,
+                         request->dest + 1);
+        case NetmdEditKind_EraseTracks:
+            return str8f(ui_frame_arena(), app_str_c(Str_DiscVerbErase), app_disc_diff.changed);
+        case NetmdEditKind_EraseDisc:
+            return str8f(ui_frame_arena(), app_str_c(Str_DiscVerbEraseDisc),
+                         app_disc_diff.tracks_before);
+        case NetmdEditKind_CreateGroup:
+            return str8f(ui_frame_arena(), app_str_c(Str_DiscVerbGroup), app_disc_diff.changed);
+        default: return app_str(Str_DiscVerbUngroup);
+    }
+}
+
+static void app_device_edit_keys(const DiscLayout *disc) {
+    if (ui_focus_key() != app_device.rows_key || ui_popup_active()) { return; }
+    for (u32 i = 0; i < ui_key_event_count(); i += 1) {
+        UI_KeyEvent event = ui_key_event(i);
+        b32 ctrl = (event.modifiers & OsMod_Ctrl) != 0;
+        b32 shift = (event.modifiers & OsMod_Shift) != 0;
+        switch (event.key) {
+            case OsKey_F2: app_device_rename_open(app_device.cursor); break;
+            case OsKey_Delete: {
+                app_device_edit_prepare(NetmdEditKind_EraseTracks, 0, 0, str8(0, 0),
+                                        app_device.selection);
+            } break;
+            case OsKey_G: {
+                if (ctrl && shift) {
+                    if (app_device.cursor < disc->track_count &&
+                        disc->tracks[app_device.cursor].group != NETMD_NO_GROUP) {
+                        app_device_edit_prepare(NetmdEditKind_DissolveGroup,
+                                                disc->tracks[app_device.cursor].group, 0,
+                                                str8(0, 0), 0);
+                    }
+                } else if (ctrl) {
+                    app_device_edit_prepare(NetmdEditKind_CreateGroup, 0, 0,
+                                            app_str(Str_DiscEditNewGroup), app_device.selection);
+                }
+            } break;
+            default: break;
+        }
+    }
+}
+
+// The bar of the four gestures, for the hands that do not know the shortcuts.
+static void app_device_edit_bar(const DiscLayout *disc) {
+    const UI_Theme *theme = ui_theme();
+    UI_PrefWidth(ui_pct(1.0f, 0.0f))
+    UI_PrefHeight(ui_px(ui_dp(theme->row_standard), 1.0f))
+    UI_ChildLayoutAxis(Axis2_X) {
+        UI_Box *row = ui_build_box_from_key(0, 0);
+        UI_Parent(row) {
+            ui_spacer(ui_px(ui_dp(theme->space[UI_Space_12]), 1.0f));
+            if (ui_button(str8f(ui_frame_arena(), "%S###drename", app_str(Str_DiscEditRename)))
+                        .clicked) {
+                app_device_rename_open(app_device.cursor);
+            }
+            ui_tooltip(app_str(Str_DiscEditRenameHint));
+            ui_spacer(ui_px(ui_dp(theme->space[UI_Space_4]), 1.0f));
+            if (ui_button(str8f(ui_frame_arena(), "%S###dgroupmake", app_str(Str_DiscEditGroup)))
+                        .clicked) {
+                app_device_edit_prepare(NetmdEditKind_CreateGroup, 0, 0,
+                                        app_str(Str_DiscEditNewGroup), app_device.selection);
+            }
+            ui_tooltip(app_str(Str_DiscEditGroupHint));
+            ui_spacer(ui_px(ui_dp(theme->space[UI_Space_4]), 1.0f));
+            if (ui_button(str8f(ui_frame_arena(), "%S###dungroup", app_str(Str_DiscEditUngroup)))
+                        .clicked &&
+                app_device.cursor < disc->track_count &&
+                disc->tracks[app_device.cursor].group != NETMD_NO_GROUP) {
+                app_device_edit_prepare(NetmdEditKind_DissolveGroup,
+                                        disc->tracks[app_device.cursor].group, 0, str8(0, 0), 0);
+            }
+            ui_tooltip(app_str(Str_DiscEditUngroupHint));
+            ui_spacer(ui_px(ui_dp(theme->space[UI_Space_4]), 1.0f));
+            if (ui_button(str8f(ui_frame_arena(), "%S###derase", app_str(Str_DiscEditErase)))
+                        .clicked) {
+                app_device_edit_prepare(NetmdEditKind_EraseTracks, 0, 0, str8(0, 0),
+                                        app_device.selection);
+            }
+            ui_tooltip(app_str(Str_DiscEditEraseHint));
+        }
+    }
+}
+
+// The diff, in the panel, with the verb at the top and the budget at the
+// bottom. This is the screen ADR-011 D4 exists for.
+static void app_device_confirm_panel(void) {
+    const UI_Theme *theme = ui_theme();
+    ui_separator();
+    app_device_line(UI_FontStyle_Emphasis, theme->warning, app_str(Str_DiscConfirmTitle));
+    app_device_line(UI_FontStyle_Ui, theme->fg_primary, app_device_edit_verb());
+    if (app_disc_diff.before_size != 0) {
+        app_device_line(UI_FontStyle_Caption, theme->fg_secondary,
+                        str8f(ui_frame_arena(), app_str_c(Str_DiscDiffBefore),
+                              str8(app_disc_diff.before, app_disc_diff.before_size)));
+    }
+    if (app_disc_diff.after_size != 0) {
+        app_device_line(UI_FontStyle_Caption, theme->fg_secondary,
+                        str8f(ui_frame_arena(), app_str_c(Str_DiscDiffAfter),
+                              str8(app_disc_diff.after, app_disc_diff.after_size)));
+    }
+    app_device_line(UI_FontStyle_Caption, theme->fg_muted,
+                    str8f(ui_frame_arena(), app_str_c(Str_DiscDiffBudget),
+                          app_disc_diff.cells_after, app_disc_diff.chars_free_after));
+    app_device_line(UI_FontStyle_Caption, theme->fg_muted,
+                    str8f(ui_frame_arena(), app_str_c(Str_DiscDiffWrites), app_disc_diff.writes));
+    app_device_line(UI_FontStyle_Caption, theme->fg_muted, app_str(Str_DiscDiffBackup));
+
+    UI_PrefWidth(ui_pct(1.0f, 0.0f))
+    UI_PrefHeight(ui_px(ui_dp(theme->row_standard), 1.0f))
+    UI_ChildLayoutAxis(Axis2_X) {
+        UI_Box *row = ui_build_box_from_key(0, 0);
+        UI_Parent(row) {
+            ui_spacer(ui_px(ui_dp(theme->space[UI_Space_12]), 1.0f));
+            if (ui_button_primary(str8f(ui_frame_arena(), "%S###dapply",
+                                        app_str(Str_DiscConfirmApply)))
+                        .clicked) {
+                netmd_device_post_edit(&app_device.thread, &app_device.pending);
+                app_device.confirm = 0;
+            }
+            ui_spacer(ui_px(ui_dp(theme->space[UI_Space_4]), 1.0f));
+            if (ui_button(str8f(ui_frame_arena(), "%S###dcancel",
+                                app_str(Str_DiscConfirmCancel)))
+                        .clicked) {
+                app_device.confirm = 0;
+            }
+        }
+    }
+    ui_separator();
+}
+
 static void app_disc_track_row(const DiscLayout *disc, u32 index, f32 indent) {
     const UI_Theme *theme = ui_theme();
     const NetmdTrack *track = &disc->tracks[index];
+    b32 selected = app_device_selected(index);
+    UI_Box *row = 0;
     UI_PrefWidth(ui_pct(1.0f, 0.0f))
     UI_PrefHeight(ui_px(ui_dp(theme->row_compact), 1.0f))
+    UI_BgColor(selected ? theme->row_selected : theme->surface)
     UI_ChildLayoutAxis(Axis2_X) {
-        UI_Box *row = ui_build_box_from_key(0, 0);
+        row = ui_build_box(UI_Clickable | (selected ? UI_DrawBackground : 0),
+                           str8f(ui_frame_arena(), "###dtrack%u", index));
         UI_Parent(row) {
             ui_spacer(ui_px(indent, 1.0f));
             app_cell_number(ui_dp(24.0f), str8f(ui_frame_arena(), "%u", index + 1),
@@ -399,11 +675,29 @@ static void app_disc_track_row(const DiscLayout *disc, u32 index, f32 indent) {
                     badge->display_string = str8_cstr(app_mode_names[mode]);
                 }
             }
-            String8 title = str8((u8 *)track->title, track->title_size);
-            if (title.size == 0) { title = app_str(Str_DiscTrackUntitled); }
-            app_cell(ui_pct(1.0f, 0.0f), title,
-                     track->title_size ? theme->fg_primary : theme->fg_disabled, 0,
-                     UI_TextAlign_Left);
+            if (app_device.rename_track == index + 1) {
+                // The inline editor takes the title cell whole; Enter commits,
+                // Escape puts back what was there - the plan panel's gesture,
+                // because a disc track and a plan entry are renamed the same
+                // way (T-032).
+                UI_PrefWidth(ui_pct(1.0f, 0.0f))
+                UI_PrefHeight(ui_pct(1.0f, 1.0f)) {
+                    UI_Box *slot = ui_build_box_from_key(0, 0);
+                    UI_Parent(slot) {
+                        UI_Signal field = ui_text_input(&app_device.rename, str8_lit(""));
+                        if (app_device.focus_editor) {
+                            ui_set_focus(field.box->key, 1);
+                            app_device.focus_editor = 0;
+                        }
+                    }
+                }
+            } else {
+                String8 title = str8((u8 *)track->title, track->title_size);
+                if (title.size == 0) { title = app_str(Str_DiscTrackUntitled); }
+                app_cell(ui_pct(1.0f, 0.0f), title,
+                         track->title_size ? theme->fg_primary : theme->fg_disabled, 0,
+                         UI_TextAlign_Left);
+            }
             if (track->protect) {
                 app_cell(ui_px(ui_dp(theme->space[UI_Space_12]), 1.0f), str8_lit("\xE2\x9C\xB1"),
                          theme->warning, 0, UI_TextAlign_Center);
@@ -412,6 +706,24 @@ static void app_disc_track_row(const DiscLayout *disc, u32 index, f32 indent) {
             app_cell_number(ui_dp(48.0f), app_duration((u32)(track->duration_ms / 1000u)),
                             theme->fg_secondary);
         }
+    }
+    if (app_device.rename_track != 0) { return; }
+    UI_Signal signal = ui_signal(row);
+    if (signal.hovering) { app_device.drag_to = index; }
+    if (signal.clicked) {
+        if (signal.press_modifiers & OsMod_Ctrl) {
+            app_device_select_toggle(index);
+        } else {
+            app_device_select_only(index);
+        }
+        ui_set_focus(app_device.rows_key, 0);
+    }
+    if (signal.double_clicked) { app_device_rename_open(index); }
+    // A press that travels four pixels is a reorder, not a click (T-032).
+    if (signal.dragging && !app_device.drag && abs_f32(signal.drag_delta.y) > 4.0f) {
+        app_device.drag = 1;
+        app_device.drag_from = index;
+        app_device.drag_to = index;
     }
 }
 
@@ -463,10 +775,43 @@ void app_device_disc_panel(void) {
         return;
     }
 
-    String8 title = str8((u8 *)disc->title, disc->title_size);
-    if (title.size == 0) { title = app_str(Str_DiscUntitled); }
-    app_device_line(UI_FontStyle_Emphasis,
-                    disc->title_size ? theme->fg_primary : theme->fg_disabled, title);
+    // The disc title, and the cells the whole TOC spends (D3): both are read
+    // from the layout the device thread published, never recomputed elsewhere.
+    u32 app_disc_cells = netmd_layout_cells(disc, 0, 0, 0);
+    if (app_device.rename_track == NETMD_TRACK_MAX + 1) {
+        UI_PrefWidth(ui_pct(1.0f, 0.0f))
+        UI_PrefHeight(ui_px(ui_dp(theme->row_standard), 1.0f)) {
+            UI_Box *slot = ui_build_box_from_key(0, 0);
+            UI_Parent(slot) {
+                UI_Signal field = ui_text_input(&app_device.rename, str8_lit(""));
+                if (app_device.focus_editor) {
+                    ui_set_focus(field.box->key, 1);
+                    app_device.focus_editor = 0;
+                }
+            }
+        }
+    } else {
+        String8 title = str8((u8 *)disc->title, disc->title_size);
+        if (title.size == 0) { title = app_str(Str_DiscUntitled); }
+        UI_PrefWidth(ui_pct(1.0f, 0.0f))
+        UI_PrefHeight(ui_px(ui_dp(theme->row_compact), 1.0f)) {
+            UI_Box *box = ui_build_box(UI_Clickable, str8_lit("###ddisctitle"));
+            UI_Parent(box) {
+                app_device_line(UI_FontStyle_Emphasis,
+                                disc->title_size ? theme->fg_primary : theme->fg_disabled,
+                                title);
+            }
+            if (ui_signal(box).double_clicked) {
+                // The disc title is renamed like a track title; the editor tells
+                // them apart by a row number no track can have.
+                app_device.rename_track = NETMD_TRACK_MAX + 1;
+                ui_text_input_init(&app_device.rename,
+                                   str8((u8 *)disc->title, disc->title_size));
+                ui_text_input_select_all(&app_device.rename);
+                app_device.focus_editor = 1;
+            }
+        }
+    }
     app_device_line(UI_FontStyle_Caption, theme->fg_secondary,
                     str8f(ui_frame_arena(), app_str_c(Str_DiscSummary), disc->track_count,
                           app_duration((u32)(disc->capacity.recorded.ms / 1000u)),
@@ -478,21 +823,98 @@ void app_device_disc_panel(void) {
         app_device_line(UI_FontStyle_Caption, theme->warning, app_str(Str_DiscProtected));
     }
 
+    // s6.3: the device is holding a TOC the disc does not have yet. This is the
+    // banner ADR-011 D4 asks for, and the reason the app will not close.
+    if (app_device.toc_dirty) {
+        app_device_line(UI_FontStyle_Emphasis, theme->warning, app_str(Str_DiscTocDirty));
+        app_device_line(UI_FontStyle_Caption, theme->fg_secondary,
+                        app_str(Str_DiscTocDirtyHint));
+    }
+
     app_disc_build_capacity(disc, &app_disc_capacity);
     ui_spacer(ui_px(ui_dp(theme->space[UI_Space_4]), 1.0f));
     app_disc_gauge(&app_disc_capacity);
+    // The title budget, in the same panel as the audio one: both are finite,
+    // both are shared, and only one of them is usually known about (D3).
+    app_device_line(UI_FontStyle_Caption, theme->fg_muted,
+                    str8f(ui_frame_arena(), app_str_c(Str_DiscDiffBudget), app_disc_cells,
+                          (PLAN_TOC_CELLS > app_disc_cells)
+                                  ? (PLAN_TOC_CELLS - app_disc_cells) * PLAN_TOC_CELL_CHARS
+                                  : 0u));
     ui_spacer(ui_px(ui_dp(theme->space[UI_Space_8]), 1.0f));
     app_disc_transport_bar();
+    app_device_edit_bar(disc);
     ui_spacer(ui_px(ui_dp(theme->space[UI_Space_8]), 1.0f));
 
-    // s3.10: tracks in no group come first, then each group in TOC order.
-    if (disc->ungrouped_count != 0 && disc->group_count != 0) {
-        app_device_line(UI_FontStyle_Caption, theme->fg_muted, app_str(Str_DiscUngrouped));
+    // The edit waiting to be confirmed, or the reason the last one was refused.
+    if (app_device.confirm) {
+        app_device_confirm_panel();
+    } else if (app_device.last_refusal != NetmdEditRefusal_None) {
+        app_device_line(UI_FontStyle_Caption, theme->warning,
+                        app_str(app_device_refusal_string(app_device.last_refusal)));
+    } else if (app_device.last_writes != 0) {
+        app_device_line(UI_FontStyle_Caption, theme->fg_muted,
+                        str8f(ui_frame_arena(), app_str_c(Str_DiscEditDone),
+                              app_device.last_writes));
     }
-    for (u32 i = 0; i < disc->track_count; i += 1) {
-        if (disc->tracks[i].group == NETMD_NO_GROUP) { app_disc_track_row(disc, i, 0.0f); }
+
+    // One keyed box around the rows: it is what the keyboard is routed to, so
+    // F2, Delete and Ctrl+G only fire when the disc list is the thing in hand.
+    UI_PrefWidth(ui_pct(1.0f, 0.0f))
+    UI_PrefHeight(ui_children_sum(1.0f))
+    UI_ChildLayoutAxis(Axis2_Y) {
+        UI_Box *rows = ui_build_box(UI_Clickable, str8_lit("###discrows"));
+        app_device.rows_key = rows->key;
+        UI_Parent(rows) {
+            // s3.10: tracks in no group come first, then each group in TOC order.
+            if (disc->ungrouped_count != 0 && disc->group_count != 0) {
+                app_device_line(UI_FontStyle_Caption, theme->fg_muted,
+                                app_str(Str_DiscUngrouped));
+            }
+            for (u32 i = 0; i < disc->track_count; i += 1) {
+                if (disc->tracks[i].group == NETMD_NO_GROUP) {
+                    app_disc_track_row(disc, i, 0.0f);
+                }
+            }
+            for (u32 group = 0; group < disc->group_count; group += 1) {
+                app_disc_group_row(disc, group);
+            }
+        }
     }
-    for (u32 group = 0; group < disc->group_count; group += 1) {
-        app_disc_group_row(disc, group);
+    app_device_edit_keys(disc);
+
+    // The drop: the row the pointer was last over is the destination, and the
+    // move is proposed like every other edit - simulated, then confirmed.
+    if (app_device.drag && ui_active_key() == 0) {
+        u32 from = app_device.drag_from;
+        u32 to = app_device.drag_to;
+        app_device.drag = 0;
+        if (from != to && from < disc->track_count && to < disc->track_count) {
+            app_device_edit_prepare(NetmdEditKind_MoveTrack, from, to, str8(0, 0), 0);
+        }
     }
+
+    // The inline editor commits on Enter and gives up on Escape (T-032).
+    if (app_device.rename_track != 0) {
+        b32 escape = ui_escape_pressed();
+        b32 enter = 0;
+        for (u32 i = 0; i < ui_key_event_count(); i += 1) {
+            if (ui_key_event(i).key == OsKey_Enter) { enter = 1; }
+        }
+        if (enter || escape) {
+            app_device_rename_commit(enter);
+            ui_set_focus(app_device.rows_key, 1);
+        }
+    }
+}
+
+// The application refuses to close while the device holds a TOC its disc does
+// not have (s6.3): quitting there is exactly how a disc is lost.
+b32 app_device_can_close(void) { return !netmd_device_toc_dirty(&app_device.thread); }
+
+void app_device_close_blocked(void) {
+    ArenaTemp scratch = scratch_begin(0, 0);
+    os_debug_print(str8f(scratch.arena, "%S\n", app_str(Str_DiscCloseBlocked)));
+    scratch_end(scratch);
+    os_request_redraw();
 }

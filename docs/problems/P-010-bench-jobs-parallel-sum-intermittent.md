@@ -55,3 +55,11 @@ Ticket dédié, dans l'ordre :
 3. Si c'est le pool : faire de `jobs_init` sur un pool déjà initialisé un `jobs_shutdown` explicite avec
    jointure de chaque worker, et ajouter un test qui enchaîne `jobs_init`/`jobs_shutdown` et un
    parallel-for vérifié, pour que le cas soit couvert par `build.bat test` et pas par un banc.
+
+## Revu en T-022 (2026-09-07)
+Toujours là, et plus large que le seul `jobs_parallel_sum` : avec un agent occupé dans un worktree
+voisin, `bench` s'arrête tantôt sur `ns_per_job < 1000` (1 377 puis 1 834 ns mesurés), tantôt sur
+le budget de layout de 1 000 µs (1 045 µs mesurés). Machine au repos, la même cible passe de bout
+en bout. Les assertions de perf du bench sont donc des assertions **de machine au repos** ; si le
+bench doit rester une cible de CI, il faudra soit les desserrer, soit ne les armer que quand la
+charge système est basse.

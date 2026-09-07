@@ -174,6 +174,19 @@ u64 os_time_now_us(void) {
     return (ticks / frequency) * 1000000ull + ((ticks % frequency) * 1000000ull) / frequency;
 }
 
+// The wall clock, which os_time_now_us deliberately is not: a monotonic counter
+// cannot name a file after the moment it was written (T-022, the TOC backups).
+void os_time_local(OsWallClock *out) {
+    SYSTEMTIME now;
+    GetLocalTime(&now);
+    out->year = now.wYear;
+    out->month = now.wMonth;
+    out->day = now.wDay;
+    out->hour = now.wHour;
+    out->minute = now.wMinute;
+    out->second = now.wSecond;
+}
+
 void os_sleep_us(u64 us) { Sleep((DWORD)((us + 999) / 1000)); }
 
 u32 os_thread_current_id(void) { return GetCurrentThreadId(); }
