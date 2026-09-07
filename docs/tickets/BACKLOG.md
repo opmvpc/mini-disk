@@ -61,6 +61,7 @@ T-053 bit allocation · T-054 psy + gain control · T-055 LP4 joint stereo · T-
 T-060 raccourcis complets · T-061 i18n FR/EN · T-062 thème clair · T-063 toasts/confirmations/simulation TOC ·
 T-064 prefs · T-065 barre de titre custom · T-066 IDropTarget.
 | T-07x | Durée du plan en équivalent disque partout (en-tête = jauge, revue T-032) ; hachures diagonales de la jauge via motif d'atlas ; sauvegarde durable du plan hors du thread de frame (P-009) | todo |
+| T-07x | Panneau Disque : le sous-titre d'en-tête reste « pilote manquant » quand le corps dit « utilisé par une autre application » (état InUse) — un seul état source pour les deux (vu le 2026-09-07) | todo |
 
 ## Phase 8 — Portabilité
 T-070 `platform/linux` · T-071 `platform/macos`.
