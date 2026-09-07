@@ -8,3 +8,5 @@ build/
 !tools/*.exe
 *.log
 .vs/
+tools/zadig/*.exe
+tools/zadig/*.log
