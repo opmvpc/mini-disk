@@ -58,9 +58,18 @@ typedef struct NetmdUploadEntry {
     u64 bytes;   // payload bytes actually sent
 } NetmdUploadEntry;
 
+// T-043: called on the device thread immediately before entry `index` goes on
+// the wire, so a transcode that is still running is waited for *there* and not
+// before the run starts. That is what lets the next tracks be rendered while
+// the current one uploads. It fills `entry->data`; 0 fails that entry alone.
+// A plan whose entries already carry their audio leaves this null.
+typedef b32 NetmdUploadPrepareFn(void *user, NetmdUploadEntry *entry, u32 index);
+
 typedef struct NetmdUploadPlan {
     NetmdUploadEntry *entries;
     u32 count;
+    NetmdUploadPrepareFn *prepare;
+    void *prepare_user;
     // The compiled disc title, group syntax included - plan_toc_compile_disc_title
     // produced it, this layer only writes it (s3.10).
     u32 disc_title_size;

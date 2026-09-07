@@ -14,3 +14,4 @@
 | P-010 | `build.bat bench` s'arrête au milieu quand la machine est chargée (antérieur à T-040) | T-040 | ouvert |
 | P-012 | Transcriptions NetMD synthétiques : aucune capture possible sans le pilote WinUSB | T-021 → T-022 | partiellement levé (lecture capturée ; vierge/protégé/aucun disque restent) |
 | P-013 | Le chemin d'écriture du TOC n'a été validé sur aucun disque réel | T-022 | ouvert |
+| P-014 | Une piste qui vient d'être gravée se relit `protect` et refuse l'effacement | T-043 | ouvert |

@@ -74,6 +74,16 @@ OsFile os_file_open(String8 path);        // read only, shared read
 u64    os_file_read_at(OsFile file, u64 offset, void *dst, u64 size);  // bytes read
 void   os_file_close(OsFile file);
 
+// Sequential writing, for what is too big to hold in memory before it is
+// written: one transcoded track is 10.6 MB a minute (T-043). Created or
+// truncated, and every os_file_write appends in order. Closed with
+// os_file_close like a read handle.
+OsFile os_file_create(String8 path);
+b32    os_file_write(OsFile file, const void *src, u64 size);
+// Overwrites `size` bytes at `offset` of a handle opened by os_file_create.
+// One use: stamping a header that was left blank until the payload was written.
+b32    os_file_write_at(OsFile file, u64 offset, const void *src, u64 size);
+
 // --- paths -----------------------------------------------------------------
 // Slices into `path` where they can be, so walking a tree copies nothing.
 b32     os_path_is_separator(u8 c);

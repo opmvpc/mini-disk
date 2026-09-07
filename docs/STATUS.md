@@ -2,8 +2,8 @@
 
 Dernière mise à jour : 2026-09-07
 
-## Phase actuelle : 3 + 5 en parallèle — T-020, T-021, T-040, T-041 mergés dans main ; T-022 livré (worktree), T-042 en cours. Pilote WinUSB installé : la lecture est validée sur le vrai device, l'écriture ne l'est pas (P-013)
-## Phase actuelle : 3 + 5 en parallèle — T-020, T-021, T-040, T-041 mergés dans main ; T-042 fait et **validé sur le vrai MZ-N505** (le pilote WinUSB est lié, P-001 levé), T-022 en cours
+## Phase actuelle : **phase 5 terminée** — T-040..T-043 livrés, un plan gravé et effacé sur le vrai MZ-N505 ; tag `v0.5.0-phase5` à poser par le lead
+## Phase actuelle (historique) : 3 + 5 en parallèle — T-020, T-021, T-040, T-041 mergés dans main ; T-042 fait et **validé sur le vrai MZ-N505** (le pilote WinUSB est lié, P-001 levé), T-022 en cours
 
 ### Fait (phase 0 terminée)
 - 4 rapports de recherche livrés (`research/01..04`, ~10 700 lignes) + tokens de design (`02b`).
@@ -17,14 +17,22 @@ Dernière mise à jour : 2026-09-07
 - Repo GitHub : https://github.com/opmvpc/mini-disk
 
 ### En cours
+**Phase 5 terminée, tag `v0.5.0-phase5` à poser par le lead.**
+- **Phase 5** : T-040, T-041, T-042 et T-043 livrés. La chaîne complète **fichier → décodeur → pipeline →
+  cache → session sécurisée → disque** tourne sur le vrai MZ-N505 : trois pistes générées (5 s, 25 s, 61 s)
+  gravées deux fois, la seconde passe **sans le moindre transcodage** (968 µs de succès de cache contre
+  323 ms de rendu), puis effacées par le chemin d'édition de T-022, les 8 pistes de l'utilisateur intactes
+  et son titre de disque jamais touché. Reste au lead : le tag, et l'arbitrage de
+  `PLAN_TRACK_OVERHEAD_CLUSTERS` (voir la Livraison de T-043).
 - **Phase 3** : T-020, T-021 et T-022 mergés. Pilote WinUSB installé (P-001 clos), lecture validée sur le vrai
-  MZ-N505 (disque « 202001 »). Restent : l'aller-retour d'écriture d'un titre (P-013, à faire dans l'app par
-  l'utilisateur ou le lead), les captures vierge/protégé/aucun disque (P-012), puis tag `v0.3.0-phase3`.
-- **Phase 5** : T-040, T-041, T-042 mergés — **première piste gravée sur le MZ-N505** (sinus 10 s SP, relu).
-  T-043 (vue Transfert + cache) en cours : dernier ticket avant le premier plan gravé et le tag `v0.5.0-phase5`.
-  L'utilisateur autorise la gravure de test dans l'espace libre du disque 202001.
-- **Budget de taille** : exe à **601 600 o** après T-042 (le pipeline/DSP entre dans l'image via « Graver ») ;
-  `SIZE_BUDGET_KB` relevé à **700** pour T-043 ; ticket de régime en phase 7 (backlog), objectif < 500 KB.
+  MZ-N505 (disque « 202001 »). P-013 est **levé de fait** : T-043 a écrit et effacé des pistes et des titres
+  sur le disque réel par le chemin simulation → sauvegarde du TOC → écriture. Restent les captures
+  vierge/protégé/aucun disque (P-012), puis tag `v0.3.0-phase3`.
+- **Budget de taille** : exe à **636 928 o** après T-043 (601 600 avant, **+35 328** pour le cache, la
+  machine d'états, la vue Transfert et 45 chaînes FR/EN) ; cible du ticket 660 Ko tenue, `SIZE_BUDGET_KB`
+  à 700 ; ticket de régime en phase 7 (backlog), objectif < 500 KB.
+- **P-014 ouvert** : une piste qui vient d'être gravée se relit `protect` et notre simulation refuse alors
+  de l'effacer. Le drapeau retombe après un cycle d'alimentation ; contournement dans le test appareil.
 - UI : splitters verticaux ajoutés (navigateur artistes/albums, panneau Détail), hauteurs persistées.
 - **Phase 3** : T-020 et T-021 mergés. Tout ce qui touche le vrai MZ-N505 (ouverture WinUSB, ping, captures
   `--netmd-trace`, chronométrage) attend le pilote : procédure dans `tools/zadig/README.md` (P-001, P-012).
@@ -109,6 +117,34 @@ Dernière mise à jour : 2026-09-07
   branchement/débranchement restent **en attente de Zadig** (P-001).
 
 ### Fait en phase 5
+- **T-043 livré : la gravure devient une étape visible, et le transcodage ne se paie qu'une fois.**
+  `pipeline_cache.c` garde les octets SP rendus dans `<cache>\transcode\<clé>.pcm` ; la clé est un
+  FNV-1a du chemin, de la taille et de la mtime du source **plus** un condensé des douze paramètres du
+  pipeline repliés champ par champ (les flottants par leur motif binaire, jamais la struct en bloc) —
+  il n'y a donc aucune étape d'invalidation, un source réencodé ou un gain déplacé se hache ailleurs.
+  En-tête de 64 octets validé et recoupé avec la taille réelle du fichier, écriture par temporaire puis
+  `MoveFileEx` atomique, en-tête estampé à la fin par le nouveau `os_file_write_at`. `cache_lru.c` borne
+  les **deux** caches disque du programme par une seule fonction — 2 Go pour le transcodage (avec son
+  index d'accès `access.idx`), 256 Mo pour les pochettes de T-014, datées par leurs fichiers — et la
+  purge tourne au démarrage et après chaque gravure, jamais pendant. `transfer.c` porte le pré-vol de
+  D4 (ce qui sera écrit avec les **titres finaux**, clusters et cellules TOC avant/après, temps libre
+  **pris sur l'appareil**, huit avertissements, politique ajouter/effacer) et la machine d'états du
+  transfert (huit états par piste, neuf phases, douze événements), plus l'ETA honnête de D9 : moyenne
+  glissante sur 30 s, débit nominal SP avant le premier mégaoctet, et **une valeur qui ne remonte
+  jamais**. `view_transfer.c` dessine les trois écrans — bouton, pré-vol, transfert — avec les deux
+  barres, le débit, le temps écoulé, Pause entre deux pistes, Annuler qui énonce ce qu'il laisse sur le
+  disque, Reprendre, le bandeau « ne pas éjecter », la fermeture refusée et le journal
+  `<cache>\logs\transfer-<date>.txt` ; le transcodage court **devant** l'envoi (3 jobs en vol) grâce à
+  un rappel `NetmdUploadPrepareFn` de dix lignes ajouté à T-042, qui fait attendre le thread device une
+  piste et une seule. La jauge acquiert sa couche « progression de gravure » de research/02 §9.11.
+  **Sur le vrai MZ-N505** : 5 s, 25 s et 61 s gravées, relues, regravées sans transcodage, puis effacées
+  par le chemin de T-022 — et la mesure que T-042 réclamait, sept points, **+2 007 ms par piste** en
+  moyenne, soit exactement un cluster SP de plus que l'audio (le pas de 2 000 ms, lui, est confirmé à la
+  milliseconde). Un bug **grave** trouvé sur le matériel et corrigé : `str8_find` d'une aiguille dans une
+  botte de foin vide répond 0, donc les 8 pistes **sans titre** de l'utilisateur passaient le test
+  « le titre commence par MINIDISK TEST » et le masque d'effacement couvrait tout le disque ; la session
+  a été tuée avant la phase de nettoyage, rien n'a été perdu, et le garde-fou a son test de
+  non-régression. 15 cas de test, exe 636 928 o.
 - T-042 livré : **la session sécurisée, DES maison, l'upload SP et le titrage**. `netmd_des.c` porte
   DES, 3DES et le MAC ISO 9797-1 alg. 3 écrits depuis les tables de la FIPS 46-3 et de rien d'autre
   (ADR-008) ; les 34 Ko de tables dérivées — boîtes SP et les trois permutations en tables indexées
@@ -166,6 +202,22 @@ Dernière mise à jour : 2026-09-07
   gain (le seuil de trim est un niveau absolu), et le banc « pipeline complet < 0,5 s » non tenu à
   669 ms — la passe de rendu seule est à 195 ms, c'est la passe de mesure R128 qui coûte les 403 ms
   restants. Détail et justifications dans `tickets/T-041-dsp-resampler-r128-dither.md`.
+
+## KPI — phase 5, T-043 (i7-8550U, 4 cœurs / 8 threads, Windows 11 ; MZ-N505 sous WinUSB, disque « 202001 »)
+| Métrique | Valeur | Cible | Date |
+|----------|--------|-------|------|
+| Taille exe release | **636 928 o** (601 600 avant T-043, +35 328 : cache, machine d'états, vue Transfert, 45 chaînes FR/EN) | < 660 KB | 2026-09-07 |
+| Tests | **248 cas, 6 814 checks**, 0 échec sous ASan (+15 cas) | verts | 2026-09-07 |
+| Cibles `build.bat` | debug, release, test, check, analyze, bench toutes vertes | vertes | 2026-09-07 |
+| Imports | kernel32 + user32 | 2 DLL | 2026-09-07 |
+| Cache, rendu des 3 pistes de test | 25 + 90 + 208 = **323 ms** | — | 2026-09-07 |
+| Cache, deuxième gravure du même plan | **968 µs** (3 succès), soit **334×** plus rapide : aucune attente de transcodage | 0 attente | 2026-09-07 |
+| Empreinte du cache | 16 056 320 o pour 91 s de SP — **10,6 Mo/min**, borne LRU 2 Go | bornée | 2026-09-07 |
+| Rendu à la demande pendant une gravure | progression fusionnée à **1 redraw / 100 ms**, boucle endormie entre deux | 0 % au repos | 2026-09-07 |
+| **Gravure réelle, 3 pistes en une session** | 91 s d'audio, 16 056 320 o, **73 796 ms** (1,23× temps réel), les 3 pistes relues titrées | de bout en bout | 2026-09-07 |
+| Débit SP réel, par durée | 5 s : 0,24× · 25 s : 1,15× · 61 s : **1,52×** — coût fixe de session ~15-20 s, puis 1,2 à 1,5× | 1,0 à 1,5× (research §6.1) | 2026-09-07 |
+| **`MD_MODE_TABLE`, écart mesuré** | 7 mesures, **+2 007 ms par piste** (σ 80 ms) = **exactement 1 cluster SP**. Le pas de 2 000 ms est confirmé à la milliseconde (25 s → 26 000 + 2 102 ; 61 s → 62 000 + 1 890). `PLAN_TRACK_OVERHEAD_CLUSTERS 1` **proposé, non appliqué** (déplace les nombres de T-031) | ±1 cluster | 2026-09-07 |
+| Effacement des pistes de test | 5 pistes effacées en une seule simulation → écriture, **8 pistes de l'utilisateur intactes**, titre « 202001 » inchangé | rien perdu | 2026-09-07 |
 
 ## KPI — phase 5, T-042 (i7-8550U, 4 cœurs / 8 threads, Windows 11 ; MZ-N505 sous WinUSB)
 | Métrique | Valeur | Cible | Date |

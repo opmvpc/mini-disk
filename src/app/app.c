@@ -234,6 +234,10 @@ static void app_run(void) {
     // The device thread starts once the UI exists: its first answer is already
     // an event the first frame can draw (T-020).
     app_device_init();
+    // The transcode cache is opened and bounded once the cache directory is
+    // known (D5); the purge it runs here is the only one that happens outside
+    // the end of a burn.
+    app_transfer_init();
     os_window_show(window, app.prefs.window_maximized);
     // The real DPI of the monitor is only known once the window is on it: if it
     // is not the one the size was computed with, size the window again.
@@ -257,11 +261,18 @@ static void app_run(void) {
         // A dirty plan needs one wake up within five seconds so the autosave
         // can run; at rest, with nothing to write, the wait is still infinite.
         b32 busy = ui_animating() || app.scan_active;
-        u64 timeout = busy ? 16000 : (app.plan.dirty ? PLAN_AUTOSAVE_US : OS_TIMEOUT_INFINITE);
+        // A burn wakes the loop ten times a second and not once more: the
+        // device thread coalesces its progress into one redraw per 100 ms
+        // (T-043), so the bar is smooth and the cores stay asleep between two.
+        u64 timeout = busy ? 16000
+                           : (app_transfer_busy() ? APP_TRANSFER_REDRAW_US
+                                                  : (app.plan.dirty ? PLAN_AUTOSAVE_US
+                                                                    : OS_TIMEOUT_INFINITE));
         os_events_pump(1, timeout);
         app_scan_tick();
         app_plan_tick();
         app_device_tick();
+        app_transfer_tick();
 
         u64 event_count = 0;
         OsEvent event;
@@ -270,7 +281,9 @@ static void app_run(void) {
             // have, closing is how a disc gets lost. The banner in the disc
             // panel says so; this is what makes it true.
             if (event.kind == OsEvent_Close) {
-                if (app_device_can_close()) {
+                if (!app_transfer_can_close()) {
+                    app_transfer_close_blocked();
+                } else if (app_device_can_close()) {
                     running = 0;
                 } else {
                     app_device_close_blocked();
@@ -307,7 +320,8 @@ static void app_run(void) {
         f32 dt = (f32)(now_us - last_us) * 0.000001f;
         last_us = now_us;
 
-        if (os_redraw_requested() || ui_animating() || app.scan_active) {
+        if (os_redraw_requested() || ui_animating() || app.scan_active ||
+            app_transfer_busy()) {
             V2 size = os_window_get_size(window);
             r_begin_frame(frame_arena, size.x, size.y, scale);
             r_clear(ui_theme()->canvas);

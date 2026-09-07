@@ -151,6 +151,52 @@ void os_file_close(OsFile file) {
     if (file.v) { CloseHandle(file.v); }
 }
 
+// A write handle. Created or truncated, no sharing while it is open: the only
+// reader that matters is the rename that comes after the close (T-043).
+OsFile os_file_create(String8 path) {
+    ArenaTemp scratch = scratch_begin(0, 0);
+    String16 path16 = str16_from_str8(scratch.arena, path);
+    HANDLE file = CreateFileW((LPCWSTR)path16.str, GENERIC_WRITE, 0, 0, CREATE_ALWAYS,
+                              FILE_ATTRIBUTE_NORMAL, 0);
+    scratch_end(scratch);
+    OsFile result;
+    result.v = (file == INVALID_HANDLE_VALUE) ? 0 : file;
+    return result;
+}
+
+b32 os_file_write_at(OsFile file, u64 offset, const void *src, u64 size) {
+    Assert(file.v != 0);
+    const u8 *bytes = (const u8 *)src;
+    u64 total = 0;
+    while (total < size) {
+        OVERLAPPED overlapped;
+        StructZero(&overlapped);
+        u64 at = offset + total;
+        overlapped.Offset = (DWORD)(at & 0xFFFFFFFFull);
+        overlapped.OffsetHigh = (DWORD)(at >> 32);
+        DWORD chunk = (DWORD)Min(size - total, (u64)0x40000000u);
+        DWORD written = 0;
+        if (!WriteFile(file.v, bytes + total, chunk, &written, &overlapped) || written == 0) {
+            return 0;
+        }
+        total += written;
+    }
+    return 1;
+}
+
+b32 os_file_write(OsFile file, const void *src, u64 size) {
+    Assert(file.v != 0);
+    const u8 *bytes = (const u8 *)src;
+    u64 total = 0;
+    while (total < size) {
+        DWORD chunk = (DWORD)Min(size - total, (u64)0x40000000u);
+        DWORD written = 0;
+        if (!WriteFile(file.v, bytes + total, chunk, &written, 0) || written == 0) { return 0; }
+        total += written;
+    }
+    return 1;
+}
+
 // --- paths -----------------------------------------------------------------
 
 b32 os_path_is_separator(u8 c) { return c == '\\' || c == '/'; }

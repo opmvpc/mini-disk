@@ -215,6 +215,14 @@ static u32 netmd_upload_one(NetmdSecure *secure, NetmdUploadPlan *plan, NetmdUpl
     send.discformat = NETMD_DISCFORMAT_SP;
     send.cancel = &state->cancel;
 
+    // T-043: the entry's audio may still be being rendered by a job. This is
+    // where the device thread waits for it, one track at a time, which is why
+    // the rendering of the next tracks can overlap the sending of this one.
+    if (plan->prepare && entry->data.total_bytes == 0) {
+        if (!plan->prepare(plan->prepare_user, entry, (u32)(entry - plan->entries))) {
+            return NetmdResult_Malformed;
+        }
+    }
     if (entry->data.total_bytes != 0) {
         send.source = entry->data;
     } else {
