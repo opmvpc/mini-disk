@@ -2,7 +2,7 @@
 
 Dernière mise à jour : 2026-09-07
 
-## Phase actuelle : **phase 5 terminée** — T-040..T-043 livrés, un plan gravé et effacé sur le vrai MZ-N505 ; tag `v0.5.0-phase5` à poser par le lead
+## Phase actuelle : 5 terminée (T-040..T-043 mergés, gravure réelle validée) — T-045 en cours, puis tags v0.3.0 / v0.5.0
 ## Phase actuelle (historique) : 3 + 5 en parallèle — T-020, T-021, T-040, T-041 mergés dans main ; T-042 fait et **validé sur le vrai MZ-N505** (le pilote WinUSB est lié, P-001 levé), T-022 en cours
 
 ### Fait (phase 0 terminée)
