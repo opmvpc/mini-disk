@@ -35,6 +35,9 @@
 #define APP_MIN_LIBRARY_DP 300.0f
 #define APP_MIN_PLAN_DP    280.0f
 #define APP_MIN_DISC_DP    200.0f
+#define APP_MIN_BROWSER_DP  80.0f  // the artist/album columns, two rows at least
+#define APP_MIN_DETAIL_DP   96.0f  // the detail panel: a small cover and three lines
+#define APP_MIN_LIST_DP    160.0f  // what the track list keeps whatever is dragged
 
 // What one row shows. Built on the stack from the SoA, never stored.
 typedef struct AppTrack {
@@ -69,6 +72,10 @@ typedef struct AppState {
     UI_List album_list;
     UI_Splitter library_split;
     UI_Splitter disc_split;
+    // Vertical, inside the library panel: the browser columns above the list
+    // and the detail panel below it. Heights, in physical pixels like the others.
+    UI_Splitter browser_split;
+    UI_Splitter detail_split;
     UI_ContextMenu menu;
 
     // --- the plan (T-030) ----------------------------------------------------

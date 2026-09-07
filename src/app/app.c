@@ -105,6 +105,10 @@ static void app_body(void) {
                 app.library_split.default_size *= factor;
                 app.disc_split.size *= factor;
                 app.disc_split.default_size *= factor;
+                app.browser_split.size *= factor;
+                app.browser_split.default_size *= factor;
+                app.detail_split.size *= factor;
+                app.detail_split.default_size *= factor;
                 app.split_scale = scale;
             }
             f32 handle = ui_dp(ui_theme()->splitter_size);

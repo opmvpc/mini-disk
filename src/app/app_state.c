@@ -264,6 +264,15 @@ void app_init(Arena *permanent, f32 scale) {
     ui_splitter_init(&app.disc_split, 240.0f * scale, APP_MIN_DISC_DP * scale,
                      (APP_MIN_LIBRARY_DP + APP_MIN_PLAN_DP) * scale);
     app.disc_split.measures_trailing = 1;
+    // The two vertical ones: a browser of 150 dp and a detail panel tall enough
+    // for a 256 px cover by default, or whatever the preferences remember.
+    f32 browser_h = (app.prefs.browser_height ? (f32)app.prefs.browser_height : 150.0f) * scale;
+    f32 detail_h = (app.prefs.detail_height ? (f32)app.prefs.detail_height : 280.0f) * scale;
+    ui_splitter_init(&app.browser_split, browser_h, APP_MIN_BROWSER_DP * scale,
+                     APP_MIN_LIST_DP * scale);
+    ui_splitter_init(&app.detail_split, detail_h, APP_MIN_LIST_DP * scale,
+                     APP_MIN_DETAIL_DP * scale);
+    app.detail_split.measures_trailing = 1;
 
     // Startup: the cache first, so the library is on screen before the disk is
     // touched; then a rescan in the background that pushes only its diffs.

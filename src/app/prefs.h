@@ -50,6 +50,8 @@ typedef struct Prefs {
     b32 browser_collapsed;
     b32 thumbnails;       // the 48 px cover column of the library rows (T-014)
     b32 detail_collapsed; // the selection detail panel at the bottom
+    u32 browser_height;   // dp, 0 = default: the artist/album columns (vertical splitter)
+    u32 detail_height;    // dp, 0 = default: the detail panel
 
     i32 window_x, window_y;           // physical pixels, workspace coordinates
     u32 window_width, window_height;  // dp, so a DPI change does not shrink it

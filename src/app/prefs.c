@@ -106,6 +106,16 @@ static void prefs_apply_pair(Prefs *prefs, String8 key, String8 value) {
         prefs_read_b32(value, &prefs->detail_collapsed);
         return;
     }
+    if (str8_eq(key, str8_lit("library.browser_height"))) {
+        u32 h = 0;
+        if (prefs_read_u32(value, &h) && h <= PREFS_WINDOW_MAX) { prefs->browser_height = h; }
+        return;
+    }
+    if (str8_eq(key, str8_lit("library.detail_height"))) {
+        u32 h = 0;
+        if (prefs_read_u32(value, &h) && h <= PREFS_WINDOW_MAX) { prefs->detail_height = h; }
+        return;
+    }
     if (str8_eq(key, str8_lit("window.x"))) { prefs_read_i32(value, &prefs->window_x); return; }
     if (str8_eq(key, str8_lit("window.y"))) { prefs_read_i32(value, &prefs->window_y); return; }
     if (str8_eq(key, str8_lit("window.placed"))) {
@@ -218,6 +228,10 @@ String8 prefs_serialize(Arena *arena, const Prefs *prefs) {
                    str8f(arena, "library.thumbnails=%u", prefs->thumbnails ? 1u : 0u));
     str8_list_push(arena, &lines, str8f(arena, "library.detail_collapsed=%u",
                                         prefs->detail_collapsed ? 1u : 0u));
+    str8_list_push(arena, &lines,
+                   str8f(arena, "library.browser_height=%u", prefs->browser_height));
+    str8_list_push(arena, &lines,
+                   str8f(arena, "library.detail_height=%u", prefs->detail_height));
     for (u32 i = 0; i < AppColumn_COUNT; i += 1) {
         const PrefsColumn *column = &prefs->columns[i];
         const char *name = prefs_column_names[i];

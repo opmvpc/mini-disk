@@ -467,6 +467,18 @@ static AppBrowserClick app_browser_column(UI_List *list, String8 id, String8 tit
     return result;
 }
 
+// The height of the library panel last frame: what the two vertical splitters
+// clamp against. Zero on the first frame, which ui_splitter_update accepts.
+static f32 app_library_panel_h;
+
+// A vertical splitter dragged to a new height is a preference: stored in dp so
+// a DPI change does not shrink it (same rule as the window size).
+static void app_split_remember(UI_Splitter *split, f32 before, u32 *pref) {
+    if (split->size == before) { return; }
+    *pref = (u32)(split->size / ui_dpi_scale() + 0.5f);
+    app.prefs_dirty = 1;
+}
+
 static void app_browser_panel(void) {
     const UI_Theme *theme = ui_theme();
     LibBrowser *browser = &app.browser;
@@ -505,8 +517,11 @@ static void app_browser_panel(void) {
     u32 album_total = (browser->selected_artist < browser->artist_count)
                           ? browser->artists[browser->selected_artist].count
                           : app.index.live_count;
+    f32 before = app.browser_split.size;
+    f32 browser_h = ui_splitter_update(&app.browser_split, Axis2_Y, app_library_panel_h);
+    app_split_remember(&app.browser_split, before, &app.prefs.browser_height);
     UI_PrefWidth(ui_pct(1.0f, 0.0f))
-    UI_PrefHeight(ui_px(ui_dp(150.0f), 0.0f))
+    UI_PrefHeight(ui_px(browser_h, 1.0f))
     UI_ChildLayoutAxis(Axis2_X)
     UI_BgColor(theme->surface) {
         UI_Box *row = ui_build_box(UI_DrawBackground | UI_Clip, str8_lit("###browser"));
@@ -529,7 +544,8 @@ static void app_browser_panel(void) {
             }
         }
     }
-    ui_separator();
+    // The handle is the separator: drag it to give the columns more rows.
+    ui_splitter(&app.browser_split, Axis2_Y);
 }
 
 // --- the three states that are not a list ----------------------------------------
@@ -702,7 +718,17 @@ static void app_detail_facts(UI_Box *facts, TrackId id, f32 padding) {
 
 static void app_detail_panel(f32 width) {
     const UI_Theme *theme = ui_theme();
-    ui_separator();
+    // Collapsed: a plain separator and the toggle bar. Open: the handle sits
+    // between the list and the bar, and its drag sets the panel height.
+    f32 detail_h = app.detail_split.size;
+    if (app.prefs.detail_collapsed) {
+        ui_separator();
+    } else {
+        f32 before = app.detail_split.size;
+        detail_h = ui_splitter_update(&app.detail_split, Axis2_Y, app_library_panel_h);
+        app_split_remember(&app.detail_split, before, &app.prefs.detail_height);
+        ui_splitter(&app.detail_split, Axis2_Y);
+    }
     UI_PrefWidth(ui_pct(1.0f, 0.0f))
     UI_PrefHeight(ui_px(ui_dp(theme->row_standard), 1.0f))
     UI_ChildLayoutAxis(Axis2_X)
@@ -732,7 +758,11 @@ static void app_detail_panel(f32 width) {
     // 256 *physical* pixels, not 256 dp: that is the size the cache holds, and
     // one texel per pixel is the only way an image is ever sharp. A narrow
     // panel shrinks it rather than pushing the facts off screen.
-    f32 side = min_f32((f32)LIB_COVER_LARGE, max_f32(width * 0.4f - padding * 2.0f, 64.0f));
+    // ...and so does a short panel: the cover shrinks to the height the user
+    // dragged, never below 64 px.
+    f32 side = min_f32((f32)LIB_COVER_LARGE,
+                       max_f32(min_f32(width * 0.4f - padding * 2.0f, detail_h - padding * 2.0f),
+                               64.0f));
     // Nothing clicked yet: the first row of the current sort is what the panel
     // is about, which is also what the user is looking at.
     b32 has_row = app.index_ready && app_row_count() > 0;
@@ -743,7 +773,7 @@ static void app_detail_panel(f32 width) {
     b32 ready = has_row && app_cover_rect(id, LIB_COVER_LARGE, &thumb);
 
     UI_PrefWidth(ui_pct(1.0f, 0.0f))
-    UI_PrefHeight(ui_px(side + padding * 2.0f, 1.0f))
+    UI_PrefHeight(ui_px(detail_h, 1.0f))
     UI_ChildLayoutAxis(Axis2_X)
     UI_BgColor(theme->surface) {
         UI_Box *body = ui_build_box(UI_DrawBackground | UI_Clip, str8_lit("###detail"));
@@ -836,6 +866,7 @@ void app_library_panel(f32 width) {
                     app_track_count());
     UI_Box *panel = app_panel_begin(str8_lit("###library"), ui_px(width, 1.0f),
                                     app_str(Str_LibraryTitle), subtitle);
+    app_library_panel_h = rect_height(panel->rect);
 
     UI_PrefWidth(ui_pct(1.0f, 0.0f))
     UI_PrefHeight(ui_px(ui_dp(theme->row_comfortable), 1.0f))
