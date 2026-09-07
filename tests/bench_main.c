@@ -25,6 +25,8 @@
 #include "../src/core/netmd/netmd_disc.h"
 #include "../src/core/netmd/netmd_control.h"
 #include "../src/core/netmd/netmd_replay.h"
+#include "../src/core/netmd/netmd_edit.h"
+#include "../src/core/netmd/netmd_backup.h"
 #include "../src/core/netmd/netmd_device.h"
 #include "../src/core/dsp/dsp_math.h"
 #include "../src/core/dsp/dsp_resample.h"
@@ -92,6 +94,8 @@
 #include "../src/core/netmd/netmd_disc.c"
 #include "../src/core/netmd/netmd_control.c"
 #include "../src/core/netmd/netmd_replay.c"
+#include "../src/core/netmd/netmd_edit.c"
+#include "../src/core/netmd/netmd_backup.c"
 #include "../src/core/netmd/netmd_device.c"
 #include "../src/core/dsp/dsp_math.c"
 #include "../src/core/dsp/dsp_resample.c"
@@ -1830,6 +1834,8 @@ static BenchResult bench_dsp_pipeline_jobs(void) {
     result.micros = micros;
     result.bytes = total_bytes;
     return result;
+}
+
 // --- codecs (T-040) --------------------------------------------------------
 // Decode speed in multiples of realtime, the number ADR-007 sets a target for:
 // >= 100x for MP3 and >= 300x for FLAC, on one core, one file at a time. The

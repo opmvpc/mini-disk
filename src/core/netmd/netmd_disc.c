@@ -68,7 +68,7 @@ NetmdTime netmd_time_make(u32 hours, u32 minutes, u32 seconds, u32 frames) {
     return time;
 }
 
-static NetmdTime netmd_time_from_frames(u32 total) {
+NetmdTime netmd_time_from_frames(u32 total) {
     u32 rest = total;
     u32 frames = rest % NETMD_FRAMES_PER_SECOND;
     rest /= NETMD_FRAMES_PER_SECOND;
@@ -536,9 +536,10 @@ u32 netmd_get_track_info(NetmdSession *session, Arena *arena, u32 track, NetmdTr
     return result;
 }
 
-u32 netmd_get_track_title(NetmdSession *session, Arena *arena, u32 track, b32 wide,
-                          String8 *out) {
+u32 netmd_get_track_title_ex(NetmdSession *session, Arena *arena, u32 track, b32 wide,
+                             String8 *out, String8 *out_sjis) {
     *out = str8(0, 0);
+    if (out_sjis) { *out_sjis = str8(0, 0); }
     const NetmdDescriptor *desc = wide ? &netmd_desc_utoc4 : &netmd_desc_utoc1;
     // s3.8.2: the wchar of a *track* title is 0x02 / 0x03, not the 0x00 / 0x01
     // of the disc title. Getting this wrong reads the wrong title space.
@@ -571,14 +572,30 @@ u32 netmd_get_track_title(NetmdSession *session, Arena *arena, u32 track, b32 wi
         u64 capacity = raw_size * 3u + 1u;  // half-width katakana is 3 UTF-8 bytes
         u8 *text = push_array(arena, u8, capacity);
         *out = str8(text, netmd_sjis_to_utf8(raw, raw_size, text, capacity));
+        // The Shift-JIS bytes themselves, for whoever is about to write this
+        // title back: `oldLen` counts *those* bytes, and a re-encoding of the
+        // decoded text would count a kanji the table turned into '?' wrongly
+        // (research/01 s3.9, the one field that corrupts a TOC when it is off).
+        if (out_sjis) {
+            u8 *keep = push_array(arena, u8, raw_size);
+            mem_copy(keep, raw, raw_size);
+            *out_sjis = str8(keep, raw_size);
+        }
         return NetmdResult_Ok;
     }
     arena_temp_end(scratch);
     return result;
 }
 
-u32 netmd_get_disc_title(NetmdSession *session, Arena *arena, b32 wide, String8 *out) {
+u32 netmd_get_track_title(NetmdSession *session, Arena *arena, u32 track, b32 wide,
+                          String8 *out) {
+    return netmd_get_track_title_ex(session, arena, track, wide, out, 0);
+}
+
+u32 netmd_get_disc_title_ex(NetmdSession *session, Arena *arena, b32 wide, String8 *out,
+                            String8 *out_sjis) {
     *out = str8(0, 0);
+    if (out_sjis) { *out_sjis = str8(0, 0); }
     // s3.8.1 opens audioContentsTD as well as discTitleTD; the batch would only
     // hold one, so both are opened by hand here and closed in reverse.
     if (session->open_desc) {
@@ -655,7 +672,13 @@ u32 netmd_get_disc_title(NetmdSession *session, Arena *arena, b32 wide, String8 
     u64 capacity = done * 3u + 1u;
     u8 *text = push_array(arena, u8, capacity);
     *out = str8(text, netmd_sjis_to_utf8(sjis, done, text, capacity));
+    // s3.9: `oldLen` is a Shift-JIS byte count, so the writer gets the bytes.
+    if (out_sjis) { *out_sjis = str8(sjis, done); }
     return NetmdResult_Ok;
+}
+
+u32 netmd_get_disc_title(NetmdSession *session, Arena *arena, b32 wide, String8 *out) {
+    return netmd_get_disc_title_ex(session, arena, wide, out, 0);
 }
 
 u32 netmd_read_disc(NetmdSession *session, Arena *arena, DiscLayout *out) {

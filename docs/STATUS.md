@@ -2,7 +2,7 @@
 
 Dernière mise à jour : 2026-09-07
 
-## Phase actuelle : 3 + 5 en parallèle — T-020, T-021, T-040, T-041 mergés dans main ; T-022 et T-042 en cours (validation device en attente de Zadig)
+## Phase actuelle : 3 + 5 en parallèle — T-020, T-021, T-040, T-041 mergés dans main ; T-022 livré (worktree), T-042 en cours. Pilote WinUSB installé : la lecture est validée sur le vrai device, l'écriture ne l'est pas (P-013)
 
 ### Fait (phase 0 terminée)
 - 4 rapports de recherche livrés (`research/01..04`, ~10 700 lignes) + tokens de design (`02b`).
@@ -26,6 +26,41 @@ Dernière mise à jour : 2026-09-07
 - Ordre de merge du 2026-09-07 : T-020 → T-041 → T-040 → T-021 (conflits d'includes résolus en gardant les deux côtés).
 
 ### Fait en phase 3
+- T-022 livré : **édition du disque — renommer, déplacer, effacer, grouper, avec simulation,
+  sauvegarde du TOC et verrou d'éjection**. `src/core/netmd/netmd_edit.{h,c}` porte les écritures de
+  research/01 §3.9 et §3.12 : `oldLen` **relu sur l'appareil juste avant chaque écriture** (un
+  `oldLen` faux corrompt le TOC, piège 9), court-circuit si le titre est identique (piège 10),
+  `wchar` `0x00/0x01` pour le disque et `0x02/0x03` pour les pistes (piège 8), chemin Sharp par
+  `audioUTOC1TD`, ronde `close → openWrite → écriture → close → openRead → close` (§3.9 pt 3),
+  `acquire`/`release` sur **tous** les chemins (§3.5), effacements par index décroissant (piège 17),
+  temporisations §6.2 (100 ms entre éditions, 500 ms avant re-listage) et l'ordre de §6.5 : **une
+  seule** réécriture du titre disque à la fin, jamais une par piste. `netmd_utf8_to_sjis` encode en
+  Shift-JIS sans table, l'assainissement de `plan_toc` ayant déjà réduit le texte à l'ASCII et au
+  katakana demi-chasse.
+- **Rien ne s'écrit sans simulation ni sauvegarde (ADR-011 D4).** `netmd_edit_simulate` produit,
+  sans un octet d'USB, le `DiscLayout` d'après et un `DiscDiff` (avant/après, pistes, groupes,
+  cellules TOC, caractères libres, nombre d'écritures) : c'est ce que le panneau de confirmation
+  affiche, avec un verbe explicite (« Effacer 3 pistes »). Huit refus typés avec leur phrase
+  (disque protégé, piste protégée, budget dépassé, titre identique, piste déjà groupée…).
+  `netmd_backup.{h,c}` écrit le TOC courant en texte relisible dans
+  `%LOCALAPPDATA%\minidisk\toc-backups\<disc-id>-<date>.txt` (écriture atomique) **avant** toute
+  écriture ; l'échec de la sauvegarde annule l'édition.
+- **Le budget de titres est celui du plan.** `plan_toc_compile_disc_title` est factorisée en
+  `plan_toc_compile_raw(titre, groupes, budget)` : le plan et le disque compilent la même chaîne
+  `0;Titre//1-4;Face A//` et comptent les mêmes 255 cellules de 7 caractères (D3). Aucun second
+  budget n'a été écrit.
+- Thread device : une commande `Edit` par geste, toujours la même séquence **simuler → sauvegarder
+  → écrire → relire le disque → publier**. Le drapeau `toc_dirty` (§6.3) est levé à la première
+  écriture, voyage dans tous les événements, et ne retombe que lorsque l'appareil a redécrit son
+  disque, ou à l'éjection. Vue Disque : sélection multiple, renommage inline (F2 / double-clic,
+  Entrée / Échap) des pistes **et** du titre disque, glisser-déposer, Suppr, Ctrl+G / Ctrl+Maj+G,
+  panneau de confirmation, bannière « Ne pas éjecter : écriture du TOC », et `app.c` qui **refuse
+  de fermer** tant qu'elle est là. 36 chaînes FR/EN.
+- **Le vrai MZ-N505 lit enfin** : WinUSB est lié (P-001 levé), `--netmd-trace` a capturé une session
+  complète — 88 commandes, disque de 8 pistes, titre brut `0;202001//1-8;//`, flags `0x10`. La
+  capture est versionnée (`tests/netmd/mzn505_real_read.trace`) et rejouée par les tests. **Aucune
+  écriture n'a encore été émise vers un disque réel** : P-013, avec sa procédure de levée en sept
+  étapes sur un disque de test dédié.
 - T-020 livré : **WinUSB — énumération, ouverture, control transfers, hotplug, écran « pilote
   manquant »**. `platform.h` gagne le contrat USB (`os_usb_enumerate/open/close/control/bulk_write/
   bulk_read/reset`, `OsUsbDeviceInfo { vid, pid, state, problem_code, path, bus_name }`,
@@ -342,6 +377,25 @@ Dernière mise à jour : 2026-09-07
 | Trois panneaux visibles | jusqu'à **1024 × 640 logique** (biblio 597 px, plan 357, disque 300 à 125 %) | 1024 x 640 | 2026-09-07 |
 | Préférences | fichier de 789 o, aller-retour sérialisation + parsing en 13 µs, écriture atomique | — | 2026-09-07 |
 | Pochettes | **1,31 ms** par pochette (décodage WIC + mise à l'échelle vers 256 et 48), 10 000 pochettes = ~1,9 s réparties sur 7 workers, 64 en vol au plus | 10 000 sans jank | 2026-09-07 |
+
+## KPI — phase 3, T-022 (même machine)
+| Métrique | Valeur | Cible | Date |
+|----------|--------|-------|------|
+| Taille exe release | **496 128 o** (+26 624 o sur les 469 504 o de `main`) | < 500 KB (CI 600 KB) | 2026-09-07 |
+| Imports | kernel32 + user32 (ligne de link inchangée, aucun `LoadLibrary` ajouté) | ces deux-là | 2026-09-07 |
+| Tests | **221 cas, 6 407 checks**, 0 échec (ASan) — dont 16 cas T-022 | verts | 2026-09-07 |
+| Cibles `build.bat` | debug, release, test, check, analyze, bench : les six vertes (bench au repos ; P-010 sous charge) | vertes | 2026-09-07 |
+| `check` | vert : ni `windows.h`, ni `malloc`, ni `printf` dans `src/core/netmd` | vert | 2026-09-07 |
+| `analyze` | vert : `/W4 /WX /analyze` + clang-tidy sans diagnostic sur `src/` | vert | 2026-09-07 |
+| Lecture du disque réel | **88 commandes**, 8 pistes, `0;202001//1-8;//`, flags `0x10` | le disque s'affiche | 2026-09-07 |
+| Capture réelle versionnée | `mzn505_real_read.trace`, 617 lignes, rejouée par les tests | 1 capture | 2026-09-07 |
+| Écriture sur disque réel | **non faite** (P-013 : disque de l'utilisateur, pas de disque de test) | renommage aller-retour | — |
+| Transcriptions d'édition | 9 fichiers, **3 831 lignes**, synthétiques (research/01) | rejouées octet à octet | 2026-09-07 |
+| Écritures TOC par geste | renommage 1, déplacement 2, effacement de N pistes N+1, groupe 1 | minimiser (§6.5) | 2026-09-07 |
+| Temporisations d'édition | 100 ms entre éditions, 500 ms avant re-listage | §6.2 | 2026-09-07 |
+| Sauvegarde TOC | 1 fichier texte par écriture, écriture atomique, round-trip testé | avant toute écriture | 2026-09-07 |
+| Cas limites de simulation | **10 + 6** couverts (budget, groupes, protections, refus) | 10 | 2026-09-07 |
+| Chaînes i18n | 36 FR + 36 EN nouvelles (68 pour le panneau Disque) | ADR-011 D10 | 2026-09-07 |
 
 ## KPI — phase 3, T-020 (même machine)
 | Métrique | Valeur | Cible | Date |

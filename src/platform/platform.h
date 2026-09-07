@@ -102,6 +102,12 @@ String8 os_exe_dir(Arena *arena);
 
 // --- time and threads ------------------------------------------------------
 u64 os_time_now_us(void);      // monotonic, microseconds
+// Local civil time. Only for naming something a human will read back (the TOC
+// backups of T-022); every measurement uses the monotonic clock above.
+typedef struct OsWallClock {
+    u32 year, month, day, hour, minute, second;
+} OsWallClock;
+void os_time_local(OsWallClock *out);
 void os_sleep_us(u64 us);
 u32 os_thread_current_id(void);
 

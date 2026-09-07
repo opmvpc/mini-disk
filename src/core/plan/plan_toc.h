@@ -79,6 +79,20 @@ typedef struct PlanTocBudget {
 
 void plan_toc_budget(const Plan *plan, const Library *lib, u32 disc_index, PlanTocBudget *out);
 
+// One group as the compiler sees it. The plan has its own group struct and so
+// does a disc read off the device (T-022), but the string they compile into is
+// the same one: it is written once, here, and both sides hand it this.
+typedef struct PlanTocGroup {
+    u32 first;  // 0-based track index
+    u32 count;
+    String8 name;  // already sanitized or not: the compiler sanitizes anyway
+} PlanTocGroup;
+
+// "0;Album//1-4;Side A//5-9;Side B//" (research/01 s3.10). `groups` must be
+// sorted by `first`. Returns the bytes written.
+u64 plan_toc_compile_raw(String8 title, const PlanTocGroup *groups, u32 group_count,
+                         u32 cells_budget, u8 *out, u64 cap, u32 *groups_kept);
+
 // The disc title compiled into its raw form, dropping the groups that do not
 // fit rather than failing whole. Returns the bytes written.
 u64 plan_toc_compile_disc_title(const Plan *plan, const PlanDisc *disc, u32 cells_budget, u8 *out,

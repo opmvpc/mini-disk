@@ -99,6 +99,9 @@ static NetmdEvent netmd_event_make(const NetmdDevice *device, u32 kind, const Ne
     event.device_count = device->device_count;
     event.issued_us = cmd ? cmd->issued_us : 0;
     event.timestamp_us = os_time_now_us();
+    // Every event carries it: the banner and the refusal to close read the last
+    // event they saw, and an event that did not say would clear them wrongly.
+    event.toc_dirty = os_atomic_load_u32((volatile u32 *)&device->toc_dirty);
     return event;
 }
 
@@ -183,6 +186,9 @@ static void netmd_device_close(NetmdDevice *device, const NetmdCmd *cmd) {
     if (device->open && !device->test_transport) { os_usb_close(device->usb); }
     device->open = 0;
     device->open_index = 0;
+    // Nothing can be confirmed on a device that is gone: the banner would stay
+    // up for the rest of the session and the app would refuse to close.
+    os_atomic_store_u32(&device->toc_dirty, 0);
     device->usb.v = 0;
     os_atomic_store_u32(&device->disc_valid, 0);
     StructZero(&device->session);
@@ -312,6 +318,93 @@ static void netmd_device_read_disc(NetmdDevice *device, const NetmdCmd *cmd) {
     netmd_event_push(device, &event);
 }
 
+// --- editing (T-022) ------------------------------------------------------------
+// One shape for every edit, and no shortcut through it: simulate, refuse or
+// back the TOC up, write, read the disc back. The device is the authority on
+// what happened - not our simulation - which is why the re-read is part of the
+// command and not something the UI has to remember to ask for (ADR-011 D4).
+static void netmd_device_edit(NetmdDevice *device, const NetmdCmd *cmd) {
+    NetmdEvent event = netmd_event_make(device, NetmdEvent_Edit, cmd);
+    if (device->open_index < device->device_count) {
+        netmd_event_fill_device(&event, &device->devices[device->open_index]);
+    }
+    event.edit_kind = cmd->edit.kind;
+    if (!device->open || !netmd_transport_bound(&device->transport)) {
+        event.kind = NetmdEvent_Error;
+        event.error = OsUsbError_NotOpen;
+        netmd_event_push(device, &event);
+        return;
+    }
+    const DiscLayout *before = netmd_device_disc(device);
+    if (!before) {
+        event.refusal = NetmdEditRefusal_NoDisc;
+        netmd_event_push(device, &event);
+        return;
+    }
+
+    ArenaTemp scratch = arena_temp_begin(device->arena);
+    DiscDiff *diff = push_struct(device->arena, DiscDiff);
+    // The UI simulated this too, to draw the confirmation panel; this one is the
+    // one that decides. The disc may have changed since the panel was drawn.
+    netmd_edit_simulate(before, &cmd->edit, device->edit_after, diff);
+    if (!diff->allowed) {
+        event.refusal = diff->refusal;
+        arena_temp_end(scratch);
+        netmd_event_push(device, &event);
+        return;
+    }
+
+    // D4: the layout as it is right now, on disk, before anything is written.
+    // No backup, no edit - this is the whole point of the ticket.
+    String8 dir = netmd_backup_dir(device->arena);
+    String8 path = str8(0, 0);
+    if (!netmd_backup_write(device->arena, dir, before, &path)) {
+        event.refusal = NetmdEditRefusal_Backup;
+        arena_temp_end(scratch);
+        netmd_event_push(device, &event);
+        return;
+    }
+    os_debug_print(str8f(device->arena, "device: TOC backed up to %S\n", path));
+
+    // s6.3: from here the device holds a TOC its disc does not have. The banner
+    // is up and the application will not close until this is cleared.
+    os_atomic_store_u32(&device->toc_dirty, 1);
+    event.toc_dirty = 1;
+    u32 writes = 0;
+    u32 result = netmd_edit_apply(&device->session, device->arena, device->edit_after, &cmd->edit,
+                                  &writes);
+    arena_temp_end(scratch);
+    event.result = result;
+    event.writes = writes;
+    if (result == NetmdResult_Usb) {
+        event.kind = NetmdEvent_Error;
+        event.error = device->session.usb_error;
+        if (device->session.usb_error == OsUsbError_Disconnected) {
+            netmd_device_close(device, 0);
+            os_atomic_store_u32(&device->toc_dirty, 0);
+        }
+        netmd_event_push(device, &event);
+        return;
+    }
+    netmd_event_push(device, &event);
+
+    // The disc as the device now describes it, which is the only description
+    // that counts. A read that comes back is also the device confirming it is
+    // done writing, and that is what clears the flag.
+    NetmdCmd reread;
+    StructZero(&reread);
+    reread.kind = NetmdCmd_ReadDisc;
+    reread.issued_us = os_time_now_us();
+    netmd_device_read_disc(device, &reread);
+    if (result == NetmdResult_Ok && os_atomic_load_u32(&device->disc_valid)) {
+        os_atomic_store_u32(&device->toc_dirty, 0);
+        NetmdEvent done = netmd_event_make(device, NetmdEvent_Edit, cmd);
+        done.edit_kind = cmd->edit.kind;
+        done.writes = writes;
+        netmd_event_push(device, &done);
+    }
+}
+
 static void netmd_device_transport_cmd(NetmdDevice *device, const NetmdCmd *cmd) {
     NetmdEvent event = netmd_event_make(device, NetmdEvent_Transport, cmd);
     event.status = cmd->kind;
@@ -341,8 +434,11 @@ static void netmd_device_transport_cmd(NetmdDevice *device, const NetmdCmd *cmd)
             netmd_device_close(device, 0);
         }
     } else if (cmd->kind == NetmdCmd_Eject && result == NetmdResult_Ok) {
-        // The TOC is flushed on ejection (s6.3): whatever we had is stale.
+        // The TOC is flushed on ejection (s6.3): whatever we had is stale, and
+        // whatever was pending in RAM is now on the disc.
         os_atomic_store_u32(&device->disc_valid, 0);
+        os_atomic_store_u32(&device->toc_dirty, 0);
+        event.toc_dirty = 0;
     }
     netmd_event_push(device, &event);
 }
@@ -379,6 +475,7 @@ static void netmd_device_exec(NetmdDevice *device, const NetmdCmd *cmd) {
         case NetmdCmd_Next:
         case NetmdCmd_Prev:
         case NetmdCmd_Eject: netmd_device_transport_cmd(device, cmd); break;
+        case NetmdCmd_Edit: netmd_device_edit(device, cmd); break;
         case NetmdCmd_Quit: os_atomic_store_u32(&device->running, 0); break;
         default: break;
     }
@@ -454,6 +551,7 @@ void netmd_device_start(NetmdDevice *device, Arena *arena) {
     // waiting for the first machine with a smaller default.
     device->disc[0] = push_struct_zero(arena, DiscLayout);
     device->disc[1] = push_struct_zero(arena, DiscLayout);
+    device->edit_after = push_struct_zero(arena, DiscLayout);
     if (device->trace_path_size != 0) { device->trace_arena = arena_alloc(MB(16)); }
     device->running = 1;
     device->wake = os_semaphore_create(0, NETMD_CMD_CAPACITY);
@@ -478,4 +576,19 @@ b32 netmd_device_post(NetmdDevice *device, u32 kind, u32 device_index) {
     if (!netmd_cmd_push(device, &cmd)) { return 0; }
     os_semaphore_signal(device->wake, 1);
     return 1;
+}
+
+b32 netmd_device_post_edit(NetmdDevice *device, const NetmdEditRequest *request) {
+    NetmdCmd cmd;
+    StructZero(&cmd);
+    cmd.kind = NetmdCmd_Edit;
+    cmd.issued_us = os_time_now_us();
+    mem_copy(&cmd.edit, request, sizeof(NetmdEditRequest));
+    if (!netmd_cmd_push(device, &cmd)) { return 0; }
+    os_semaphore_signal(device->wake, 1);
+    return 1;
+}
+
+b32 netmd_device_toc_dirty(const NetmdDevice *device) {
+    return (b32)os_atomic_load_u32((volatile u32 *)&device->toc_dirty);
 }

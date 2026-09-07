@@ -13,3 +13,4 @@
 | P-009 | `.mdplan` : les 5 ms save+load sont la barrière de durabilité de l'OS, pas notre code | T-030 | ouvert |
 | P-010 | `build.bat bench` s'arrête au milieu quand la machine est chargée (antérieur à T-040) | T-040 | ouvert |
 | P-012 | Transcriptions NetMD synthétiques : aucune capture possible sans le pilote WinUSB | T-021 | ouvert |
+| P-013 | Le chemin d'écriture du TOC n'a été validé sur aucun disque réel | T-022 | ouvert |

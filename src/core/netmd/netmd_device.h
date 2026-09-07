@@ -11,7 +11,9 @@
 #include "../../base/base_string.h"
 #include "../../platform/platform.h"
 #include "netmd_control.h"
+#include "netmd_backup.h"
 #include "netmd_disc.h"
+#include "netmd_edit.h"
 #include "netmd_models.h"
 #include "netmd_proto.h"
 #include "netmd_replay.h"
@@ -35,6 +37,11 @@ typedef enum NetmdCmdKind {
     NetmdCmd_Next,
     NetmdCmd_Prev,
     NetmdCmd_Eject,
+    // T-022: one command for every edit. Which edit it is lives in the request
+    // it carries (rename, move, erase, group), because the sequence the thread
+    // runs is the same one every time: back the TOC up, write, read the disc
+    // again (ADR-011 D4).
+    NetmdCmd_Edit,
     NetmdCmd_COUNT
 } NetmdCmdKind;
 
@@ -42,6 +49,7 @@ typedef struct NetmdCmd {
     u32 kind;
     u32 device;
     u64 issued_us;  // when it was posted: what measures the hotplug latency
+    NetmdEditRequest edit;  // NetmdCmd_Edit only
 } NetmdCmd;
 
 typedef enum NetmdEventKind {
@@ -56,6 +64,9 @@ typedef enum NetmdEventKind {
     // over, and the double buffer is what makes that safe.
     NetmdEvent_Disc,
     NetmdEvent_Transport,  // play/pause/stop/next/prev/eject answered
+    // T-022. An edit answers exactly once, whether it was refused before any
+    // USB traffic (`refusal`), written (`writes`), or failed halfway.
+    NetmdEvent_Edit,
     NetmdEvent_COUNT
 } NetmdEventKind;
 
@@ -81,6 +92,10 @@ typedef struct NetmdEvent {
     u32 elapsed_ms;    // Disc: how long the whole read took, the < 2 s criterion
     u32 device_count;  // NetMD devices the last enumeration found
     u32 problem_code;  // CM_PROB_*, 28 when the driver is missing (P-001)
+    u32 edit_kind;     // Edit: the NetmdEditKind that was asked for
+    u32 refusal;       // Edit: NetmdEditRefusal, none when it went through
+    u32 writes;        // Edit: TOC rewrites actually made
+    u32 toc_dirty;     // the RAM TOC is ahead of the disc (s6.3): do not eject
     u32 name_size;
     u8 name[NETMD_NAME_MAX];  // model name, or what the bus calls it
     u64 issued_us;            // the command's own timestamp
@@ -131,6 +146,13 @@ typedef struct NetmdDevice {
     volatile u32 disc_valid;
     Arena *disc_arena;
 
+    // T-022. The layout an edit would produce, simulated before a single byte
+    // is written; and the flag that says the device is holding changes in RAM
+    // that the disc does not have yet (s6.3). The flag is what the banner and
+    // the refusal to close read.
+    DiscLayout *edit_after;
+    volatile u32 toc_dirty;
+
     // --netmd-trace: every exchange of this session, in the replay format.
     NetmdTrace trace;
     Arena *trace_arena;  // its own: the device arena is rewound every command
@@ -162,6 +184,12 @@ void netmd_device_stop(NetmdDevice *device);  // posts Quit and joins
 // Posts a command; 0 when the queue is full, which means the device thread is
 // wedged on a transfer and one more Enumerate would not help anyway.
 b32 netmd_device_post(NetmdDevice *device, u32 kind, u32 device_index);
+// The edit path (T-022): the request travels by value, like a name does.
+b32 netmd_device_post_edit(NetmdDevice *device, const NetmdEditRequest *request);
+// s6.3: true from the first write until the device has confirmed it by handing
+// its disc back, or until the disc is ejected. The app refuses to close while
+// it is set - closing on a half written TOC is how discs are lost.
+b32 netmd_device_toc_dirty(const NetmdDevice *device);
 b32 netmd_device_next_event(NetmdDevice *device, NetmdEvent *out);
 // Blocks the *calling* thread until one event shows up. For the tests, and for
 // nothing else: the UI drains the queue once per frame and never waits.

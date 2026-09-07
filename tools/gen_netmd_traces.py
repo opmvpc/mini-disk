@@ -317,15 +317,221 @@ SCENARIOS = [
 ]
 
 
+
+# --- editing (T-022, s3.5, s3.9, s3.12) --------------------------------------
+# The same rule as everything above: every frame below is assembled from the hex
+# of research/01 and from what the implementation is specified to send, never
+# captured from another program.
+
+def open_write(trace, name):
+    descriptor(trace, name, 0x03)
+
+
+def acquire(trace):
+    trace.comment("s3.5 acquire: the player's own buttons are silenced")
+    frame = b(0x00, 0xFF, 0x01, 0x0C) + bytes([0xFF] * 12)
+    trace.command(frame, b(0x09) + frame[1:])
+
+
+def release(trace):
+    trace.comment("s3.5 release: on every path, or the machine stays locked")
+    frame = b(0x00, 0xFF, 0x01, 0x00) + bytes([0xFF] * 12)
+    trace.command(frame, b(0x09) + frame[1:])
+
+
+def read_track_title(trace, index, wide, title):
+    """What netmd_get_track_title_ex emits: open, ask, close (s3.4)."""
+    name = "utoc4" if wide else "utoc1"
+    open_read(trace, name)
+    track_title(trace, index, wide, title)
+    close(trace, name)
+
+
+def write_title(trace, name, wchar, index, is_disc, new_title, old_len):
+    """s3.9: close, openWrite, write, close, openRead, close."""
+    payload = new_title.encode("cp932") if new_title else b""
+    if is_disc:
+        head = (b(0x00, 0x18, 0x07, 0x02, 0x20, 0x18, 0x01, 0x00, wchar) +
+                b(0x30, 0x00, 0x0A, 0x00, 0x50, 0x00) + u16(len(payload)) + b(0x00, 0x00) +
+                u16(old_len))
+    else:
+        head = (b(0x00, 0x18, 0x07, 0x02, 0x20, 0x18, wchar) + u16(index) +
+                b(0x30, 0x00, 0x0A, 0x00, 0x50, 0x00) + u16(len(payload)) + b(0x00, 0x00) +
+                u16(old_len))
+    close(trace, name)
+    open_write(trace, name)
+    # The reply echoes the frame without the title bytes (s3.9's example).
+    trace.command(head + payload, b(0x09) + head[1:])
+    close(trace, name)
+    open_read(trace, name)
+    close(trace, name)
+
+
+def set_track_title(trace, index, old, new, old_full=""):
+    """One netmd_set_track_title, read back included (pitfalls 9 and 10)."""
+    read_track_title(trace, index, False, old)
+    if old == new:
+        return
+    write_title(trace, "utoc1", 0x02, index, False, new, len(old.encode("cp932")))
+    # The full-width space is cleared, not rewritten (netmd_edit.c).
+    read_track_title(trace, index, True, old_full)
+    if old_full:
+        write_title(trace, "utoc4", 0x03, index, False, "", len(old_full.encode("cp932")))
+
+
+def set_disc_title(trace, old, new, old_full=""):
+    disc_title(trace, False, old)
+    if old == new:
+        return
+    write_title(trace, "disc_title", 0x00, 0, True, new, len(old.encode("cp932")))
+    disc_title(trace, True, old_full)
+    if old_full:
+        write_title(trace, "disc_title", 0x01, 0, True, "", len(old_full.encode("cp932")))
+
+
+def erase_track(trace, index):
+    trace.comment("s3.12 eraseTrack, by decreasing index (pitfall 17)")
+    frame = b(0x00, 0x18, 0x40, 0xFF, 0x01, 0x00, 0x20, 0x10, 0x01) + u16(index)
+    trace.command(frame, b(0x09) + frame[1:])
+
+
+def erase_disc(trace):
+    trace.comment("s3.12 eraseDisc")
+    frame = b(0x00, 0x18, 0x40, 0xFF, 0x00, 0x00)
+    trace.command(frame, b(0x09) + frame[1:])
+
+
+def move_track(trace, source, dest):
+    trace.comment("s3.12 moveTrack")
+    frame = (b(0x00, 0x18, 0x43, 0xFF, 0x00, 0x00, 0x20, 0x10, 0x01) + u16(source) +
+             b(0x20, 0x10, 0x01) + u16(dest))
+    trace.command(frame, b(0x09) + frame[1:])
+
+
+# The disc every edit transcript starts from: three SP tracks, one group over
+# the first two, so that a move and an erasure both renumber the ranges.
+EDIT_DISC = {
+    "present": True,
+    "flags": 0x10,
+    "recorded": (0, 12, 0, 0),
+    "total": (1, 20, 0, 0),
+    "available": (1, 8, 0, 0),
+    "title": "0;Demo//1-2;Face A//",
+    "tracks": [
+        {"title": "Un", "time": minutes(4, 0), "encoding": SP},
+        {"title": "Deux", "time": minutes(4, 0), "encoding": SP},
+        {"title": "Trois", "time": minutes(4, 0), "encoding": SP},
+    ],
+}
+
+
+def edit_rename_disc(trace):
+    acquire(trace)
+    set_disc_title(trace, "0;Demo//1-2;Face A//", "0;Concert//1-2;Face A//")
+    release(trace)
+
+
+def edit_rename_track(trace):
+    acquire(trace)
+    set_track_title(trace, 1, "Deux", "Two")
+    release(trace)
+
+
+def edit_move(trace):
+    acquire(trace)
+    move_track(trace, 0, 2)
+    # s3.10: the ranges are ours to renumber, in one single disc title write.
+    set_disc_title(trace, "0;Demo//1-2;Face A//", "0;Demo//1;Face A//")
+    release(trace)
+
+
+def edit_erase(trace):
+    acquire(trace)
+    erase_track(trace, 1)
+    set_disc_title(trace, "0;Demo//1-2;Face A//", "0;Demo//1;Face A//")
+    release(trace)
+
+
+def edit_group(trace):
+    # Track 3 alone becomes a group of its own; nothing else moves.
+    acquire(trace)
+    set_disc_title(trace, "0;Demo//1-2;Face A//", "0;Demo//1-2;Face A//3;Face B//")
+    release(trace)
+
+
+def edit_erase_disc(trace):
+    acquire(trace)
+    erase_disc(trace)
+    release(trace)
+
+
+def edit_same_title(trace):
+    # Pitfall 10: the title is read back, found identical, and not written. The
+    # transcript ends there - if the implementation wrote, the replay diverges.
+    set_track_title(trace, 1, "Deux", "Deux")
+
+
+def edit_oldlen_fullwidth(trace):
+    # s3.9: oldLen counts Shift-JIS *bytes*. This track's current title is two
+    # full-width characters, so oldLen is 4 and not 2.
+    acquire(trace)
+    set_track_title(trace, 0, "ＡＢ", "AB")
+    release(trace)
+
+
+def edit_session(trace):
+    # What the device thread runs end to end: edit, then read the disc back.
+    acquire(trace)
+    set_track_title(trace, 1, "Deux", "Two")
+    release(trace)
+    read_disc(trace, EDIT_DISC_AFTER)
+
+
+EDIT_DISC_AFTER = {
+    "present": True,
+    "flags": 0x10,
+    "recorded": (0, 12, 0, 0),
+    "total": (1, 20, 0, 0),
+    "available": (1, 8, 0, 0),
+    "title": "0;Demo//1-2;Face A//",
+    "tracks": [
+        {"title": "Un", "time": minutes(4, 0), "encoding": SP},
+        {"title": "Two", "time": minutes(4, 0), "encoding": SP},
+        {"title": "Trois", "time": minutes(4, 0), "encoding": SP},
+    ],
+}
+
+EDIT_SCENARIOS = [
+    ("mzn505_edit_rename_disc.trace", "MZ-N505, rename the disc (s3.9)", edit_rename_disc),
+    ("mzn505_edit_rename_track.trace", "MZ-N505, rename track 2 (s3.9)", edit_rename_track),
+    ("mzn505_edit_move.trace", "MZ-N505, move track 1 to position 3 (s3.12)", edit_move),
+    ("mzn505_edit_erase.trace", "MZ-N505, erase track 2 (s3.12)", edit_erase),
+    ("mzn505_edit_group.trace", "MZ-N505, group the last track (s3.10)", edit_group),
+    ("mzn505_edit_erase_disc.trace", "MZ-N505, erase the whole disc (s3.12)", edit_erase_disc),
+    ("mzn505_edit_same_title.trace", "MZ-N505, an identical title is not written (pitfall 10)",
+     edit_same_title),
+    ("mzn505_edit_oldlen.trace", "MZ-N505, oldLen counts Shift-JIS bytes (s3.9)",
+     edit_oldlen_fullwidth),
+    ("mzn505_edit_session.trace", "MZ-N505, one edit and the disc read back (T-022)",
+     edit_session),
+]
+
+
 def main():
     here = os.path.dirname(os.path.abspath(__file__))
     out_dir = sys.argv[1] if len(sys.argv) > 1 else os.path.normpath(
             os.path.join(here, "..", "tests", "netmd"))
     if not os.path.isdir(out_dir):
         os.makedirs(out_dir)
-    for name, title, disc in SCENARIOS:
+    scenarios = [(name, title, disc, None) for name, title, disc in SCENARIOS]
+    # The edit transcripts start from a disc that has already been read: the
+    # session the device thread runs is read, then edit (T-022).
+    scenarios += [(name, title, EDIT_DISC, build) for name, title, build in EDIT_SCENARIOS]
+    for name, title, disc, build in scenarios:
         trace = Trace(title)
         read_disc(trace, disc)
+        if build:
+            build(trace)
         path = os.path.join(out_dir, name)
         with open(path, "w", encoding="ascii", newline="\n") as f:
             f.write(trace.text())

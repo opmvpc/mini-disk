@@ -326,15 +326,11 @@ static u32 plan_toc_group_order(const PlanDisc *disc, u8 *order) {
     return count;
 }
 
-u64 plan_toc_compile_disc_title(const Plan *plan, const PlanDisc *disc, u32 cells_budget, u8 *out,
-                                u64 cap, u32 *groups_kept) {
+u64 plan_toc_compile_raw(String8 disc_title, const PlanTocGroup *groups, u32 group_count,
+                         u32 cells_budget, u8 *out, u64 cap, u32 *groups_kept) {
     u8 title[PLAN_TITLE_MAX];
     u32 title_chars = 0;
-    u64 title_size =
-        plan_toc_sanitize(plan_string(plan, disc->title), title, sizeof(title), &title_chars);
-
-    u8 order[PLAN_GROUP_MAX];
-    u32 group_count = plan_toc_group_order(disc, order);
+    u64 title_size = plan_toc_sanitize(disc_title, title, sizeof(title), &title_chars);
     u32 kept = 0;
 
     PlanTocWriter writer;
@@ -361,7 +357,7 @@ u64 plan_toc_compile_disc_title(const Plan *plan, const PlanDisc *disc, u32 cell
     }
 
     for (u32 i = 0; i < group_count; i += 1) {
-        const PlanGroup *group = &disc->groups[order[i]];
+        const PlanTocGroup *group = &groups[i];
         u64 restore = writer.size;
         plan_toc_put_u32(&writer, group->first + 1);
         if (group->count > 1) {
@@ -370,8 +366,7 @@ u64 plan_toc_compile_disc_title(const Plan *plan, const PlanDisc *disc, u32 cell
         }
         plan_toc_put_lit(&writer, ";", 1);
         u8 name[PLAN_TITLE_MAX];
-        u64 name_size =
-            plan_toc_sanitize(plan_string(plan, group->name), name, sizeof(name), 0);
+        u64 name_size = plan_toc_sanitize(group->name, name, sizeof(name), 0);
         plan_toc_put(&writer, name, name_size);
         plan_toc_put_lit(&writer, "//", 2);
         if (plan_toc_cells_for_chars(plan_toc_halfwidth_len(str8(out, writer.size))) >
@@ -391,6 +386,21 @@ u64 plan_toc_compile_disc_title(const Plan *plan, const PlanDisc *disc, u32 cell
     }
     if (groups_kept) { *groups_kept = kept; }
     return writer.size;
+}
+
+u64 plan_toc_compile_disc_title(const Plan *plan, const PlanDisc *disc, u32 cells_budget, u8 *out,
+                                u64 cap, u32 *groups_kept) {
+    u8 order[PLAN_GROUP_MAX];
+    u32 group_count = plan_toc_group_order(disc, order);
+    PlanTocGroup groups[PLAN_GROUP_MAX];
+    for (u32 i = 0; i < group_count; i += 1) {
+        const PlanGroup *group = &disc->groups[order[i]];
+        groups[i].first = group->first;
+        groups[i].count = group->count;
+        groups[i].name = plan_string(plan, group->name);
+    }
+    return plan_toc_compile_raw(plan_string(plan, disc->title), groups, group_count, cells_budget,
+                                out, cap, groups_kept);
 }
 
 void plan_toc_budget(const Plan *plan, const Library *lib, u32 disc_index, PlanTocBudget *out) {

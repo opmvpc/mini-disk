@@ -262,7 +262,16 @@ static void app_run(void) {
         u64 event_count = 0;
         OsEvent event;
         while (os_event_next(&event)) {
-            if (event.kind == OsEvent_Close) { running = 0; }
+            // s6.3 / T-022: while the device holds a TOC its disc does not
+            // have, closing is how a disc gets lost. The banner in the disc
+            // panel says so; this is what makes it true.
+            if (event.kind == OsEvent_Close) {
+                if (app_device_can_close()) {
+                    running = 0;
+                } else {
+                    app_device_close_blocked();
+                }
+            }
             if (event.kind == OsEvent_KeyDown && event.key == OsKey_F11) {
                 ui_debug_overlay_toggle();
             }

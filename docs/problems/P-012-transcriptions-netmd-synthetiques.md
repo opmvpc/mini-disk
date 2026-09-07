@@ -1,7 +1,11 @@
 # P-012 — Les quatre transcriptions NetMD sont synthétiques : aucune capture n'a pu être faite
 
-Statut : **ouvert** (2026-09-07, T-021) — bloqué par P-001, levable en une session dès que le
-pilote WinUSB est installé
+Statut : **partiellement levé** (2026-09-07, T-022) — le pilote WinUSB est installé depuis, et la
+**lecture** est capturée (`tests/netmd/mzn505_real_read.trace`, 617 lignes, 88 commandes, disque de
+8 pistes, titre brut `0;202001//1-8;//`). Les transcriptions d'**écriture** de T-022 restent
+synthétiques : voir P-013. Les quatre fichiers `mzn505_blank/full/protected/nodisc` restent générés
+eux aussi, leurs scénarios (disque vierge, protégé, bac vide) n'ayant pas de disque correspondant
+sous la main.
 
 ## Symptôme
 Le ticket T-021 demande des transcriptions `tests/netmd/mzn505_*.trace` **capturées sur le vrai
