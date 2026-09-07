@@ -1,6 +1,7 @@
 // win32_window.c - window class, WndProc, on demand event loop, DPI v2, clipboard.
 // The WndProc only translates messages into OsEvent, never any application logic.
 #include <windows.h>
+#include <dbt.h>
 
 #include "../platform.h"
 
@@ -19,6 +20,8 @@ typedef HRESULT(WINAPI *Win32OleInitialize)(void *reserved);
 typedef HRESULT(WINAPI *Win32RegisterDragDrop)(HWND, void *drop_target);
 typedef HRESULT(WINAPI *Win32RevokeDragDrop)(HWND);
 typedef void(WINAPI *Win32ReleaseStgMedium)(void *medium);
+// ShellExecuteW, for the one link the driver screen offers (T-020).
+typedef HINSTANCE(WINAPI *Win32ShellExecuteW)(HWND, LPCWSTR, LPCWSTR, LPCWSTR, LPCWSTR, INT);
 
 // A dropped selection past this is not a music folder, it is a mistake: the
 // paths land in the frame arena, so the boundary caps them here.
@@ -110,6 +113,10 @@ typedef struct Win32WindowState {
     Win32DragQueryFileW DragQueryFileW_;
     Win32DragFinish DragFinish_;
     Win32DragQueryPoint DragQueryPoint_;
+    Win32ShellExecuteW ShellExecuteW_;
+    // The hotplug subscription (T-020): all interface classes, because a
+    // driverless device exposes no class we could name in advance (P-001).
+    HDEVNOTIFY device_notify;
 } Win32WindowState;
 
 global Win32WindowState win32_window_state;
@@ -697,10 +704,15 @@ static LRESULT CALLBACK win32_window_proc(HWND window, UINT message, WPARAM wpar
         // NOLINTNEXTLINE(performance-no-int-to-ptr)
         case WM_DROPFILES: win32_push_drop_files((HANDLE)wparam, 1, 0); return 0;
 
+        // Arrival and removal carry an interface; a device with no driver at
+        // all only ever moves the device tree, hence the third case (P-001).
         case WM_DEVICECHANGE: {
-            OsEvent event = win32_event_make(OsEvent_DeviceChange);
-            win32_event_push(&event);
-            os_request_redraw();
+            if (wparam == DBT_DEVICEARRIVAL || wparam == DBT_DEVICEREMOVECOMPLETE ||
+                wparam == DBT_DEVNODES_CHANGED) {
+                OsEvent event = win32_event_make(OsEvent_DeviceChange);
+                win32_event_push(&event);
+                os_request_redraw();
+            }
         } return TRUE;
 
         case WM_SETTINGCHANGE: {
@@ -739,7 +751,31 @@ static void win32_window_load_optional_modules(Win32WindowState *state) {
         state->DragFinish_ = (Win32DragFinish)GetProcAddress(state->shell32, "DragFinish");
         state->DragQueryPoint_ =
                 (Win32DragQueryPoint)GetProcAddress(state->shell32, "DragQueryPoint");
+        state->ShellExecuteW_ = (Win32ShellExecuteW)GetProcAddress(state->shell32,
+                                                                   "ShellExecuteW");
     }
+}
+
+// Every interface class, and DBT_DEVNODES_CHANGED on top: a NetMD with no
+// driver bound has no interface to subscribe to, and it is precisely the one
+// the user needs to be told about. RegisterDeviceNotificationW lives in user32,
+// which we already import.
+static void win32_window_register_device_notification(Win32WindowState *state, HWND window) {
+    DEV_BROADCAST_DEVICEINTERFACE_W filter;
+    StructZero(&filter);
+    filter.dbcc_size = sizeof(filter);
+    filter.dbcc_devicetype = DBT_DEVTYP_DEVICEINTERFACE;
+    state->device_notify = RegisterDeviceNotificationW(
+            window, &filter, DEVICE_NOTIFY_WINDOW_HANDLE | DEVICE_NOTIFY_ALL_INTERFACE_CLASSES);
+}
+
+void os_open_url(String8 url) {
+    Win32WindowState *state = &win32_window_state;
+    if (!state->ShellExecuteW_) { return; }
+    ArenaTemp scratch = scratch_begin(0, 0);
+    String16 url16 = str16_from_str8(scratch.arena, url);
+    state->ShellExecuteW_(state->window, L"open", (LPCWSTR)url16.str, 0, 0, SW_SHOWNORMAL);
+    scratch_end(scratch);
 }
 
 // The real drop target when ole32 gives us one, WM_DROPFILES otherwise: the
@@ -844,6 +880,7 @@ OsWindow os_window_create(String8 title, u32 width, u32 height) {
     state->dpi_scale = (f32)GetDpiForWindow(window) / 96.0f;
     win32_window_apply_dark_frame(state, window);
     win32_window_register_drop_target(state, window);
+    win32_window_register_device_notification(state, window);
 
     RECT client;
     GetClientRect(window, &client);
@@ -919,6 +956,10 @@ void os_window_set_placement(OsWindow window, const OsWindowPlacement *placement
 void os_window_destroy(OsWindow window) {
     Win32WindowState *state = &win32_window_state;
     Assert((HWND)window.v == state->window);
+    if (state->device_notify) {
+        UnregisterDeviceNotification(state->device_notify);
+        state->device_notify = 0;
+    }
     DestroyWindow(state->window);
     state->window = 0;
     CloseHandle(state->wake_event);

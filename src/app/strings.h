@@ -141,6 +141,22 @@ typedef enum Str {
     Str_TocShortenHint,
     Str_StatusPlan,            // "%u pistes - %S / %S"
     Str_PlanShortenFold,
+
+    // The device panel (T-020). The driver steps are numbered in the text
+    // itself: they get read out over the phone as often as they get clicked.
+    Str_DeviceNone,
+    Str_DeviceNoneHint,
+    Str_DeviceSearching,
+    Str_DeviceNoDriver,
+    Str_DeviceNoDriverBody,    // "%S est branche, mais Windows ..."
+    Str_DeviceStep1,
+    Str_DeviceStep2,
+    Str_DeviceStep3,
+    Str_DeviceZadig,
+    Str_DeviceZadigHint,
+    Str_DeviceInUse,
+    Str_DeviceConnected,       // "Connecte : %S"
+    Str_DeviceError,           // "Appareil injoignable (%i)"
     Str_COUNT
 } Str;
 
@@ -281,6 +297,20 @@ static const char *app_strings_fr[Str_COUNT] = {
     "Réduit les titres les plus longs jusqu'à ce que le budget rentre",
     "%u pistes · %S / %S",
     " caractères adaptés au TOC",
+
+    "Aucun appareil",
+    "Branchez votre baladeur NetMD en USB.",
+    "Recherche d'un appareil…",
+    "Appareil détecté, pilote manquant",
+    "%S est branché, mais Windows n'a aucun pilote pour lui. Une installation, une seule fois :",
+    "1. Téléchargez Zadig (zadig.akeo.ie), puis lancez-le.",
+    "2. Choisissez « Net MD Walkman » dans la liste, puis le pilote WinUSB.",
+    "3. Cliquez « Install Driver », puis rebranchez l'appareil.",
+    "Ouvrir zadig.akeo.ie",
+    "Ouvre la page de téléchargement de Zadig dans votre navigateur",
+    "Appareil utilisé par une autre application",
+    "Connecté : %S",
+    "Appareil injoignable (%i)",
 };
 
 static const char *app_strings_en[Str_COUNT] = {
@@ -410,6 +440,20 @@ static const char *app_strings_en[Str_COUNT] = {
     "Trims the longest titles until the budget fits",
     "%u tracks · %S / %S",
     " characters adapted to the TOC",
+
+    "No device",
+    "Plug your NetMD player in over USB.",
+    "Looking for a device…",
+    "Device found, driver missing",
+    "%S is plugged in, but Windows has no driver for it. One install, once per machine:",
+    "1. Download Zadig (zadig.akeo.ie), then run it.",
+    "2. Pick “Net MD Walkman” in the list, then the WinUSB driver.",
+    "3. Click “Install Driver”, then plug the device back in.",
+    "Open zadig.akeo.ie",
+    "Opens the Zadig download page in your browser",
+    "Device held by another application",
+    "Connected: %S",
+    "Device unreachable (%i)",
 };
 
 global StrLang app_lang = APP_LANG_DEFAULT;

@@ -2,7 +2,7 @@
 
 Dernière mise à jour : 2026-09-07
 
-## Phase actuelle : 4 · Plan & capacité — **terminée** (phase 3 en attente de Zadig)
+## Phase actuelle : 3 · Device — T-020 livré (validation sur device en attente de Zadig)
 
 ### Fait (phase 0 terminée)
 - 4 rapports de recherche livrés (`research/01..04`, ~10 700 lignes) + tokens de design (`02b`).
@@ -17,8 +17,39 @@ Dernière mise à jour : 2026-09-07
 
 ### En cours
 - **Phase 4 terminée, tag `v0.4.0-phase4` à poser par le lead ; phase 3 en attente de Zadig.**
-- Phase 3 (device) : bloquée tant que Zadig → WinUSB n'est pas installé sur le MZ-N505 (P-001).
-  reste l'action utilisateur préalable.
+- Phase 3 (device) : **T-020 livré** (branche `t020`). Le chemin « pilote manquant » est validé sur
+  le vrai MZ-N505 ; l'ouverture WinUSB et le control transfer attendent Zadig (P-001), tout comme le
+  chronométrage d'un vrai branchement. Suite : T-021 (lecture du disque).
+
+### Fait en phase 3
+- T-020 livré : **WinUSB — énumération, ouverture, control transfers, hotplug, écran « pilote
+  manquant »**. `platform.h` gagne le contrat USB (`os_usb_enumerate/open/close/control/bulk_write/
+  bulk_read/reset`, `OsUsbDeviceInfo { vid, pid, state, problem_code, path, bus_name }`,
+  états `Ready` / `NoDriver` / `InUse`) et `os_open_url`. `src/platform/win32/win32_usb.c` charge
+  `winusb.dll`, `setupapi.dll`, `cfgmgr32.dll` et `advapi32.dll` par `LoadLibraryW` (imports
+  toujours kernel32 + user32), énumère les **nœuds** de l'énumérateur USB — un device en code 28
+  n'expose aucune interface, et c'est justement celui qu'il faut montrer (P-001) —, lit le
+  ProblemCode par `CM_Get_DevNode_Status`, et résout le chemin d'interface par le
+  `DeviceInterfaceGUIDs` que Zadig a écrit sous `Device Parameters` (**aucun GUID en dur**).
+  Politiques de pipe de research/01 §2.3 : `PIPE_TRANSFER_TIMEOUT`, `AUTO_CLEAR_STALL`,
+  `SHORT_PACKET_TERMINATE` off, `IGNORE_SHORT_PACKETS` off, `AUTO_SUSPEND` off.
+- `src/core/netmd/` : la table des 47 PIDs (`netmd_models`, seule identification fiable du modèle —
+  tous les baladeurs répondent « Net MD Walkman »), `UsbTransport { control, bulk_write, bulk_read,
+  user }` (ADR-008) avec ses deux implémentations — WinUSB dans `platform/` et **rejeu de
+  transcription** (`netmd_replay.c` : `# commentaire`, `> hex`, `< hex`, `! timeout`, divergence
+  détectée octet à octet et définitive) —, et le **thread device** (`netmd_device.c`) avec sa file
+  de commandes et sa file de résultats sur le modèle de `lib_events` : aucun appel USB hors de ce
+  thread, réveil par sémaphore, 0 % CPU au repos. Le « ping » est la séquence poll `0x01` /
+  send `0x80` / read `0x81` de research/01 §2.5-2.7, avec `poll[1]` comme bRequest de lecture et
+  backoff exponentiel plafonné.
+- Hotplug : `RegisterDeviceNotification(DBT_DEVTYP_DEVICEINTERFACE, toutes classes)` dans
+  `win32_window.c` → `OsEvent_DeviceChange` ; le thread device **débounce 200 ms**, avale la rafale
+  et réénumère une seule fois. Panneau Disque (`src/app/view_device.c`) : « Aucun appareil » /
+  « Appareil détecté, pilote manquant » (3 étapes Zadig + bouton `zadig.akeo.ie`) / « Connecté :
+  Sony MZ-N505 », 13 chaînes FR/EN.
+- **Validé sur le vrai MZ-N505 côté NoDriver** : `054c:0084 → « Sony MZ-N505 », state NoDriver,
+  ProblemCode 28, bus « Net MD Walkman »`. L'ouverture, le control transfer et le chronométrage
+  branchement/débranchement restent **en attente de Zadig** (P-001).
 
 ### Fait en phase 4
 - T-032 livré (dernier de la phase) : la **vraie vue Plan et la jauge signature**. `src/app/plan_view.{h,c}`
@@ -231,6 +262,19 @@ Dernière mise à jour : 2026-09-07
 | Trois panneaux visibles | jusqu'à **1024 × 640 logique** (biblio 597 px, plan 357, disque 300 à 125 %) | 1024 x 640 | 2026-09-07 |
 | Préférences | fichier de 789 o, aller-retour sérialisation + parsing en 13 µs, écriture atomique | — | 2026-09-07 |
 | Pochettes | **1,31 ms** par pochette (décodage WIC + mise à l'échelle vers 256 et 48), 10 000 pochettes = ~1,9 s réparties sur 7 workers, 64 en vol au plus | 10 000 sans jank | 2026-09-07 |
+
+## KPI — phase 3, T-020 (même machine)
+| Métrique | Valeur | Cible | Date |
+|----------|--------|-------|------|
+| Taille exe release | **327 168 o** (+18 944 o sur T-032), marge 20 992 o sous les 340 KB du ticket | < 340 KB (CI 500 KB) | 2026-09-07 |
+| Imports | kernel32 + user32 (winusb, setupapi, cfgmgr32, advapi32, shell32 en `LoadLibraryW`) | ces deux-là | 2026-09-07 |
+| Tests | **152 cas, 5 824 checks**, 0 échec (ASan) | verts | 2026-09-07 |
+| Cibles `build.bat` | debug, release, test, check, analyze, bench toutes vertes | vertes | 2026-09-07 |
+| `check` | vert : ni `windows.h` ni `malloc` dans `src/core/netmd` | vert | 2026-09-07 |
+| Débounce hotplug | **200 ms** (4 notifications d'une rafale → 1 seule énumération), bout en bout < 500 ms | < 500 ms | 2026-09-07 |
+| Détection du device réel | `054c:0084` → « Sony MZ-N505 », état `NoDriver`, ProblemCode 28, bus « Net MD Walkman » | l'écran guidé s'affiche | 2026-09-07 |
+| Ouverture / control transfer sur le vrai device | **en attente de Zadig** (P-001) | ping → `0x09` | — |
+| Chaînes i18n | 13 FR + 13 EN, aucune littérale hors `strings.h` | ADR-011 D10 | 2026-09-07 |
 
 ## KPI — phase 4, T-032 (même machine)
 | Métrique | Valeur | Cible | Date |

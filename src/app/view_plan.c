@@ -1498,8 +1498,10 @@ void app_plan_context_menu(void) {
 void app_disc_panel(f32 width) {
     const UI_Theme *theme = ui_theme();
     app_plan_sync();
+    // The subtitle is the device itself, not a placeholder model name: "Aucun
+    // appareil" until one answers, then its name from the PID table (T-020).
     app_panel_begin(str8_lit("###disc"), ui_px(width, 1.0f), app_str(Str_DiscTitle),
-                    str8_lit("MZ-N505"));
+                    app_device_subtitle());
 
     UI_PrefWidth(ui_pct(1.0f, 0.0f))
     UI_PrefHeight(ui_pct(1.0f, 0.0f))
@@ -1507,6 +1509,10 @@ void app_disc_panel(f32 width) {
     UI_BgColor(theme->surface) {
         UI_Box *body = ui_build_box_from_key(UI_DrawBackground | UI_Clip, 0);
         UI_Parent(body) UI_TextPadding(ui_dp(theme->space[UI_Space_12])) {
+            ui_spacer(ui_px(ui_dp(theme->space[UI_Space_8]), 1.0f));
+            // The device state comes first: with no driver bound, the guided
+            // screen is the only thing in this panel worth reading (T-020).
+            app_device_status();
             ui_spacer(ui_px(ui_dp(theme->space[UI_Space_8]), 1.0f));
             for (u32 mode = 0; mode < PlanCapMode_COUNT; mode += 1) {
                 UI_PrefWidth(ui_pct(1.0f, 0.0f))

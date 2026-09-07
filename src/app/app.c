@@ -227,6 +227,9 @@ static void app_run(void) {
     ui_text_init(permanent);
     ui_init(permanent);
     app_init(permanent, scale);
+    // The device thread starts once the UI exists: its first answer is already
+    // an event the first frame can draw (T-020).
+    app_device_init();
     os_window_show(window, app.prefs.window_maximized);
     // The real DPI of the monitor is only known once the window is on it: if it
     // is not the one the size was computed with, size the window again.
@@ -254,6 +257,7 @@ static void app_run(void) {
         os_events_pump(1, timeout);
         app_scan_tick();
         app_plan_tick();
+        app_device_tick();
 
         u64 event_count = 0;
         OsEvent event;
@@ -263,6 +267,8 @@ static void app_run(void) {
                 ui_debug_overlay_toggle();
             }
             if (event.kind == OsEvent_DropFiles) { app_drop(&event); }
+            // The device thread debounces the burst and re-enumerates alone.
+            if (event.kind == OsEvent_DeviceChange) { app_device_changed(); }
             if (event.kind == OsEvent_DragEnter || event.kind == OsEvent_DragOver) {
                 app.drag_active = 1;
                 app.drag_pos = event.pos;
@@ -305,6 +311,7 @@ static void app_run(void) {
     }
 
     app_save_placement(window);
+    app_device_shutdown();
     app_shutdown();
     jobs_shutdown();
     os_font_shutdown();

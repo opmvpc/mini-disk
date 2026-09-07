@@ -362,6 +362,69 @@ typedef struct OsImage {
 
 b32 os_image_decode(Arena *arena, String8 bytes, u32 size, OsImage *out);
 
+// --- usb -------------------------------------------------------------------
+// WinUSB on Windows (ADR-008). The layer stays generic: it knows nothing about
+// NetMD, it only reports what the bus has and hands out raw transfers. The
+// VID/PID filter and the model table live in core/netmd (netmd_models.h).
+typedef enum OsUsbState {
+    OsUsbState_Ready = 0,  // a usable device interface is bound: it can be opened
+    OsUsbState_NoDriver,   // present but nothing user mode can talk to (P-001, code 28)
+    OsUsbState_InUse,      // bound, but another process holds it
+    OsUsbState_COUNT
+} OsUsbState;
+
+// Every transfer returns the byte count, or one of these. Negative on purpose:
+// a caller tests `< 0` once and reads the reason only when it cares.
+typedef enum OsUsbError {
+    OsUsbError_Failed = -1,
+    OsUsbError_Timeout = -2,
+    OsUsbError_Disconnected = -3,
+    OsUsbError_NotOpen = -4,
+    OsUsbError_Divergence = -5,  // the replay transport: the request left the script
+} OsUsbError;
+
+// A present USB device node. `path` is what os_usb_open takes and is empty for
+// anything but Ready; `bus_name` is the name the bus shows ("Net MD Walkman"),
+// which is all we can show of a device that has no driver.
+typedef struct OsUsbDeviceInfo {
+    u16 vid;
+    u16 pid;
+    u32 state;         // OsUsbState
+    u32 problem_code;  // CM_PROB_*, 28 when no driver is installed; 0 when fine
+    String8 path;
+    String8 bus_name;
+} OsUsbDeviceInfo;
+
+typedef struct OsUsbDeviceList {
+    OsUsbDeviceInfo *items;
+    u64 count;
+} OsUsbDeviceList;
+
+// More USB device nodes than this on one machine is a hub farm, not a desktop.
+#define OS_USB_DEVICE_MAX 96
+
+// Everything present on the USB enumerator, driverless nodes included: seeing
+// those is the whole point of the guided driver screen.
+OsUsbDeviceList os_usb_enumerate(Arena *arena);
+
+typedef struct OsUsb { void *v; } OsUsb;  // v == 0: not open
+
+OsUsb os_usb_open(String8 path);
+void  os_usb_close(OsUsb usb);
+md_inline b32 os_usb_is_open(OsUsb usb) { return usb.v != 0; }
+
+// Control transfer on EP0. This is the NetMD command channel: the whole
+// protocol goes through it, the bulk pipes only carry audio (research/01 s2.4).
+i32 os_usb_control(OsUsb usb, u8 request_type, u8 request, u16 value, u16 index,
+                   void *buffer, u32 length, u32 timeout_ms);
+i32 os_usb_bulk_write(OsUsb usb, u8 endpoint, const void *data, u32 length, u32 timeout_ms);
+i32 os_usb_bulk_read(OsUsb usb, u8 endpoint, void *data, u32 length, u32 timeout_ms);
+b32 os_usb_reset(OsUsb usb);
+
+// Opens `url` in the user's browser (the Zadig page of the driver screen).
+// shell32 is loaded by hand, so the import table stays kernel32 + user32.
+void os_open_url(String8 url);
+
 // --- clipboard and cursor --------------------------------------------------
 // The system folder picker (IFileDialog): modal on the active window, returns
 // size 0 when the user cancelled. ole32/shell32 are loaded on the first call
