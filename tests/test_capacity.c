@@ -36,6 +36,41 @@ static void test_cap_add(Plan *plan, u32 duration_ms, u32 mode, b32 mono) {
     AssertAlways(plan_add(plan, 0, disc->entry_count, entry));
 }
 
+// T-045: the one thing in this file that was measured rather than derived.
+// Seven SP uploads to a real MZ-N505 on 2026-09-07, one session each, the
+// device's own free time read before and after every one of them; three of
+// them are below with the cost the device actually charged.
+//
+//   duration   free before    free after     device cost   this module
+//      5 s     3 383 134 ms   3 375 105 ms     8 029 ms     4 x 2 000 =  8 000
+//     25 s     3 375 105 ms   3 347 003 ms    28 102 ms    14 x 2 000 = 28 000
+//     61 s     3 347 003 ms   3 283 113 ms    63 890 ms    32 x 2 000 = 64 000
+//
+// The device charges in whole 2 000 ms clusters, so a measurement can only ever
+// pin the answer to within one step: each of the three is inside its own step,
+// and none of them is without the link cluster (which would give 6 000, 26 000
+// and 62 000 - a whole cluster short, every time).
+TEST(capacity_track_overhead_matches_the_device) {
+    EXPECT(PLAN_TRACK_OVERHEAD_CLUSTERS == 1);
+    EXPECT(plan_clusters_for(5000, PlanCapMode_SP) == 4);
+    EXPECT(plan_clusters_for(25000, PlanCapMode_SP) == 14);
+    EXPECT(plan_clusters_for(61000, PlanCapMode_SP) == 32);
+    EXPECT(plan_clusters_for(5000, PlanCapMode_SP) * PLAN_CLUSTER_SP_MS == 8000);
+    EXPECT(plan_clusters_for(25000, PlanCapMode_SP) * PLAN_CLUSTER_SP_MS == 28000);
+    EXPECT(plan_clusters_for(61000, PlanCapMode_SP) * PLAN_CLUSTER_SP_MS == 64000);
+    // Within the 2 000 ms step of the measurement, on both sides.
+    EXPECT(8000u + 2000u > 8029u && 8000u < 8029u + 2000u);
+    EXPECT(28000u + 2000u > 28102u && 28000u < 28102u + 2000u);
+    EXPECT(64000u + 2000u > 63890u && 64000u < 63890u + 2000u);
+    // The three of them in one plan, as they were written in one session:
+    // 100 022 ms measured, 100 000 ms here.
+    EXPECT((plan_clusters_for(5000, PlanCapMode_SP) + plan_clusters_for(25000, PlanCapMode_SP) +
+            plan_clusters_for(61000, PlanCapMode_SP)) *
+               PLAN_CLUSTER_SP_MS ==
+           100000);
+    (void)arena;
+}
+
 // The table of cases the ticket asks for: what the numbers of research/01 s7.6
 // say must happen on an 80 minute disc.
 TEST(capacity_table) {
@@ -50,58 +85,71 @@ TEST(capacity_table) {
     EXPECT(plan_clusters_capacity(74) == 2220);
     EXPECT(plan_clusters_capacity(60) == 1800);
 
-    // The rounding itself: 3 s of LP4 costs the cluster of 8 s (research/02 s3.1).
-    EXPECT(plan_clusters_for(3000, PlanCapMode_LP4) == 1);
+    // The rounding itself: 3 s of LP4 costs the cluster of 8 s (research/02 s3.1),
+    // plus the link cluster every track costs (T-045).
+    EXPECT(PLAN_TRACK_OVERHEAD_CLUSTERS == 1);
+    EXPECT(plan_clusters_for(3000, PlanCapMode_LP4) == 1 + 1);
+    // The padding is the wasted *audio* and nothing else: the link cluster is a
+    // cluster of the disc, not five seconds of silence to hatch.
     EXPECT(plan_padding_ms(3000, PlanCapMode_LP4) == 5000);
-    EXPECT(plan_clusters_for(1, PlanCapMode_SP) == 1);      // never zero
-    EXPECT(plan_clusters_for(2000, PlanCapMode_SP) == 1);   // exactly one cluster
-    EXPECT(plan_clusters_for(2001, PlanCapMode_SP) == 2);   // one millisecond over
+    EXPECT(plan_clusters_for(1, PlanCapMode_SP) == 2);      // never below 1 + overhead
+    EXPECT(plan_clusters_for(2000, PlanCapMode_SP) == 2);   // exactly one audio cluster
+    EXPECT(plan_clusters_for(2001, PlanCapMode_SP) == 3);   // one millisecond over
+    EXPECT(plan_padding_ms(2000, PlanCapMode_SP) == 0);
 
-    // 40 tracks of 2:00,001 in SP: 120:01 rounds to 61 clusters each, 2440 in
-    // all, so they do NOT fit on an 80 minute disc - and 40 x 2:00 would.
+    // 40 tracks of 2:00,001 in SP: 120:01 rounds to 61 audio clusters plus the
+    // link cluster = 62 each, 2480 in all, so they do NOT fit on an 80 minute
+    // disc - and neither would 40 x 2:00, which the old arithmetic let through.
     for (u32 i = 0; i < 40; i += 1) { test_cap_add(plan, 120001, PlanMode_SP, 0); }
     plan_capacity_compute(disc, cap);
-    EXPECT(cap->clusters[0] == 61);
-    EXPECT(cap->used_clusters == 2440);
-    EXPECT(cap->overflow_clusters == 40);
+    EXPECT(cap->clusters[0] == 62);
+    EXPECT(cap->used_clusters == 2480);
+    EXPECT(cap->overflow_clusters == 80);
     EXPECT(cap->free_clusters == 0);
     EXPECT(cap->audio_ms == 40ull * 120001ull);
-    EXPECT(cap->billed_ms == 40ull * 122000ull);
+    EXPECT(cap->billed_ms == 40ull * 124000ull);
+    // padding_ms is the wasted audio alone; the 40 link clusters are billed but
+    // are not padding, so billed - audio is padding + 40 x 2 000 ms.
     EXPECT(cap->padding_ms == 40ull * 1999ull);
-    // The last track is the one that straddles the end of the disc.
-    EXPECT(cap->fit[38] == PlanFit_Fits);
-    EXPECT(cap->fit[39] == PlanFit_Partial);
-    EXPECT(cap->first_overflow == 39);
+    EXPECT(cap->billed_ms - cap->audio_ms == cap->padding_ms + 40ull * 2000ull);
+    // The track that straddles the end of the disc moved down two places: 38 x
+    // 62 = 2356 fit whole, the 39th (index 38) crosses 2400.
+    EXPECT(cap->fit[37] == PlanFit_Fits);
+    EXPECT(cap->fit[38] == PlanFit_Partial);
+    EXPECT(cap->fit[39] == PlanFit_Overflow);
+    EXPECT(cap->first_overflow == 38);
 
-    // The headline case of D2: 79:58 of audio, 80:04 of disc. 79 tracks of
-    // 1:00,7 sum to 79:55,3 linearly but each one costs 31 clusters.
+    // The headline case of D2: 79:55,3 of audio, 84:16 of disc. 79 tracks of
+    // 1:00,7 sum to 79:55,3 linearly but each one costs 31 audio clusters plus
+    // its link cluster = 32.
     plan_clear(plan);
     disc = plan_disc(plan, 0);
     for (u32 i = 0; i < 79; i += 1) { test_cap_add(plan, 60700, PlanMode_SP, 0); }
     plan_capacity_compute(disc, cap);
     EXPECT(cap->audio_ms == 4795300);          // 79:55,3 - it fits, says the sum
     EXPECT(cap->audio_ms < 80ull * 60000ull);
-    EXPECT(cap->used_clusters == 79 * 31);     // 2449 clusters = 81:38 of disc
+    EXPECT(cap->used_clusters == 79 * 32);     // 2528 clusters = 84:16 of disc
     EXPECT(cap->used_clusters > cap->capacity_clusters);
-    EXPECT(cap->overflow_clusters == 49);
+    EXPECT(cap->overflow_clusters == 128);
 
     // LP4 carries four times the audio of SP for the same clusters, mono twice.
     plan_clear(plan);
     disc = plan_disc(plan, 0);
-    test_cap_add(plan, 300000, PlanMode_SP, 0);   // 5:00 SP  = 150 clusters
-    test_cap_add(plan, 300000, PlanMode_LP2, 0);  // 5:00 LP2 =  75
-    test_cap_add(plan, 300000, PlanMode_LP4, 0);  // 5:00 LP4 =  38 (ceil 37,5)
-    test_cap_add(plan, 300000, PlanMode_SP, 1);   // 5:00 mono=  75
+    // Each one plus its link cluster, which is one *disc* cluster in every mode.
+    test_cap_add(plan, 300000, PlanMode_SP, 0);   // 5:00 SP  = 150 + 1 clusters
+    test_cap_add(plan, 300000, PlanMode_LP2, 0);  // 5:00 LP2 =  75 + 1
+    test_cap_add(plan, 300000, PlanMode_LP4, 0);  // 5:00 LP4 =  38 + 1 (ceil 37,5)
+    test_cap_add(plan, 300000, PlanMode_SP, 1);   // 5:00 mono=  75 + 1
     plan_capacity_compute(disc, cap);
-    EXPECT(cap->clusters[0] == 150);
-    EXPECT(cap->clusters[1] == 75);
-    EXPECT(cap->clusters[2] == 38);
-    EXPECT(cap->clusters[3] == 75);
-    EXPECT(cap->used_clusters == 338);
+    EXPECT(cap->clusters[0] == 151);
+    EXPECT(cap->clusters[1] == 76);
+    EXPECT(cap->clusters[2] == 39);
+    EXPECT(cap->clusters[3] == 76);
+    EXPECT(cap->used_clusters == 342);
     EXPECT(cap->fit[0] == PlanFit_Fits && cap->fit[3] == PlanFit_Fits);
 
     // What would still fit, in each mode: the same clusters, four answers.
-    u32 free_clusters = 2400 - 338;
+    u32 free_clusters = 2400 - 342;  // 2058
     EXPECT(cap->free_clusters == free_clusters);
     EXPECT(cap->remaining_ms[PlanCapMode_SP] == free_clusters * 2000);
     EXPECT(cap->remaining_ms[PlanCapMode_Mono] == free_clusters * 4000);
@@ -294,27 +342,29 @@ TEST(capacity_split) {
     Plan *plan = tc.plan;
     PlanSplit *split = push_struct(arena, PlanSplit);
 
-    // 30 tracks of 5:00 = 150 clusters each: 16 fit on an 80 minute disc.
+    // 30 tracks of 5:00 = 150 + 1 clusters each: 15 fit on an 80 minute disc
+    // (15 x 151 = 2265; a sixteenth would be 2416 of 2400).
     for (u32 i = 0; i < 30; i += 1) { test_cap_add(plan, 300000, PlanMode_SP, 0); }
     plan_capacity_split(plan_disc(plan, 0), 0, PlanSplit_FirstFit, 80, split);
     EXPECT(split->disc_count == 2);
-    EXPECT(split->counts[0] == 16 && split->counts[1] == 14);
-    EXPECT(split->clusters[0] == 2400 && split->clusters[1] == 2100);
-    EXPECT(split->disc_of[15] == 0 && split->disc_of[16] == 1);
+    EXPECT(split->counts[0] == 15 && split->counts[1] == 15);
+    EXPECT(split->clusters[0] == 2265 && split->clusters[1] == 2265);
+    EXPECT(split->disc_of[14] == 0 && split->disc_of[15] == 1);
     EXPECT(split->unplaced == 0 && split->entry_count == 30);
 
     // First fit, not next fit: a short track after the boundary goes back to
     // the first disc when there is still room for it there.
     plan_clear(plan);
+    // 16 x 4:50 = 16 x 146 = 2336 clusters, 64 left on the first disc.
     for (u32 i = 0; i < 16; i += 1) { test_cap_add(plan, 290000, PlanMode_SP, 0); }
-    test_cap_add(plan, 600000, PlanMode_SP, 0);  // 10:00, only disc 2 can take it
-    test_cap_add(plan, 30000, PlanMode_SP, 0);   // 0:30, disc 1 still has room
+    test_cap_add(plan, 600000, PlanMode_SP, 0);  // 10:00 = 301, only disc 2 fits it
+    test_cap_add(plan, 30000, PlanMode_SP, 0);   // 0:30 = 16, disc 1 still has room
     plan_capacity_split(plan_disc(plan, 0), 0, PlanSplit_FirstFit, 80, split);
     EXPECT(split->disc_count == 2);
     EXPECT(split->disc_of[16] == 1);
     EXPECT(split->disc_of[17] == 0);
 
-    // Keeping albums together: three albums of 6 tracks of 5:00 (900 clusters
+    // Keeping albums together: three albums of 6 tracks of 5:00 (906 clusters
     // each). Two albums fit on a disc, the third opens a second one instead of
     // being cut in half where first fit would have split it.
     plan_clear(plan);
@@ -342,7 +392,7 @@ TEST(capacity_split) {
     EXPECT(split->counts[0] == 12 && split->counts[1] == 6);
     EXPECT(split->disc_of[11] == 0 && split->disc_of[12] == 1);
     plan_capacity_split(plan_disc(plan, 0), lib, PlanSplit_FirstFit, 80, split);
-    EXPECT(split->counts[0] == 16);  // first fit cuts album C in half
+    EXPECT(split->counts[0] == 15);  // first fit cuts album C after three tracks
 
     // The proposals read the same columns: one album per run, and a disc title
     // from the artist every entry shares.
@@ -364,6 +414,7 @@ TEST(capacity_split) {
 }
 
 static void test_capacity_run_all(void) {
+    RUN(capacity_track_overhead_matches_the_device);
     RUN(capacity_table);
     RUN(capacity_toc_cells);
     RUN(capacity_sanitize);

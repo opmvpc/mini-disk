@@ -96,11 +96,12 @@ TEST(transfer_sim_lists_what_will_be_written) {
     EXPECT(sim->allowed);
     EXPECT((sim->warnings & TransferWarn_MissingTrack) == 0);
     EXPECT((sim->warnings & TransferWarn_DiscNotEmpty) == 0);
-    // 180 s and 240 s of SP: 90 and 120 clusters of 2 s, nothing rounded away.
-    EXPECT(sim->entries[0].clusters == 90);
-    EXPECT(sim->entries[1].clusters == 120);
-    EXPECT(sim->clusters_needed == 210);
-    EXPECT(sim->free_ms_after == 4800000ull - 210ull * 2000ull);
+    // 180 s and 240 s of SP: 90 and 120 audio clusters of 2 s, nothing rounded
+    // away, plus the link cluster each track costs the disc (T-045): 91 and 121.
+    EXPECT(sim->entries[0].clusters == 91);
+    EXPECT(sim->entries[1].clusters == 121);
+    EXPECT(sim->clusters_needed == 212);
+    EXPECT(sim->free_ms_after == 4800000ull - 212ull * 2000ull);
     EXPECT(sim->tracks_after == 2);
     // The titles are the ones the TOC will hold, not the ones the plan holds.
     EXPECT(str8_eq(str8(sim->entries[0].title, sim->entries[0].title_size),

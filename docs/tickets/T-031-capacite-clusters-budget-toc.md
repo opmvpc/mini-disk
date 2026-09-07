@@ -110,3 +110,14 @@ Trois corrections successives, mesurées : écriture à la main des ≤ 7 octets
   `bench_line_ns`.
 - Rien à redire sur l'architecture : une passe, zéro allocation, tables générées, aucune validation
   redondante. La constante mono reste à valider sur le device (T-042 le mesure).
+
+### Suite (T-045)
+
+Le surcoût de piste que ce ticket ne connaissait pas a été **mesuré sur le vrai MZ-N505** (T-043,
+2026-09-07 : sept uploads SP, **+2 007 ms ± 80 par piste**, soit exactement un cluster) puis
+**appliqué** : `PLAN_TRACK_OVERHEAD_CLUSTERS 1u` dans `plan_capacity.h`, facturé par
+`plan_clusters_for` dans tous les modes comme un cluster de disque de 2 000 ms (c'est un cluster de
+lien/TOC, pas de l'audio). Les nombres de la table §7.6 ci-dessus ont donc bougé — 40 × 2:00,001 =
+**2 480** clusters et non 2 440, 79 × 1:00,7 = **2 528** et non 2 449 — et la constante mono, elle,
+reste non mesurée (l'appareil n'encode que du SP en v1). Voir
+`T-045-capacite-surcout-piste.md`.

@@ -2,7 +2,7 @@
 
 Dernière mise à jour : 2026-09-07
 
-## Phase actuelle : 5 terminée (T-040..T-043 mergés, gravure réelle validée) — T-045 en cours, puis tags v0.3.0 / v0.5.0
+## Phase actuelle : 5 terminée (T-040..T-043 mergés, gravure réelle validée) — T-045 fait (surcoût de piste mesuré et appliqué), puis tags v0.3.0 / v0.5.0
 ## Phase actuelle (historique) : 3 + 5 en parallèle — T-020, T-021, T-040, T-041 mergés dans main ; T-042 fait et **validé sur le vrai MZ-N505** (le pilote WinUSB est lié, P-001 levé), T-022 en cours
 
 ### Fait (phase 0 terminée)
@@ -117,6 +117,28 @@ Dernière mise à jour : 2026-09-07
   branchement/débranchement restent **en attente de Zadig** (P-001).
 
 ### Fait en phase 5
+- **T-045 livré : la jauge cesse de sous-estimer d'un cluster par piste.** Les sept mesures de T-043
+  sur le vrai MZ-N505 (2026-09-07, **+2 007 ms ± 80 par piste SP**) disent qu'une piste coûte
+  `ceil(durée / 2 s) × 2 s` **plus un cluster** : `PLAN_TRACK_OVERHEAD_CLUSTERS 1u` entre dans
+  `plan_capacity.h` avec sa mesure, et `plan_clusters_for` le facture. Le surcoût est appliqué à tous
+  les modes comme **un cluster de disque de 2 000 ms**, parce que ce qu'il paie est un cluster de
+  lien/TOC du disque et pas de l'audio — une piste LP4 coûte donc 8 000 ms d'audio + 2 000 ms de
+  disque. Conséquence : `plan_padding_ms` et `entry_padding_ms` gardent leur sens (les millisecondes
+  d'audio que l'arrondi gaspille, **le lien exclu**) et la jauge ne hachure que celles-là, le lien
+  élargissant le segment ; `billed_ms` inclut le lien puisque c'est ce que le disque est facturé, et
+  `padding_ms` devient la somme explicite des `entry_padding_ms` (`billed - audio == padding +
+  entry_count × 2 000 ms`, épinglé par un test). Le pavé `MD_MODE_TABLE` passe de « à valider sur
+  l'appareil » à « **validé pour le SP le 2026-09-07** », les tailles de cluster LP2/LP4/mono restant
+  non mesurées faute d'encodage autre que SP en v1. Tous les appelants relus : la géométrie de la
+  jauge et `plan_fill_count` sont justes sans changement, la bulle par piste passe par le nouveau
+  `plan_billed_ms_of` (sinon le cluster de lien d'un segment LP4 vaudrait 8 000 ms) et dit
+  désormais « **+1 cluster de lien** », `view_device` cesse de compter le lien comme du silence, et
+  `netmd_upload_check_capacity` refusait un cluster par piste trop tard. Un cas de test épingle la
+  mesure elle-même : 5 s, 25 s et 61 s en SP coûtent **4, 14 et 32 clusters** (8 000 / 28 000 /
+  64 000 ms), chacun dans le pas de 2 000 ms des 8 029 / 28 102 / 63 890 ms relevés sur l'appareil.
+  **P-014 reste ouvert** (voir la fiche : il faut un bit de session sur `NetmdTrack` qui survive au
+  rafraîchissement du TOC, bien plus de 30 lignes, et l'appareil pour le valider). Détail, table de
+  mesures et liste complète des attentes recalées dans `tickets/T-045-capacite-surcout-piste.md`.
 - **T-043 livré : la gravure devient une étape visible, et le transcodage ne se paie qu'une fois.**
   `pipeline_cache.c` garde les octets SP rendus dans `<cache>\transcode\<clé>.pcm` ; la clé est un
   FNV-1a du chemin, de la taille et de la mtime du source **plus** un condensé des douze paramètres du
@@ -202,6 +224,16 @@ Dernière mise à jour : 2026-09-07
   gain (le seuil de trim est un niveau absolu), et le banc « pipeline complet < 0,5 s » non tenu à
   669 ms — la passe de rendu seule est à 195 ms, c'est la passe de mesure R128 qui coûte les 403 ms
   restants. Détail et justifications dans `tickets/T-041-dsp-resampler-r128-dither.md`.
+
+## KPI — phase 5, T-045 (i7-8550U, 4 cœurs / 8 threads, Windows 11)
+| Métrique | Valeur | Cible | Date |
+|----------|--------|-------|------|
+| Taille exe release | **636 928 o** — **inchangé à l'octet** (un `+1` en ligne, une chaîne de bulle remplacée) | ± 2 Ko | 2026-09-07 |
+| Tests | **249 cas, 6 848 checks**, 0 échec sous ASan (+1 cas, +34 checks) | verts | 2026-09-07 |
+| Cibles `build.bat` | debug, release, test, check, analyze, bench toutes vertes | vertes | 2026-09-07 |
+| Imports | kernel32 + user32 | 2 DLL | 2026-09-07 |
+| Recalcul complet d'un disque de 254 pistes | **39,8 µs** (clusters + états 5,8 µs, budget TOC 34,1 µs, premier-ajusté 17,8 µs) | < 50 µs | 2026-09-07 |
+| Écart du modèle à l'appareil | 5 s / 25 s / 61 s en SP : **8 000 / 28 000 / 64 000 ms** contre 8 029 / 28 102 / 63 890 mesurés — dans le pas de 2 000 ms | ±1 cluster | 2026-09-07 |
 
 ## KPI — phase 5, T-043 (i7-8550U, 4 cœurs / 8 threads, Windows 11 ; MZ-N505 sous WinUSB, disque « 202001 »)
 | Métrique | Valeur | Cible | Date |

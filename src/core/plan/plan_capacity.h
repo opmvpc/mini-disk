@@ -34,12 +34,15 @@ typedef enum PlanCapMode {
 // (research/02 s3.1). A track therefore costs
 //     clusters = ceil(duration_ms / cluster_ms), at least 1.
 //
-// TO VALIDATE ON THE DEVICE IN PHASE 5 (T-045). These constants come from the
-// documentation, not from a measurement: the mono row in particular is the one
-// research/01 s7.2 flags as model dependent (some units do not double the
-// running time). Until T-045 has checked them against a real MZ-N505, the
-// figures here are an offline estimate and the device's own getDiscCapacity
-// wins whenever a disc is inserted (Q-29).
+// VALIDATED FOR SP ON 2026-09-07 (T-045, from the seven measurements of T-043
+// on a real MZ-N505). The 2 000 ms step of the SP row is confirmed to the
+// millisecond; what the table was missing is the fixed per track overhead
+// below. The LP2, LP4 and mono cluster sizes are still UNMEASURED, because the
+// device only ever encodes SP in v1 - nothing we write goes through those rows,
+// so they stay the documented estimate (research/01 s7.2 flags the mono row in
+// particular as model dependent: some units do not double the running time).
+// The device's own getDiscCapacity still wins whenever a disc is inserted
+// (Q-29).
 typedef struct PlanModeSpec {
     u32 cluster_ms;   // audio milliseconds one cluster carries in this mode
     u32 kbit_per_s;   // nominal bitrate, for the tooltip and nothing else
@@ -49,6 +52,19 @@ typedef struct PlanModeSpec {
 extern const PlanModeSpec MD_MODE_TABLE[PlanCapMode_COUNT];
 
 #define PLAN_CLUSTER_SP_MS 2000u  // the unit the disc capacity is counted in
+
+// The fixed cost of *being a track*, on top of the audio. Measured on the real
+// MZ-N505 on 2026-09-07: seven SP uploads, one session each, the device's own
+// free time read before and after every one of them. Every track cost
+// ceil(duration / 2 s) x 2 s **plus 2 007 ms on average** (sigma 80 ms over the
+// seven), i.e. exactly one more cluster (T-043, section "MD_MODE_TABLE").
+//
+// Measured in SP only. It is applied to every mode all the same, and always as
+// one *disc* cluster of PLAN_CLUSTER_SP_MS, because what it pays for is the
+// link/TOC cluster the disc spends per track - not audio. That is why an LP4
+// track costs one 8 000 ms cluster of audio plus one 2 000 ms cluster of disc,
+// and why plan_padding_ms deliberately ignores it: no listener ever hears it.
+#define PLAN_TRACK_OVERHEAD_CLUSTERS 1u
 
 // 60 / 74 / 80 minutes of SP -> whole clusters. 80 min = 2400 clusters.
 md_inline u32 plan_clusters_capacity(u32 minutes) {
@@ -65,11 +81,26 @@ md_inline u32 plan_cap_mode_of(const PlanDisc *disc, u32 index) {
     return plan_cap_mode(disc->mode[index], (disc->flags[index] & PlanEntryFlag_Mono) != 0);
 }
 
-// Clusters a track costs, rounded up, never zero: even 40 ms of audio takes a
-// whole cluster, which is the whole point of D2.
+// Clusters a track costs the disc: the audio rounded up to whole clusters, plus
+// PLAN_TRACK_OVERHEAD_CLUSTERS. Never below 1 + the overhead: even 40 ms of
+// audio takes a whole cluster of its own, which is the whole point of D2.
 u32 plan_clusters_for(u32 duration_ms, u32 cap_mode);
-// The audio milliseconds that rounding wastes at the end of the track.
+// The audio milliseconds that rounding wastes at the end of the track. The
+// overhead cluster is NOT in here: it is not wasted audio, it is a cluster of
+// the disc the track spends whatever its length. The gauge hatches this and
+// only this; the overhead is part of the segment's own width.
 u32 plan_padding_ms(u32 duration_ms, u32 cap_mode);
+
+// The disc milliseconds a run of `clusters` carrying `entries` tracks costs:
+// the audio clusters at the mode's own rate plus one PLAN_CLUSTER_SP_MS disc
+// cluster per track. The gauge's tooltip needs this because an LP4 segment's
+// clusters are not all worth 8 000 ms - the link cluster is worth 2 000.
+md_inline u64 plan_billed_ms_of(u32 clusters, u32 entries, u32 cap_mode) {
+    u32 overhead = entries * PLAN_TRACK_OVERHEAD_CLUSTERS;
+    if (overhead > clusters) { overhead = clusters; }
+    return (u64)(clusters - overhead) * MD_MODE_TABLE[cap_mode].cluster_ms +
+           (u64)overhead * PLAN_CLUSTER_SP_MS;
+}
 
 // Per entry state, for the segmented gauge: the track fits whole, straddles the
 // end of the disc, or starts past it entirely.
@@ -89,8 +120,11 @@ typedef struct PlanCapacity {
     u32 first_overflow;     // index of the first entry that does not fit whole,
                             // entry_count when everything does
     u64 audio_ms;    // sum of the durations, what a naive gauge would show
-    u64 billed_ms;   // the same audio rounded up to whole clusters, per mode
-    u64 padding_ms;  // billed - audio: the silence the rounding pays for
+    u64 billed_ms;   // what the disc is charged: the audio rounded up to whole
+                     // clusters per mode, plus the overhead cluster per track
+    u64 padding_ms;  // the audio silence the rounding pays for, and nothing
+                     // else: the sum of entry_padding_ms. billed_ms - audio_ms
+                     // is this plus entry_count overhead clusters.
 
     // "What would still fit", one answer per mode: the free clusters spent in
     // that mode. Ambiguous in seconds, which is exactly why it is tri-modal

@@ -135,7 +135,7 @@ typedef enum Str {
     Str_GaugeEmpty,            // "disque vierge %u min"
     Str_GaugeFull,
     Str_GaugeOverflow,         // "depassement %S"
-    Str_GaugeSegmentTip,       // "%u. %S - %S - %s - facture %S (+%S)"
+    Str_GaugeSegmentTip,       // "%u. %S - %S - %s - facture %S (+%S, +1 link cluster)"
     Str_GaugeMergedTip,        // "%u pistes - %S - %s"
     Str_GaugeFreeTip,          // "reste %S en SP - %S en LP2 - %S en LP4"
     Str_GaugePlayheadTip,      // "%S / %S"
@@ -401,7 +401,7 @@ static const char *app_strings_fr[Str_COUNT] = {
     "disque vierge %u min",
     "disque plein",
     "dépassement %S",
-    "%u. %S · %S · %s · facturé %S (+%S)",
+    "%u. %S · %S · %s · facturé %S (+%S dont +1 cluster de lien)",
     "%u pistes · %S · %s",
     "reste %S en SP · %S en LP2 · %S en LP4",
     "%S / %S",
@@ -650,7 +650,7 @@ static const char *app_strings_en[Str_COUNT] = {
     "blank %u min disc",
     "disc full",
     "over by %S",
-    "%u. %S · %S · %s · billed %S (+%S)",
+    "%u. %S · %S · %s · billed %S (+%S including +1 link cluster)",
     "%u tracks · %S · %s",
     "%S in SP · %S in LP2 · %S in LP4 left",
     "%S / %S",
