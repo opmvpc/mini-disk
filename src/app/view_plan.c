@@ -1502,6 +1502,10 @@ void app_disc_panel(f32 width) {
             // The device state comes first: with no driver bound, the guided
             // screen is the only thing in this panel worth reading (T-020).
             app_device_status();
+            // T-043: a pre-flight or a transfer in flight is the thing the user
+            // is doing, so it comes before the disc's own contents.
+            b32 transfer_up = app_transfer_takes_over();
+            if (transfer_up) { app_transfer_bar(width); }
             // The disc that is actually in the bay, when there is one (T-021):
             // its title, its groups, its tracks and its own capacity. Below it,
             // what the *plan* would still fit, which is a different question.
@@ -1539,26 +1543,9 @@ void app_disc_panel(f32 width) {
             }
 
             ui_spacer(ui_px(ui_dp(theme->space[UI_Space_12]), 1.0f));
-            UI_PrefWidth(ui_pct(1.0f, 0.0f))
-            UI_PrefHeight(ui_px(ui_dp(theme->row_standard), 1.0f))
-            UI_ChildLayoutAxis(Axis2_X) {
-                UI_Box *row = ui_build_box_from_key(0, 0);
-                UI_Parent(row) {
-                    ui_spacer(ui_px(ui_dp(theme->space[UI_Space_12]), 1.0f));
-                    if (ui_button_primary(str8f(ui_frame_arena(), "%S###burn",
-                                                app_str(Str_DiscBurn)))
-                            .clicked) {
-                        app_plan_burn();
-                    }
-                    ui_tooltip(app_str(Str_DiscBurnHint));
-                    ui_spacer(ui_px(ui_dp(theme->space[UI_Space_8]), 1.0f));
-                    if (ui_button(str8f(ui_frame_arena(), "%S###clear", app_str(Str_DiscClear)))
-                            .clicked) {
-                        app_plan_clear();
-                    }
-                    ui_tooltip(app_str(Str_DiscClearHint));
-                }
-            }
+            // T-043: the burn is a step of its own now - the button, then the
+            // pre-flight, then the transfer. All three live in view_transfer.c.
+            if (!transfer_up) { app_transfer_bar(width); }
         }
     }
     app_panel_end();

@@ -35,7 +35,9 @@
 #include "core/dsp/dsp_loudness.h"
 #include "core/dsp/dsp_edit.h"
 #include "core/dsp/dsp_dither.h"
+#include "core/cache/cache_lru.h"
 #include "core/pipeline/pipeline.h"
+#include "core/pipeline/pipeline_cache.h"
 #include "core/codecs/codec.h"
 #include "ui/gl_loader.h"
 #include "ui/r_core.h"
@@ -53,6 +55,7 @@
 #include "app/strings.h"
 #include "app/prefs.h"
 #include "app/plan_view.h"
+#include "app/transfer.h"
 #include "app/app_state.h"
 
 #if BUILD_NO_CRT
@@ -109,7 +112,9 @@
 #include "core/dsp/dsp_loudness.c"
 #include "core/dsp/dsp_edit.c"
 #include "core/dsp/dsp_dither.c"
+#include "core/cache/cache_lru.c"
 #include "core/pipeline/pipeline.c"
+#include "core/pipeline/pipeline_cache.c"
 
 #include "core/codecs/codec.c"
 #include "core/codecs/codec_mp3.c"
@@ -134,8 +139,10 @@
 
 #include "app/prefs.c"
 #include "app/plan_view.c"
+#include "app/transfer.c"
 #include "app/app_state.c"
 #include "app/view_library.c"
 #include "app/view_device.c"
 #include "app/view_plan.c"
+#include "app/view_transfer.c"
 #include "app/app.c"

@@ -2,6 +2,45 @@
 
 ## Unreleased
 
+### Phase 5 — Audio & gravure (T-040..T-043), terminée — tag `v0.5.0-phase5`
+De la bibliothèque au disque, pour de vrai, dans un exe de 636 928 octets :
+- **Décodeurs** (T-040) : MP3, FLAC, WAV/AIFF, Ogg Vorbis sans CRT, plus un repli Media Foundation
+  pour l'AAC ; sortie planaire f32 en blocs de 4096 frames, seek exact, fichiers cassés refusés
+  proprement (fuzz de 2 200 mutations d'en-tête).
+- **DSP et pipeline** (T-041) : `dsp_math` sans libm, resampler polyphase sinc/Kaiser SSE2
+  (SNR > 100 dB), loudness EBU R128 / BS.1770-4 avec true-peak, édition (downmix, trim, fondus,
+  gap, gain), dither TPDF et noise-shaping, cadrage SP big-endian 2048 o et écriture WAV. Le
+  pipeline fait deux passes par piste — mesurer, puis rendre — un job par piste.
+- **Session sécurisée et upload SP** (T-042) : DES, 3DES et retail-MAC écrits depuis la FIPS 46-3,
+  tables construites au premier usage ; toute la séquence de research/01 §4 (EKB, nonces, clé de
+  session, `setupDownload`, paquets DES-CBC chaînés, `commitTrack`) avec démontage garanti sur
+  toutes les sorties ; orchestration d'un plan piste par piste, titre puis commit, titre de disque
+  écrit une seule fois à la fin, annulation et reprise. **Première piste réellement gravée sur le
+  MZ-N505.**
+- **Vue Transfert et cache de transcodage** (T-043) : la gravure devient une étape visible.
+  Pré-vol (D4) qui liste ce qui sera écrit avec les titres finaux, la capacité et le budget TOC
+  avant/après et tous les avertissements ; transfert avec état par piste, deux barres, ETA honnête
+  (moyenne glissante 30 s qui ne remonte jamais), pause entre deux pistes, annulation qui énonce ce
+  qu'elle laisse sur le disque, reprise, bandeau « ne pas éjecter », fermeture refusée pendant
+  l'envoi, journal d'opérations. Cache disque des pistes transcodées
+  (`<cache>\transcode\<clé>.pcm`, clé sur le fichier source **et** tous les paramètres du pipeline,
+  en-tête validé, écriture atomique) avec purge LRU par taille partagée avec le cache de pochettes.
+  Variante « progression de gravure » de la jauge.
+
+### Phase 3 — NetMD, lecture et édition (T-020..T-022), terminée
+Le vrai appareil, sans pilote propriétaire :
+- **WinUSB, énumération et hotplug** (T-020) : `winusb`/`setupapi`/`cfgmgr32` chargées
+  dynamiquement, états `Ready` / `NoDriver` / `InUse` avec le code CM, politiques de pipe,
+  notifications de branchement débruitées, thread device dédié avec files de commandes et
+  d'événements, transport rejouable, écran guidé « pilote manquant » (P-001).
+- **Protocole NetMD, lecture** (T-021) : requêtes/réponses `%b %w %d %x`, statut AV/C, jeu de
+  caractères NetMD, TOC complet (titres, groupes, durées, capacité, protections) lu en une
+  commande, transcriptions `--netmd-trace` rejouables. Disque réel « 202001 » lu et affiché.
+- **Édition du disque** (T-022) : renommage, déplacement, effacement, groupes, effacement du
+  disque — chacun **simulé** avant toute écriture (ADR-011 D4), sauvegarde texte du TOC avant
+  chaque écriture, `oldLen` relu sur l'appareil, titre identique jamais réécrit, bandeau
+  « ne pas éjecter » et fermeture refusée tant que le TOC est en RAM.
+
 ### Phase 4 — Plan & capacité (T-030..T-032), terminée — tag v0.4.0-phase4
 Le cœur produit, dans un exe de 308 224 octets :
 - **Plan = document** (T-030) : multi-disques (8 × 254 entrées en SoA), commandes réversibles avec

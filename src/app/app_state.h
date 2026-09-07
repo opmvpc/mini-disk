@@ -21,6 +21,7 @@
 #include "../core/plan/plan_file.h"
 #include "../core/plan/plan_toc.h"
 #include "../core/plan/plan_model.h"
+#include "../core/netmd/netmd_device.h"
 #include "../ui/ui_widgets.h"
 #include "plan_view.h"
 #include "prefs.h"
@@ -221,6 +222,19 @@ void app_plan_drop_rows(u32 row);
 // Is the pointer over the plan list right now? The library drag asks, to know
 // whether letting go adds to the plan or to the library.
 b32 app_plan_hovered(V2 pos);
+
+// view_transfer.c (T-043): the burn as a visible step. The Disc panel calls
+// app_transfer_bar in place of the T-042 button, and the frame loop asks the
+// other three whether it may sleep, tick or close.
+void app_transfer_init(void);
+void app_transfer_tick(void);
+void app_transfer_bar(f32 panel_width);
+b32  app_transfer_takes_over(void);
+void app_transfer_open(void);
+b32  app_transfer_busy(void);
+b32  app_transfer_can_close(void);
+void app_transfer_close_blocked(void);
+void app_transfer_device_event(const NetmdEvent *event);
 
 // view_library.c
 void app_library_panel(f32 width);

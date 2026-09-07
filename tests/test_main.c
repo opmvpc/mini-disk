@@ -36,7 +36,9 @@
 #include "../src/core/dsp/dsp_loudness.h"
 #include "../src/core/dsp/dsp_edit.h"
 #include "../src/core/dsp/dsp_dither.h"
+#include "../src/core/cache/cache_lru.h"
 #include "../src/core/pipeline/pipeline.h"
+#include "../src/core/pipeline/pipeline_cache.h"
 #include "../src/core/codecs/codec.h"
 #include "../src/ui/r_core.h"
 #include "../src/ui/r_backend.h"
@@ -52,6 +54,7 @@
 #include "../src/ui/ui_debug_overlay.h"
 #include "../src/app/prefs.h"
 #include "../src/app/plan_view.h"
+#include "../src/app/transfer.h"
 
 #include "../src/base/base_arena.c"
 #include "../src/base/base_string.c"
@@ -110,7 +113,9 @@
 #include "../src/core/dsp/dsp_loudness.c"
 #include "../src/core/dsp/dsp_edit.c"
 #include "../src/core/dsp/dsp_dither.c"
+#include "../src/core/cache/cache_lru.c"
 #include "../src/core/pipeline/pipeline.c"
+#include "../src/core/pipeline/pipeline_cache.c"
 #include "../src/core/codecs/codec.c"
 #include "../src/core/codecs/codec_mp3.c"
 #include "../src/core/codecs/codec_flac.c"
@@ -119,6 +124,7 @@
 #include "../src/core/codecs/codec_mf.c"
 #include "../src/app/prefs.c"
 #include "../src/app/plan_view.c"
+#include "../src/app/transfer.c"
 
 typedef struct TestState {
     Arena *arena;         // per test case arena, reset between cases
@@ -183,6 +189,7 @@ static void test_check(b32 condition, const char *expression, i32 line) {
 #include "test_netmd_proto.c"
 #include "test_netmd_edit.c"
 #include "test_netmd_secure.c"
+#include "test_transfer.c"
 
 int main(void) {
     os_init();
@@ -210,6 +217,7 @@ int main(void) {
     test_netmd_proto_run_all();
     test_netmd_edit_run_all();
     test_netmd_secure_run_all();
+    test_transfer_run_all();
 
     test_report("%llu case(s), %llu check(s), %llu failure(s)\n", test_state.cases,
                 test_state.checks, test_state.failures);
