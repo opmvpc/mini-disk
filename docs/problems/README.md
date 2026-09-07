@@ -2,7 +2,7 @@
 
 | # | Titre | Ticket | Résolu |
 |---|-------|--------|--------|
-| P-001 | Device NetMD en statut "Error" (ProblemCode 28) sous Windows 11 | — | doc |
+| P-001 | Device NetMD en statut "Error" (ProblemCode 28) sous Windows 11 | — | oui |
 | P-002 | Explosion de sous-agents, quota 5h consommé en 10 min | — | procédure |
 | P-003 | `_tls_index` non résolu sans CRT (répertoire TLS écrit à la main) | T-001 | oui |
 | P-004 | Budget taille : l'exe release passe de 7 à 23 KB avec la fenêtre | T-002 | non |
@@ -12,4 +12,4 @@
 | P-008 | Les splitters n'ont jamais borné : box conteneur sans clé, donc `rect` nul | T-007 → T-013 | oui |
 | P-009 | `.mdplan` : les 5 ms save+load sont la barrière de durabilité de l'OS, pas notre code | T-030 | ouvert |
 | P-010 | `build.bat bench` s'arrête au milieu quand la machine est chargée (antérieur à T-040) | T-040 | ouvert |
-| P-012 | Transcriptions NetMD synthétiques : aucune capture possible sans le pilote WinUSB | T-021 | ouvert |
+| P-012 | Transcriptions NetMD synthétiques : aucune capture possible sans le pilote WinUSB | T-021 | en cours |

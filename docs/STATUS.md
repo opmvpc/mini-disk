@@ -26,6 +26,13 @@ Dernière mise à jour : 2026-09-07
 - Ordre de merge du 2026-09-07 : T-020 → T-041 → T-040 → T-021 (conflits d'includes résolus en gardant les deux côtés).
 
 ### Fait en phase 3
+- **2026-09-07, validation sur le vrai MZ-N505** (WinUSB via Zadig, P-001 clos) : énumération → `Ready`,
+  ouverture WinUSB, session complète de lecture capturée (`tests/netmd/real/mzn505_session1.trace`, 304
+  commandes, chaque réponse en `0x09`), disque « 202001 » lu et affiché : 8 pistes, 24:10 / 80:59, 56:44
+  restantes, groupe 1-8, transport et éjection proposés (`captures/T-021-disque-reel.png`). Première
+  observation pour `MD_MODE_TABLE` (T-042/T-045) : le device annonce **80:59** de capacité totale pour un
+  disque « 80 min », et enregistré + libre = 80:54 (5 s d'écart = arrondi aux clusters sur 8 pistes) ;
+  à recouper après un upload SP chronométré.
 - T-020 livré : **WinUSB — énumération, ouverture, control transfers, hotplug, écran « pilote
   manquant »**. `platform.h` gagne le contrat USB (`os_usb_enumerate/open/close/control/bulk_write/
   bulk_read/reset`, `OsUsbDeviceInfo { vid, pid, state, problem_code, path, bus_name }`,
@@ -307,7 +314,8 @@ Dernière mise à jour : 2026-09-07
 3. P-010 : rendre `os_memory_commit` parlant et découper l'arène du banc.
 
 ### Action utilisateur requise
-- Zadig → WinUSB sur « Net MD Walkman » : `tools/zadig/README.md` (l'exe et le script automatique sont dans `tools/zadig/`).
+- Pilote installé (P-001 clos). Pour finir P-012 : insérer successivement un disque vierge, un disque protégé, puis aucun disque, et lancer `build\minidisk.exe --netmd-trace tests
+etmdeal\mzn505_<cas>.trace` à chaque fois.
 
 ## KPI — fin de phase 1 (i7-8550U, 4 cœurs / 8 threads, Intel UHD 620, Windows 11)
 | Métrique | Valeur | Cible | Date |
