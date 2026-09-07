@@ -104,6 +104,11 @@ void os_semaphore_wait(OsSemaphore semaphore) {
     WaitForSingleObject((HANDLE)semaphore.v, INFINITE);
 }
 
+b32 os_semaphore_wait_for(OsSemaphore semaphore, u64 timeout_us) {
+    DWORD ms = (timeout_us == OS_TIMEOUT_INFINITE) ? INFINITE : (DWORD)(timeout_us / 1000u);
+    return WaitForSingleObject((HANDLE)semaphore.v, ms) == WAIT_OBJECT_0;
+}
+
 void os_semaphore_signal(OsSemaphore semaphore, u32 count) {
     if (count == 0) { return; }
     ReleaseSemaphore((HANDLE)semaphore.v, (LONG)count, 0);

@@ -56,6 +56,27 @@ void netmd_replay_init(NetmdReplay *replay, String8 trace);
 b32  netmd_replay_load(NetmdReplay *replay, Arena *arena, String8 path);
 void netmd_replay_transport(NetmdReplay *replay, UsbTransport *out);
 
+// --- the other direction: recording a session (T-021) -----------------------
+// The same file format, written instead of read. It wraps a real transport and
+// logs every control and bulk exchange, which is what `--netmd-trace <file>`
+// turns on: the transcripts under tests/netmd are meant to be *captured*, and a
+// capture that cannot be replayed byte for byte would be worthless.
+typedef struct NetmdTrace {
+    UsbTransport inner;
+    Arena *arena;
+    String8List lines;
+    u32 exchanges;
+    b32 bound;
+} NetmdTrace;
+
+void netmd_trace_init(NetmdTrace *trace, Arena *arena, const UsbTransport *inner);
+void netmd_trace_transport(NetmdTrace *trace, UsbTransport *out);
+void netmd_trace_comment(NetmdTrace *trace, String8 text);
+// Writes the whole transcript out in one go. There is no incremental append in
+// the platform layer, and a session is a few hundred lines: buffering it costs
+// nothing and keeps the file consistent if the device is unplugged mid capture.
+b32 netmd_trace_write(NetmdTrace *trace, String8 path);
+
 md_inline b32 netmd_replay_ok(const NetmdReplay *replay) { return replay->fail == 0; }
 // Every recorded exchange was played: a session that stops early is a test that
 // forgot half of what it meant to check.

@@ -21,6 +21,9 @@
 #include "../src/core/plan/plan_toc.h"
 #include "../src/core/netmd/netmd_models.h"
 #include "../src/core/netmd/netmd_transport.h"
+#include "../src/core/netmd/netmd_proto.h"
+#include "../src/core/netmd/netmd_disc.h"
+#include "../src/core/netmd/netmd_control.h"
 #include "../src/core/netmd/netmd_replay.h"
 #include "../src/core/netmd/netmd_device.h"
 #include "../src/core/dsp/dsp_math.h"
@@ -87,6 +90,9 @@
 #include "../src/core/plan/plan_file.c"
 #include "../src/core/plan/plan_toc.c"
 #include "../src/core/netmd/netmd_models.c"
+#include "../src/core/netmd/netmd_proto.c"
+#include "../src/core/netmd/netmd_disc.c"
+#include "../src/core/netmd/netmd_control.c"
 #include "../src/core/netmd/netmd_replay.c"
 #include "../src/core/netmd/netmd_device.c"
 #include "../src/core/dsp/dsp_math.c"
@@ -164,6 +170,7 @@ static void test_check(b32 condition, const char *expression, i32 line) {
 #include "test_usb_replay.c"
 #include "test_dsp.c"
 #include "test_codecs.c"
+#include "test_netmd_proto.c"
 
 int main(void) {
     os_init();
@@ -188,6 +195,7 @@ int main(void) {
     test_usb_replay_run_all();
     test_dsp_run_all();
     test_codecs_run_all();
+    test_netmd_proto_run_all();
 
     test_report("%llu case(s), %llu check(s), %llu failure(s)\n", test_state.cases,
                 test_state.checks, test_state.failures);

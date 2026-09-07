@@ -157,6 +157,28 @@ typedef enum Str {
     Str_DeviceInUse,
     Str_DeviceConnected,       // "Connecte : %S"
     Str_DeviceError,           // "Appareil injoignable (%i)"
+
+    // The disc itself (T-021): what the device says is on the medium, as
+    // opposed to what the plan says we would like to put there.
+    Str_DiscNone,
+    Str_DiscReading,
+    Str_DiscReadError,         // "Disque illisible (%u)"
+    Str_DiscUntitled,
+    Str_DiscTrackUntitled,
+    Str_DiscUngrouped,
+    Str_DiscProtected,
+    Str_DiscSummary,           // "%u pistes . %S / %S"
+    Str_DiscRemaining,         // "%S restantes"
+    Str_DiscRefresh,
+    Str_DiscRefreshHint,
+    Str_DiscPlay,
+    Str_DiscPause,
+    Str_DiscStop,
+    Str_DiscPrev,
+    Str_DiscNext,
+    Str_DiscEject,
+    Str_DiscEjectHint,
+    Str_DiscTrackProtected,
     Str_COUNT
 } Str;
 
@@ -311,6 +333,26 @@ static const char *app_strings_fr[Str_COUNT] = {
     "Appareil utilisé par une autre application",
     "Connecté : %S",
     "Appareil injoignable (%i)",
+
+    "Aucun disque inséré",
+    "Lecture du disque…",
+    "Disque illisible (%u)",
+    "(disque sans titre)",
+    "(sans titre)",
+    "Hors groupe",
+    "Disque protégé en écriture",
+    "%u pistes · %S / %S",
+    "%S restantes",
+    "Relire",
+    "Relit le TOC du disque inséré",
+    "Lecture",
+    "Pause",
+    "Stop",
+    "Précédente",
+    "Suivante",
+    "Éjecter",
+    "Éjecte le disque (sans effet sur la plupart des baladeurs)",
+    "Piste protégée : effacement impossible",
 };
 
 static const char *app_strings_en[Str_COUNT] = {
@@ -454,6 +496,26 @@ static const char *app_strings_en[Str_COUNT] = {
     "Device held by another application",
     "Connected: %S",
     "Device unreachable (%i)",
+
+    "No disc inserted",
+    "Reading the disc…",
+    "Disc unreadable (%u)",
+    "(untitled disc)",
+    "(untitled)",
+    "Ungrouped",
+    "Disc write protected",
+    "%u tracks · %S / %S",
+    "%S left",
+    "Reload",
+    "Reads the inserted disc's TOC again",
+    "Play",
+    "Pause",
+    "Stop",
+    "Previous",
+    "Next",
+    "Eject",
+    "Ejects the disc (does nothing on most portables)",
+    "Protected track: it cannot be erased",
 };
 
 global StrLang app_lang = APP_LANG_DEFAULT;

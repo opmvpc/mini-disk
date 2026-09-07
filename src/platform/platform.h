@@ -144,6 +144,9 @@ void     os_thread_yield(void);
 OsSemaphore os_semaphore_create(u32 initial_count, u32 max_count);
 void        os_semaphore_destroy(OsSemaphore semaphore);
 void        os_semaphore_wait(OsSemaphore semaphore);  // blocks, 0 % cpu
+// 1 when the semaphore was taken, 0 on timeout. What lets the device thread
+// watch for a disc change without spinning (T-021).
+b32         os_semaphore_wait_for(OsSemaphore semaphore, u64 timeout_us);
 void        os_semaphore_signal(OsSemaphore semaphore, u32 count);
 
 void os_mutex_init(OsMutex *mutex);

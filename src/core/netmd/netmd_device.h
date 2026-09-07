@@ -10,7 +10,11 @@
 #include "../../base/base.h"
 #include "../../base/base_string.h"
 #include "../../platform/platform.h"
+#include "netmd_control.h"
+#include "netmd_disc.h"
 #include "netmd_models.h"
+#include "netmd_proto.h"
+#include "netmd_replay.h"
 #include "netmd_transport.h"
 
 // A NetMD command, posted by the main thread.
@@ -22,7 +26,15 @@ typedef enum NetmdCmdKind {
     NetmdCmd_Ping,           // proves the handle talks (research/01 s2.5-2.7)
     NetmdCmd_Close,
     NetmdCmd_Quit,
-    // ReadDisc and the rest of the protocol arrive with T-021.
+    // T-021: the whole disc in one command. The UI never asks for a track at a
+    // time - a partial disc on screen is worse than a late one.
+    NetmdCmd_ReadDisc,
+    NetmdCmd_Play,
+    NetmdCmd_Pause,
+    NetmdCmd_Stop,
+    NetmdCmd_Next,
+    NetmdCmd_Prev,
+    NetmdCmd_Eject,
     NetmdCmd_COUNT
 } NetmdCmdKind;
 
@@ -39,6 +51,11 @@ typedef enum NetmdEventKind {
     NetmdEvent_Closed,
     NetmdEvent_Pong,
     NetmdEvent_Error,
+    // T-021. Disc says "a new DiscLayout has been published"; the layout itself
+    // never travels through the ring (it is 70 KB) - netmd_device_disc hands it
+    // over, and the double buffer is what makes that safe.
+    NetmdEvent_Disc,
+    NetmdEvent_Transport,  // play/pause/stop/next/prev/eject answered
     NetmdEvent_COUNT
 } NetmdEventKind;
 
@@ -58,6 +75,10 @@ typedef struct NetmdEvent {
     u16 pid;
     i32 error;         // OsUsbError on Error, 0 otherwise
     u32 status;        // Pong: the AV/C status byte the device answered with
+    u32 result;        // NetmdResult of the command this answers
+    u32 disc_flags;    // Disc: NetmdDiscFlag of the layout just published
+    u32 track_count;   // Disc: how many tracks it holds
+    u32 elapsed_ms;    // Disc: how long the whole read took, the < 2 s criterion
     u32 device_count;  // NetMD devices the last enumeration found
     u32 problem_code;  // CM_PROB_*, 28 when the driver is missing (P-001)
     u32 name_size;
@@ -97,8 +118,25 @@ typedef struct NetmdDevice {
     u32 device_count;
     OsUsb usb;
     UsbTransport transport;
+    NetmdSession session;
     b32 open;
     u32 open_index;
+
+    // The published disc, double buffered: the device thread fills the slot the
+    // UI is *not* reading and then swaps the index. A DiscLayout is 70 KB, far
+    // too big for the event ring, and copying it under a lock would be the one
+    // thing that makes the UI wait on USB.
+    DiscLayout *disc[2];
+    volatile u32 disc_slot;  // the slot the UI may read
+    volatile u32 disc_valid;
+    Arena *disc_arena;
+
+    // --netmd-trace: every exchange of this session, in the replay format.
+    NetmdTrace trace;
+    Arena *trace_arena;  // its own: the device arena is rewound every command
+    u64 watch_us;        // NETMD_DISC_WATCH_US, or 0 when the watch is off
+    u32 trace_path_size;
+    u8 trace_path[NETMD_PATH_MAX];
 
     // --- tests --------------------------------------------------------------
     // A transport set before the thread starts replaces WinUSB entirely: the
@@ -112,6 +150,11 @@ typedef struct NetmdDevice {
 // plug (the node, then each interface), and re-enumerating on each of them
 // would walk the bus five times for nothing.
 #define NETMD_HOTPLUG_DEBOUNCE_US 200000
+// How often an open session asks whether the bay still holds the same disc.
+// Opening the bay by hand raises no USB event, so this is the only way to know
+// (research/01 s6.3). Set to 0 to switch the watch off, which is what a replay
+// test does: a transcript has no clock in it.
+#define NETMD_DISC_WATCH_US 2000000
 
 void netmd_device_start(NetmdDevice *device, Arena *arena);
 void netmd_device_stop(NetmdDevice *device);  // posts Quit and joins
@@ -127,5 +170,12 @@ b32 netmd_device_wait_event(NetmdDevice *device, NetmdEvent *out, u64 timeout_us
 // Both must be called before netmd_device_start.
 void netmd_device_set_test_transport(NetmdDevice *device, const UsbTransport *transport, u16 vid,
                                      u16 pid);
+// `--netmd-trace <file>`: wrap whatever transport gets bound and write the
+// session out on close. Also before the thread starts.
+void netmd_device_set_trace(NetmdDevice *device, String8 path);
+
+// The last published layout, or 0 when no disc has been read. Safe to call from
+// the main thread at any point: the slot it names is not the one being written.
+const DiscLayout *netmd_device_disc(const NetmdDevice *device);
 
 #endif  // NETMD_DEVICE_H

@@ -183,6 +183,120 @@ void netmd_replay_transport(NetmdReplay *replay, UsbTransport *out) {
     out->user = replay;
 }
 
+// --- the trace writer --------------------------------------------------------
+
+static String8 netmd_trace_hex(Arena *arena, u8 kind, const u8 *bytes, u64 size) {
+    // "> " plus three characters per byte, minus the trailing space.
+    u64 capacity = 2 + size * 3;
+    u8 *out = push_array(arena, u8, capacity);
+    static const u8 digits[16] = {'0', '1', '2', '3', '4', '5', '6', '7',
+                                  '8', '9', 'a', 'b', 'c', 'd', 'e', 'f'};
+    out[0] = kind;
+    out[1] = ' ';
+    u64 at = 2;
+    for (u64 i = 0; i < size; i += 1) {
+        if (i != 0) {
+            out[at] = ' ';
+            at += 1;
+        }
+        out[at] = digits[bytes[i] >> 4];
+        out[at + 1] = digits[bytes[i] & 0x0Fu];
+        at += 2;
+    }
+    return str8(out, at);
+}
+
+static void netmd_trace_push(NetmdTrace *trace, u8 kind, const u8 *bytes, u64 size) {
+    str8_list_push(trace->arena, &trace->lines, netmd_trace_hex(trace->arena, kind, bytes, size));
+}
+
+// One logged exchange: the request exactly as netmd_replay.c would expect to
+// read it back, then whatever came off the wire.
+static i32 netmd_trace_exchange(NetmdTrace *trace, const u8 *request, u64 request_size,
+                                i32 got, const void *answer) {
+    netmd_trace_push(trace, '>', request, request_size);
+    if (got == OsUsbError_Timeout) {
+        str8_list_push(trace->arena, &trace->lines, str8_lit("! timeout"));
+    } else if (got > 0 && answer) {
+        netmd_trace_push(trace, '<', (const u8 *)answer, (u64)got);
+    }
+    trace->exchanges += 1;
+    return got;
+}
+
+static i32 netmd_trace_control(void *user, u8 request_type, u8 request, u16 value, u16 index,
+                               void *buffer, u32 length, u32 timeout_ms) {
+    NetmdTrace *trace = (NetmdTrace *)user;
+    u8 frame[8 + NETMD_REPLAY_MAX_BYTES];
+    frame[0] = request_type;
+    frame[1] = request;
+    frame[2] = (u8)(value & 0xFFu);
+    frame[3] = (u8)(value >> 8);
+    frame[4] = (u8)(index & 0xFFu);
+    frame[5] = (u8)(index >> 8);
+    frame[6] = (u8)(length & 0xFFu);
+    frame[7] = (u8)(length >> 8);
+    u64 size = 8;
+    b32 host_to_device = (request_type & 0x80u) == 0;
+    if (host_to_device && length != 0 && buffer) {
+        u64 payload = Min((u64)length, (u64)NETMD_REPLAY_MAX_BYTES);
+        mem_copy(frame + 8, buffer, payload);
+        size += payload;
+    }
+    // The request line is written from what was *sent*, so it has to be built
+    // before the transfer: an IN overwrites `buffer` with the answer.
+    i32 got = trace->inner.control(trace->inner.user, request_type, request, value, index, buffer,
+                                   length, timeout_ms);
+    return netmd_trace_exchange(trace, frame, size, got, host_to_device ? 0 : buffer);
+}
+
+static i32 netmd_trace_bulk_write(void *user, u8 endpoint, const void *data, u32 length,
+                                  u32 timeout_ms) {
+    NetmdTrace *trace = (NetmdTrace *)user;
+    u8 frame[1 + NETMD_REPLAY_MAX_BYTES];
+    frame[0] = endpoint;
+    u64 payload = Min((u64)length, (u64)NETMD_REPLAY_MAX_BYTES);
+    if (payload != 0 && data) { mem_copy(frame + 1, data, payload); }
+    i32 got = trace->inner.bulk_write(trace->inner.user, endpoint, data, length, timeout_ms);
+    return netmd_trace_exchange(trace, frame, payload + 1, got, 0);
+}
+
+static i32 netmd_trace_bulk_read(void *user, u8 endpoint, void *data, u32 length,
+                                 u32 timeout_ms) {
+    NetmdTrace *trace = (NetmdTrace *)user;
+    u8 frame[1];
+    frame[0] = endpoint;
+    i32 got = trace->inner.bulk_read(trace->inner.user, endpoint, data, length, timeout_ms);
+    return netmd_trace_exchange(trace, frame, 1, got, data);
+}
+
+void netmd_trace_init(NetmdTrace *trace, Arena *arena, const UsbTransport *inner) {
+    StructZero(trace);
+    trace->arena = arena;
+    mem_copy(&trace->inner, inner, sizeof(UsbTransport));
+    trace->bound = 1;
+    str8_list_push(arena, &trace->lines,
+                   str8_lit("# captured by minidisk --netmd-trace (T-021)"));
+}
+
+void netmd_trace_transport(NetmdTrace *trace, UsbTransport *out) {
+    out->control = netmd_trace_control;
+    out->bulk_write = netmd_trace_bulk_write;
+    out->bulk_read = netmd_trace_bulk_read;
+    out->user = trace;
+}
+
+void netmd_trace_comment(NetmdTrace *trace, String8 text) {
+    if (!trace->bound) { return; }
+    str8_list_push(trace->arena, &trace->lines, str8f(trace->arena, "# %S", text));
+}
+
+b32 netmd_trace_write(NetmdTrace *trace, String8 path) {
+    if (!trace->bound || trace->lines.count == 0) { return 0; }
+    String8 text = str8_list_join(trace->arena, &trace->lines, str8_lit("\n"));
+    return os_file_write_all(path, str8f(trace->arena, "%S\n", text));
+}
+
 b32 netmd_replay_done(const NetmdReplay *replay) {
     if (replay->fail != NetmdReplayFail_None) { return 0; }
     // A copy walks what is left: asking the question must not consume it.

@@ -12,3 +12,4 @@
 | P-008 | Les splitters n'ont jamais borné : box conteneur sans clé, donc `rect` nul | T-007 → T-013 | oui |
 | P-009 | `.mdplan` : les 5 ms save+load sont la barrière de durabilité de l'OS, pas notre code | T-030 | ouvert |
 | P-010 | `build.bat bench` s'arrête au milieu quand la machine est chargée (antérieur à T-040) | T-040 | ouvert |
+| P-012 | Transcriptions NetMD synthétiques : aucune capture possible sans le pilote WinUSB | T-021 | ouvert |

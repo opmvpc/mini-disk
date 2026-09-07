@@ -18,10 +18,6 @@ StaticAssert((u32)UI_Mode_Mono == (u32)PlanCapMode_Mono, app_mode_mono_aligned);
 StaticAssert((u32)UI_Mode_LP2 == (u32)PlanCapMode_LP2, app_mode_lp2_aligned);
 StaticAssert((u32)UI_Mode_LP4 == (u32)PlanCapMode_LP4, app_mode_lp4_aligned);
 
-static const char *app_mode_names[PlanCapMode_COUNT] = {"SP", "MONO", "LP2", "LP4"};
-// s9.9: the initial a wide enough segment carries, so the mode is never told by
-// the colour alone.
-static const char *app_mode_initials[PlanCapMode_COUNT] = {"S", "M", "2", "4"};
 
 #define APP_PLAN_ROW_MAX (PLAN_ENTRY_MAX + PLAN_GROUP_MAX)
 #define APP_PLAN_ROW_HEADER U16_MAX  // this row is a group header, not an entry
@@ -50,13 +46,6 @@ md_inline u32 app_plan_cap_mode(const PlanDisc *disc, u32 index) {
 // --- colours -------------------------------------------------------------------
 // Premultiplied RGBA8 in, premultiplied out. The theme's mode colours are
 // opaque, which is the only case these two are asked for.
-static u32 app_color_lighten(u32 color, f32 amount) {
-    u32 red = color & 0xFF, green = (color >> 8) & 0xFF, blue = (color >> 16) & 0xFF;
-    red = (u32)((f32)red + (255.0f - (f32)red) * amount);
-    green = (u32)((f32)green + (255.0f - (f32)green) * amount);
-    blue = (u32)((f32)blue + (255.0f - (f32)blue) * amount);
-    return r_rgba((u8)red, (u8)green, (u8)blue, (u8)((color >> 24) & 0xFF));
-}
 
 static u32 app_color_alpha(u32 color, f32 alpha) {
     u32 a = (u32)(((f32)((color >> 24) & 0xFF)) * alpha);
@@ -1513,6 +1502,10 @@ void app_disc_panel(f32 width) {
             // The device state comes first: with no driver bound, the guided
             // screen is the only thing in this panel worth reading (T-020).
             app_device_status();
+            // The disc that is actually in the bay, when there is one (T-021):
+            // its title, its groups, its tracks and its own capacity. Below it,
+            // what the *plan* would still fit, which is a different question.
+            app_device_disc_panel();
             ui_spacer(ui_px(ui_dp(theme->space[UI_Space_8]), 1.0f));
             for (u32 mode = 0; mode < PlanCapMode_COUNT; mode += 1) {
                 UI_PrefWidth(ui_pct(1.0f, 0.0f))
