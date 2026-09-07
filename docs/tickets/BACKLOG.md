@@ -32,9 +32,9 @@ ont un fichier `T-NNN-*.md` ; les suivants sont des lignes à détailler au mome
 
 | Ticket | Titre | Statut |
 |--------|-------|--------|
-| [T-020](T-020-winusb-enumeration-hotplug.md) | WinUSB dynamique, énumération, control/bulk, hotplug, transport de rejeu, thread device, écran "driver manquant" | todo |
-| [T-021](T-021-protocole-netmd-lecture.md) | Protocole NetMD lecture : trames/poll, identification, capacité, pistes, titres, groupes, charsets, transcriptions MZ-N505 | todo |
-| [T-022](T-022-edition-disque.md) | Édition : renommer, déplacer, effacer, groupes, simulation + sauvegarde TOC, budget TOC, tag v0.3.0 | todo |
+| [T-020](T-020-winusb-enumeration-hotplug.md) | WinUSB dynamique, énumération, control/bulk, hotplug, transport de rejeu, thread device, écran "driver manquant" | fait |
+| [T-021](T-021-protocole-netmd-lecture.md) | Protocole NetMD lecture : trames/poll, identification, capacité, pistes, titres, groupes, charsets, transcriptions MZ-N505 | fait (validation device en attente) |
+| [T-022](T-022-edition-disque.md) | Édition : renommer, déplacer, effacer, groupes, simulation + sauvegarde TOC, budget TOC, tag v0.3.0 | doing |
 
 ## Phase 4 — Plan & capacité (le cœur produit : D1, D2, D3) — terminée, tag v0.4.0-phase4
 
@@ -48,9 +48,9 @@ ont un fichier `T-NNN-*.md` ; les suivants sont des lignes à détailler au mome
 
 | Ticket | Titre | Statut |
 |--------|-------|--------|
-| [T-040](T-040-decodeurs.md) | Décodeurs minimp3 / dr_flac / dr_wav+AIFF / stb_vorbis sans CRT + Media Foundation (AAC/ALAC/WMA), interface Decoder f32 planaire | todo |
-| [T-041](T-041-dsp-resampler-r128-dither.md) | DSP : sinc polyphase, EBU R128 + true-peak, trim/fade/gap/mono, dither TPDF, PCM BE 2048 o, pipeline en jobs, aperçu WAV | todo |
-| [T-042](T-042-session-securisee-upload-sp.md) | NetMD : DES/3DES maison, EKB, session key, paquets chiffrés, upload SP, titrage, reprise, validation de MD_MODE_TABLE sur le device | todo |
+| [T-040](T-040-decodeurs.md) | Décodeurs minimp3 / dr_flac / dr_wav+AIFF / stb_vorbis sans CRT + Media Foundation (AAC/ALAC/WMA), interface Decoder f32 planaire | fait |
+| [T-041](T-041-dsp-resampler-r128-dither.md) | DSP : sinc polyphase, EBU R128 + true-peak, trim/fade/gap/mono, dither TPDF, PCM BE 2048 o, pipeline en jobs, aperçu WAV | fait |
+| [T-042](T-042-session-securisee-upload-sp.md) | NetMD : DES/3DES maison, EKB, session key, paquets chiffrés, upload SP, titrage, reprise, validation de MD_MODE_TABLE sur le device | doing |
 | [T-043](T-043-vue-transfert-cache.md) | Vue Transfert (simulation, progression, ETA, annulation, reprise, journal) + cache de transcodage LRU, tag v0.5.0 | todo |
 
 ## Phase 6 — ATRAC3 & LP

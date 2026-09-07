@@ -2,7 +2,7 @@
 
 Dernière mise à jour : 2026-09-07
 
-## Phase actuelle : 3 · Device — T-020 livré (validation sur device en attente de Zadig)
+## Phase actuelle : 3 + 5 en parallèle — T-020, T-021, T-040, T-041 mergés dans main ; T-022 et T-042 en cours (validation device en attente de Zadig)
 
 ### Fait (phase 0 terminée)
 - 4 rapports de recherche livrés (`research/01..04`, ~10 700 lignes) + tokens de design (`02b`).
@@ -16,10 +16,14 @@ Dernière mise à jour : 2026-09-07
 - Repo GitHub : https://github.com/opmvpc/mini-disk
 
 ### En cours
-- **Phase 4 terminée, tag `v0.4.0-phase4` à poser par le lead ; phase 3 en attente de Zadig.**
-- Phase 3 (device) : **T-020 livré** (branche `t020`). Le chemin « pilote manquant » est validé sur
-  le vrai MZ-N505 ; l'ouverture WinUSB et le control transfer attendent Zadig (P-001), tout comme le
-  chronométrage d'un vrai branchement. Suite : T-021 (lecture du disque).
+- **Phase 3** : T-020 et T-021 mergés. Tout ce qui touche le vrai MZ-N505 (ouverture WinUSB, ping, captures
+  `--netmd-trace`, chronométrage) attend le pilote : procédure dans `tools/zadig/README.md` (P-001, P-012).
+  T-022 (édition du disque) en cours.
+- **Phase 5** : T-040 (décodeurs) et T-041 (DSP + pipeline) mergés. T-042 (session sécurisée + upload SP)
+  en cours, puis T-043 (vue Transfert + cache).
+- **Budget de taille** : exe à 469 504 o après les quatre merges ; `SIZE_BUDGET_KB` relevé à **600** pour
+  laisser passer T-022/T-042/T-043 (DES, session, vue Transfert), à resserrer en phase 7 (levier `/O1`, P-007).
+- Ordre de merge du 2026-09-07 : T-020 → T-041 → T-040 → T-021 (conflits d'includes résolus en gardant les deux côtés).
 
 ### Fait en phase 3
 - T-020 livré : **WinUSB — énumération, ouverture, control transfers, hotplug, écran « pilote
@@ -99,7 +103,7 @@ Dernière mise à jour : 2026-09-07
 | 8 pistes de 4 min à travers les jobs (7 workers) | **1,82 s, 1058× temps réel** | — | 2026-09-07 |
 | Allocation par bloc | **aucune** : arène par job, `ArenaTemp` rendu même en cas d'annulation (testé) | 0 | 2026-09-07 |
 
-### Fait en phase 5
+### Fait en phase 5 (suite)
 - T-040 livré : les **décodeurs**. `third_party/` vendorise minimp3 (CC0, `ea99364f`), dr_flac 0.13.4 et
   dr_wav 0.14.6 (`dfe83776`, Unlicense ou MIT-0) et stb_vorbis 1.22 (`2c980bb5`, MIT ou domaine public),
   épinglés, non modifiés, licences intégrales dans `third_party/LICENSES.md` ; ils sont compilés
@@ -296,13 +300,14 @@ Dernière mise à jour : 2026-09-07
 - T-001 livré et reviewé : `base/`, `build.bat` (7 cibles), 125 checks, exe release **7 168 octets**, imports kernel32+user32. Voir P-003 (TLS sans CRT).
 
 ### Prochain pas
-1. Review de T-008, tag `v0.1.0-phase1`, puis phase 2 (bibliothèque : T-010..T-017 à détailler).
-2. P-007 : plus de tension immédiate (marge de 24 Ko sous le budget de 128 Ko) ; le levier `/O1`
-   (−16,9 Ko mesuré) reste disponible quand la phase 2 grossira.
-3. P-005 : clos. À re-mesurer sur la GeForce 930MX si l'occasion se présente.
+1. Utilisateur : Zadig → WinUSB (`tools/zadig/README.md`). Ensuite : ping réel, captures des 4 transcriptions
+   (`--netmd-trace`), validation de `MD_MODE_TABLE` sur le device, chronométrage hotplug et lecture < 2 s.
+2. Lead : revue/merge de T-022 et T-042, puis T-043 → **premier disque gravé**, tag `v0.5.0-phase5`
+   (le tag `v0.3.0-phase3` se pose dès que la validation device est faite).
+3. P-010 : rendre `os_memory_commit` parlant et découper l'arène du banc.
 
 ### Action utilisateur requise
-- Zadig → WinUSB sur "Net MD Walkman" avant la phase 3.
+- Zadig → WinUSB sur « Net MD Walkman » : `tools/zadig/README.md` (l'exe et le script automatique sont dans `tools/zadig/`).
 
 ## KPI — fin de phase 1 (i7-8550U, 4 cœurs / 8 threads, Intel UHD 620, Windows 11)
 | Métrique | Valeur | Cible | Date |
