@@ -9,6 +9,27 @@
 #include "app_state.h"
 
 // --- cells, shared by the three panels ---------------------------------------
+// --- shared by the plan panel and the disc panel -----------------------------
+// The mode names and the one colour helper both views need. They live here
+// because view_library.c is the first of the three in the unity build: the plan
+// panel prints them beside a planned track and the disc panel beside a track
+// that is already on the disc, and they must be the same words and the same
+// green in both (T-021).
+static const char *app_mode_names[PlanCapMode_COUNT] = {"SP", "MONO", "LP2", "LP4"};
+// research/02 s9.9: the initial a wide enough gauge segment carries, so the
+// mode is never told by the colour alone.
+static const char *app_mode_initials[PlanCapMode_COUNT] = {"S", "M", "2", "4"};
+
+// Premultiplied RGBA8 in, premultiplied out. The theme's mode colours are
+// opaque, which is the only case this is asked for.
+static u32 app_color_lighten(u32 color, f32 amount) {
+    u32 red = color & 0xFF, green = (color >> 8) & 0xFF, blue = (color >> 16) & 0xFF;
+    red = (u32)((f32)red + (255.0f - (f32)red) * amount);
+    green = (u32)((f32)green + (255.0f - (f32)green) * amount);
+    blue = (u32)((f32)blue + (255.0f - (f32)blue) * amount);
+    return r_rgba((u8)red, (u8)green, (u8)blue, (u8)((color >> 24) & 0xFF));
+}
+
 static String8 app_duration(u32 seconds) {
     return str8f(ui_frame_arena(), "%u:%02u", seconds / 60, seconds % 60);
 }
