@@ -28,7 +28,7 @@ ont un fichier `T-NNN-*.md` ; les suivants sont des lignes à détailler au mome
 | [T-013](T-013-vue-bibliotheque.md) | Vue Bibliothèque réelle : colonnes, tri, navigateur, recherche, états, prefs | done |
 | [T-014](T-014-dnd-explorer-pochettes.md) | Drag & drop Explorateur (IDropTarget), pochettes WIC, panneau détail, tag v0.2.0 | done |
 
-## Phase 3 — Device (lecture et édition) — prérequis : Zadig → WinUSB sur le MZ-N505
+## Phase 3 — Device (lecture et édition) — terminée le 2026-09-07 (tag v0.3.0-phase3 ; P-012 captures vierge/protégé, P-013 aller-retour de titre, P-014 restent ouverts)
 
 | Ticket | Titre | Statut |
 |--------|-------|--------|
@@ -52,7 +52,7 @@ ont un fichier `T-NNN-*.md` ; les suivants sont des lignes à détailler au mome
 | [T-041](T-041-dsp-resampler-r128-dither.md) | DSP : sinc polyphase, EBU R128 + true-peak, trim/fade/gap/mono, dither TPDF, PCM BE 2048 o, pipeline en jobs, aperçu WAV | fait |
 | [T-042](T-042-session-securisee-upload-sp.md) | NetMD : DES/3DES maison, EKB, session key, paquets chiffrés, upload SP, titrage, reprise, validation de MD_MODE_TABLE sur le device | fait (upload réel validé) |
 | [T-043](T-043-vue-transfert-cache.md) | Vue Transfert (simulation, progression, ETA, annulation, reprise, journal) + cache de transcodage LRU, tag v0.5.0 | fait (gravure réelle validée) |
-| T-045 | Capacité : surcoût mesuré de **1 cluster par piste** (7 gravures SP, +2 007 ms ± 80) → `PLAN_TRACK_OVERHEAD_CLUSTERS`, tests recalés ; P-014 (piste fraîche lue « protégée ») | doing |
+| [T-045](T-045-capacite-surcout-piste.md) | Capacité : surcoût mesuré de **1 cluster par piste** (7 gravures SP, +2 007 ms ± 80) → `PLAN_TRACK_OVERHEAD_CLUSTERS`, tests recalés | fait |
 
 ## Phase 6 — ATRAC3 & LP
 T-050 QMF + MDCT + bitstream writer · T-051 frame silencieuse valide (ffmpeg décode) · T-052 quantif + Huffman ·
@@ -64,6 +64,7 @@ T-064 prefs · T-065 barre de titre custom · T-066 IDropTarget.
 | T-07x | Durée du plan en équivalent disque partout (en-tête = jauge, revue T-032) ; hachures diagonales de la jauge via motif d'atlas ; sauvegarde durable du plan hors du thread de frame (P-009) | todo |
 | T-07x | Panneau Disque : le sous-titre d'en-tête reste « pilote manquant » quand le corps dit « utilisé par une autre application » (état InUse) — un seul état source pour les deux (vu le 2026-09-07) | todo |
 | T-07x | Régime de taille : l'exe est passé de 308 à 602 KB en phase 3+5 (décodeurs 111 KB, DSP+pipeline 106 KB, NetMD ~90 KB). Mesurer par module (`/MAP`), `/O1` sur les unités froides (−17 KB mesuré en P-007), tables DES/sinc au runtime (déjà), retirer `/INCLUDE:codec_open`, viser < 500 KB | todo |
+| T-07x | P-014 : une piste fraîchement gravée se relit `protect` jusqu'au cycle d'alimentation ; ne pas la présenter comme « réservée par SonicStage » (bit « écrite par nous » réapparié après relecture) | todo |
 
 ## Phase 8 — Portabilité
 T-070 `platform/linux` · T-071 `platform/macos`.
