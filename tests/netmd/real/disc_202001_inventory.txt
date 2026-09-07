@@ -1,0 +1,11 @@
+# Inventaire du disque « 202001 » lu sur le MZ-N505 le 2026-09-07 (avant toute écriture)
+titre brut : 0;202001//1-8;//
+pistes (n°, durée) :
+   1  00:05:41.00  (sans titre, SP)
+   2  00:04:18.19  (sans titre, SP)
+   3  00:00:48.00  (sans titre, SP)
+   4  00:02:27.81  (sans titre, SP)
+   5  00:00:05.61  (sans titre, SP)
+   6  00:03:51.44  (sans titre, SP)
+   7  00:06:31.40  (sans titre, SP)
+   8  00:00:27.06  (sans titre, SP)
