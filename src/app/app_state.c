@@ -34,6 +34,16 @@ AppTrack app_track(TrackId id) {
     return track;
 }
 
+// --- the plan's numbers (T-031) ----------------------------------------------
+// Clusters, not seconds: a plan that sums to 79:58 of audio can still be 80:04
+// of disc (ADR-011 D2). The title budget is measured in the same pass because
+// both answers come from the same walk over the entries.
+void app_plan_recompute(void) {
+    plan_capacity_compute(app_plan_disc(), &app.capacity);
+    plan_toc_budget(&app.plan, &app.library, 0, &app.toc);
+    app.plan_revision = app.plan.revision;
+}
+
 // --- search, sort, browser --------------------------------------------------
 void app_filter(void) {
     if (!app.index_ready) {
@@ -230,6 +240,7 @@ void app_init(Arena *permanent, f32 scale) {
     // Two arenas of its own: opening a plan empties them, so nothing else may
     // ever push into them.
     plan_init(&app.plan, arena_alloc(MB(16)), arena_alloc(MB(16)));
+    app_plan_recompute();  // the gauge has real numbers from the first frame
     app.plan_autosave_path = plan_autosave_path(permanent, app.cache_dir);
     app.cache_path = os_path_join(permanent, app.cache_dir, str8_lit("library.mdlib"));
     lib_covers_init(&app.covers, permanent, app.cache_dir);

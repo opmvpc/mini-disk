@@ -17,7 +17,9 @@
 #include "../core/library/lib_model.h"
 #include "../core/library/lib_scan.h"
 #include "../core/library/lib_search.h"
+#include "../core/plan/plan_capacity.h"
 #include "../core/plan/plan_file.h"
+#include "../core/plan/plan_toc.h"
 #include "../core/plan/plan_model.h"
 #include "../ui/ui_widgets.h"
 #include "prefs.h"
@@ -74,7 +76,11 @@ typedef struct AppState {
     Plan plan;
     String8 plan_autosave_path;
     u32 plan_cursor;    // the row Delete acts on; the real view is T-032
-    u32 plan_revision;  // the revision the panel last drew
+    u32 plan_revision;  // the revision the header numbers were computed at
+    // What the gauge and the header show (T-031). Recomputed only when the
+    // document changes: a frame that draws the same plan reads the same numbers.
+    PlanCapacity capacity;
+    PlanTocBudget toc;
 
     // --- preferences and the paths they live at ------------------------------
     Prefs prefs;
@@ -143,6 +149,13 @@ void     app_query_set(String8 query);
 
 // The plan is a single disc until T-032 gives the panel its multi disc view.
 md_inline PlanDisc *app_plan_disc(void) { return &app.plan.discs[0]; }
+
+// The clusters and the title cells of the current disc (T-031). Cheap enough to
+// call every frame: it only recomputes when the revision moved.
+void app_plan_recompute(void);
+md_inline void app_plan_sync(void) {
+    if (app.plan_revision != app.plan.revision) { app_plan_recompute(); }
+}
 md_inline u32 app_plan_count(void) { return app.plan.discs[0].entry_count; }
 
 // view_library.c

@@ -2,7 +2,7 @@
 
 Dernière mise à jour : 2026-09-07
 
-## Phase actuelle : 4 · Plan & capacité — T-030 fait, T-031 en cours (phase 3 en attente de Zadig)
+## Phase actuelle : 4 · Plan & capacité — T-030 et T-031 faits (phase 3 en attente de Zadig)
 
 ### Fait (phase 0 terminée)
 - 4 rapports de recherche livrés (`research/01..04`, ~10 700 lignes) + tokens de design (`02b`).
@@ -16,11 +16,32 @@ Dernière mise à jour : 2026-09-07
 - Repo GitHub : https://github.com/opmvpc/mini-disk
 
 ### En cours
-- T-031 : capacité en clusters, budget TOC, sanitize/raccourcissement des titres, titrage auto, first-fit (prompt `prompts/I-031`).
+- T-032 : la vraie vue Plan et la jauge segmentée, sur les nombres que T-031 fournit.
 - Phase 3 (device) : bloquée tant que Zadig → WinUSB n'est pas installé sur le MZ-N505 (P-001).
   reste l'action utilisateur préalable.
 
 ### Fait en phase 4
+- T-031 livré : la **capacité se compte en clusters, pas en secondes** (ADR-011 D2).
+  `plan_capacity.{h,c}` — `MD_MODE_TABLE` unique (SP 2 s, mono 4 s, LP2 4 s, LP4 8 s par cluster,
+  documentée **à valider sur le device en phase 5, T-045**), coût d'une piste = arrondi supérieur
+  jamais nul, totaux utilisé / restant / dépassement, **état par piste** (`Fits`/`Partial`/`Overflow`)
+  et coût en clusters pour la jauge segmentée, « ce qui rentrerait encore » **dans les quatre modes**,
+  et auto-répartition multi-disques **first-fit** ou **albums gardés ensemble**. `plan_toc.{h,c}` — les
+  **255 cellules × 7 caractères** partagées : pistes comptées d'abord, titre de disque compilé dans ce
+  qui reste avec sa syntaxe de groupes `0;…//1-4;…//`, groupe par groupe, chacun retenu seulement s'il
+  rentre encore (research/01 §7.4) ; une piste non-SP coûte **1 cellule même sans titre** ; comptage
+  half-width où un kana voisé vaut deux. **Sanitize** par tables **générées** par
+  `tools/gen_charset_tables.py` (521 entrées, données Unicode embarquées dans le script, jamais
+  recopiées de netmd-js — ADR-008) : accents → ASCII, kana → katakana demi-chasse, emoji supprimés.
+  **Raccourcissement ordonné et seulement en cas de dépassement** (feat. → parenthèses → artiste →
+  troncature), avec aperçu du titre **exactement tel qu'il sera écrit** et le drapeau de ce qui a été
+  coupé. Titrage automatique D3 : gabarits `{title}` / `{artist} - {title}` / `{n}. {title}`, titre de
+  disque par majorité en une passe, groupes proposés depuis les albums. Jauge et nombres d'en-tête
+  branchés dessus (durée **facturée**, segments larges de leurs clusters, rouge au débordement) — la
+  vraie jauge reste T-032. **Recalcul complet de 254 pistes en 26,9 µs** après trois passes
+  d'optimisation mesurées (300 → 105 → 52 → 26,9 µs : `__movsb` par caractère, comptage sans écriture,
+  run ASCII pris en bloc). 5 cas de test ajoutés (**133 cas / 5 331 checks**), **exe 254 976 o**,
+  imports toujours kernel32 + user32.
 - T-030 livré : le **plan de disque est un document** (ADR-011 D1). `src/core/plan/` — `Plan` = jusqu'à
   8 `PlanDisc`, chacun ≤ **254 entrées en SoA** (B-28) avec mode SP/LP2/LP4 + mono, override de titre,
   groupe, gain, rognage et fondus, longueur 60/74/80 et mode par défaut ; les plages de groupes sont
@@ -182,6 +203,16 @@ Dernière mise à jour : 2026-09-07
 | Trois panneaux visibles | jusqu'à **1024 × 640 logique** (biblio 597 px, plan 357, disque 300 à 125 %) | 1024 x 640 | 2026-09-07 |
 | Préférences | fichier de 789 o, aller-retour sérialisation + parsing en 13 µs, écriture atomique | — | 2026-09-07 |
 | Pochettes | **1,31 ms** par pochette (décodage WIC + mise à l'échelle vers 256 et 48), 10 000 pochettes = ~1,9 s réparties sur 7 workers, 64 en vol au plus | 10 000 sans jank | 2026-09-07 |
+
+## KPI — phase 4, T-031 (même machine)
+| Métrique | Valeur | Cible | Date |
+|----------|--------|-------|------|
+| Taille exe release | **254 976 o**, marge 62 464 o sous le budget du ticket | < 310 KB (CI 350 KB) | 2026-09-07 |
+| Imports | kernel32 + user32 | ces deux-là | 2026-09-07 |
+| Tests | **133 cas, 5 331 checks**, 0 échec (ASan) | verts | 2026-09-07 |
+| Recalcul capacité + budget TOC, 254 pistes | **26,9 µs** (clusters 4,3 µs, TOC 22,6 µs) | < 50 µs | 2026-09-07 |
+| Auto-répartition multi-disques, 254 pistes | **8,6 µs** (first-fit) | — | 2026-09-07 |
+| Table de charset générée | 521 entrées, ~6,3 Ko dans l'exe, régénérable par `tools/gen_charset_tables.py` | ADR-008 | 2026-09-07 |
 
 ## KPI — phase 4, T-030 (même machine)
 | Métrique | Valeur | Cible | Date |

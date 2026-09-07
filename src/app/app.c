@@ -47,8 +47,11 @@ static void app_plan_panel(void) {
     u32 count = disc->entry_count;
     if (app.plan_cursor >= count) { app.plan_cursor = count ? count - 1 : 0; }
 
+    // The billed time, not the sum of the durations: what the disc is charged
+    // once every track is rounded up to its cluster (T-031).
+    app_plan_sync();
     String8 subtitle = str8f(ui_frame_arena(), app_str_c(Str_PlanSubtitle), count,
-                             app_duration((u32)(plan_disc_duration_ms(disc) / 1000)));
+                             app_duration((u32)(app.capacity.billed_ms / 1000)));
     app_panel_begin(str8_lit("###plan"), ui_pct(1.0f, 0.0f), app_str(Str_PlanTitle), subtitle);
 
     UI_PrefWidth(ui_pct(1.0f, 0.0f))
@@ -109,9 +112,13 @@ static void app_plan_panel(void) {
 // A capacity gauge: one segment per planned track, coloured by its mode.
 static void app_disc_panel(f32 width) {
     const UI_Theme *theme = ui_theme();
-    f32 capacity_s = 80.0f * 60.0f;
     PlanDisc *disc = app_plan_disc();
-    u32 used = (u32)(plan_disc_duration_ms(disc) / 1000);
+    app_plan_sync();
+    const PlanCapacity *cap = &app.capacity;
+    // Everything below is counted in clusters and only turned into seconds to
+    // be printed: 2 s of disc per cluster, whatever mode wrote them (D2).
+    u32 used = cap->used_clusters * (PLAN_CLUSTER_SP_MS / 1000);
+    u32 total = cap->capacity_clusters * (PLAN_CLUSTER_SP_MS / 1000);
     app_panel_begin(str8_lit("###disc"), ui_px(width, 1.0f), app_str(Str_DiscTitle),
                     str8_lit("MZ-N505"));
 
@@ -122,7 +129,8 @@ static void app_disc_panel(f32 width) {
         UI_Box *body = ui_build_box_from_key(UI_DrawBackground | UI_Clip, 0);
         UI_Parent(body) UI_TextPadding(ui_dp(theme->space[UI_Space_12])) {
             ui_label_styled(UI_FontStyle_Emphasis, theme->fg_primary,
-                            str8f(ui_frame_arena(), "%S / 80:00", app_duration(used)));
+                            str8f(ui_frame_arena(), "%S / %S", app_duration(used),
+                                  app_duration(total)));
 
             // The gauge: free space in control, then one segment per track.
             UI_PrefWidth(ui_pct(1.0f, 0.0f))
@@ -133,10 +141,16 @@ static void app_disc_panel(f32 width) {
                 UI_Box *gauge = ui_build_box_from_key(UI_DrawBackground, 0);
                 UI_Parent(gauge) UI_CornerRadius(0.0f) {
                     for (u32 i = 0; i < disc->entry_count; i += 1) {
-                        f32 fraction = (f32)disc->duration_ms[i] / (1000.0f * capacity_s);
+                        // One segment per track, its width the clusters it
+                        // costs; what spills past the end of the disc is drawn
+                        // in the danger colour rather than silently clipped.
+                        f32 fraction = (f32)cap->clusters[i] / (f32)cap->capacity_clusters;
+                        u32 colour = (cap->fit[i] == PlanFit_Fits)
+                                         ? theme->mode[app_plan_ui_mode(disc, i)]
+                                         : theme->danger;
                         UI_PrefWidth(ui_pct(fraction, 0.0f))
                         UI_PrefHeight(ui_pct(1.0f, 1.0f))
-                        UI_BgColor(theme->mode[app_plan_ui_mode(disc, i)]) {
+                        UI_BgColor(colour) {
                             ui_build_box_from_key(UI_DrawBackground, 0);
                         }
                     }

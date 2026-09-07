@@ -16,7 +16,9 @@
 #include "../src/core/library/lib_cache.h"
 #include "../src/core/library/lib_covers.h"
 #include "../src/core/plan/plan_model.h"
+#include "../src/core/plan/plan_capacity.h"
 #include "../src/core/plan/plan_file.h"
+#include "../src/core/plan/plan_toc.h"
 #include "../src/ui/r_core.h"
 #include "../src/ui/r_backend.h"
 #include "../src/ui/r_atlas.h"
@@ -67,7 +69,9 @@
 #include "../src/core/library/lib_covers.c"
 #include "../src/core/plan/plan_model.c"
 #include "../src/core/plan/plan_cmd.c"
+#include "../src/core/plan/plan_capacity.c"
 #include "../src/core/plan/plan_file.c"
+#include "../src/core/plan/plan_toc.c"
 #include "../src/app/prefs.c"
 
 typedef struct TestState {
@@ -125,6 +129,7 @@ static void test_check(b32 condition, const char *expression, i32 line) {
 #include "test_prefs.c"
 #include "test_covers.c"
 #include "test_plan.c"
+#include "test_capacity.c"
 
 int main(void) {
     os_init();
@@ -144,6 +149,7 @@ int main(void) {
     test_prefs_run_all();
     test_covers_run_all();
     test_plan_run_all();
+    test_capacity_run_all();
 
     test_report("%llu case(s), %llu check(s), %llu failure(s)\n", test_state.cases,
                 test_state.checks, test_state.failures);

@@ -16,7 +16,9 @@
 #include "../src/core/library/lib_cache.h"
 #include "../src/core/library/lib_covers.h"
 #include "../src/core/plan/plan_model.h"
+#include "../src/core/plan/plan_capacity.h"
 #include "../src/core/plan/plan_file.h"
+#include "../src/core/plan/plan_toc.h"
 #include "../src/app/prefs.h"
 #include "../src/ui/r_core.h"
 #include "../src/ui/r_backend.h"
@@ -62,7 +64,9 @@
 #include "../src/core/library/lib_covers.c"
 #include "../src/core/plan/plan_model.c"
 #include "../src/core/plan/plan_cmd.c"
+#include "../src/core/plan/plan_capacity.c"
 #include "../src/core/plan/plan_file.c"
+#include "../src/core/plan/plan_toc.c"
 #include "../src/app/prefs.c"
 
 // The renderer benches measure r_core and r_atlas, not the driver: the back end
@@ -880,6 +884,14 @@ static void bench_line(const char *name, u64 micros, u64 cycles, u64 items, cons
     scratch_end(scratch);
 }
 
+// The same line in nanoseconds, for the work that is over in a few microseconds.
+static void bench_line_ns(const char *name, u64 nanos, u64 cycles, u64 items, const char *unit) {
+    ArenaTemp scratch = scratch_begin(0, 0);
+    os_debug_print(str8f(scratch.arena, "  %s: %llu ns (%llu.%03llu us), %llu cycles, %llu %s\n",
+                         name, nanos, nanos / 1000, nanos % 1000, cycles, items, unit));
+    scratch_end(scratch);
+}
+
 static BenchResult bench_index_sort(void) {
     u64 best_us = U64_MAX;
     u64 best_cycles = 0;
@@ -1262,6 +1274,104 @@ static BenchResult bench_plan_file(void) {
     return result;
 }
 
+// T-031: the full recompute the gauge does on every edit - the cluster cost of
+// 254 tracks, their fit states, the tri-modal remainder, and the whole title
+// budget with its group syntax. The ticket's ceiling is 50 us; a plan is a
+// column pass over 254 entries, so the answer should be two orders below it.
+static BenchResult bench_plan_capacity(void) {
+    Arena *arena = arena_alloc(MB(16));
+    Arena *text = arena_alloc(MB(16));
+    Plan *plan = push_struct(bench_arena, Plan);
+    plan_init(plan, arena, text);
+
+    ArenaTemp scratch = scratch_begin(0, 0);
+    for (u32 i = 0; i < PLAN_ENTRY_MAX; i += 1) {
+        PlanEntry entry;
+        StructZero(&entry);
+        entry.track_id = LIB_TRACK_NONE;
+        entry.path_id = lib_intern(&plan->strings,
+                                   str8f(scratch.arena, "C:/music/%03u.flac", i));
+        entry.title_override = lib_intern(
+            &plan->strings, str8f(scratch.arena, "Artist %u - A Track Title %u", i / 12, i));
+        entry.duration_ms = 180000 + i * 97;
+        entry.gain_db = PLAN_GAIN_NONE;
+        entry.mode = (u8)(i % PlanMode_COUNT);
+        entry.group_id = PLAN_GROUP_NONE;
+        plan_add(plan, 0, i, entry);
+    }
+    scratch_end(scratch);
+    plan_set_disc_title(plan, 0, str8_lit("Une compilation de 254 pistes"), 0);
+    for (u32 g = 0; g < 20; g += 1) {
+        plan_group(plan, 0, g * 12, 12, str8_lit("Album quelconque"));
+    }
+
+    PlanCapacity *capacity = push_struct(bench_arena, PlanCapacity);
+    PlanTocBudget *budget = push_struct(bench_arena, PlanTocBudget);
+    PlanSplit *split = push_struct(bench_arena, PlanSplit);
+    PlanDisc *disc = plan_disc(plan, 0);
+
+    u32 iterations = 1000;
+    plan_capacity_compute(disc, capacity);  // warm the pages
+    plan_toc_budget(plan, 0, 0, budget);
+
+    u64 start_cycles = __rdtsc();
+    u64 start_us = os_time_now_us();
+    for (u32 i = 0; i < iterations; i += 1) { plan_capacity_compute(disc, capacity); }
+    u64 clusters_us = os_time_now_us() - start_us;
+    u64 clusters_cycles = __rdtsc() - start_cycles;
+
+    start_cycles = __rdtsc();
+    start_us = os_time_now_us();
+    for (u32 i = 0; i < iterations; i += 1) { plan_toc_budget(plan, 0, 0, budget); }
+    u64 toc_us = os_time_now_us() - start_us;
+    u64 toc_cycles = __rdtsc() - start_cycles;
+
+    u32 cells_sink = 0;
+    start_cycles = __rdtsc();
+    start_us = os_time_now_us();
+    for (u32 i = 0; i < iterations; i += 1) {
+        for (u32 k = 0; k < PLAN_ENTRY_MAX; k += 1) {
+            cells_sink += plan_toc_cells_for_title(plan_entry_title(plan, 0, 0, k), 1);
+        }
+    }
+    u64 titles_us = os_time_now_us() - start_us;
+    u64 titles_cycles = __rdtsc() - start_cycles;
+    AssertAlways(cells_sink != 0);
+
+    start_cycles = __rdtsc();
+    start_us = os_time_now_us();
+    for (u32 i = 0; i < iterations; i += 1) {
+        plan_capacity_split(disc, 0, PlanSplit_FirstFit, 80, split);
+    }
+    u64 split_us = os_time_now_us() - start_us;
+    u64 split_cycles = __rdtsc() - start_cycles;
+
+    AssertAlways(capacity->used_clusters != 0 && budget->cells_used != 0);
+    AssertAlways(split->disc_count > 1);
+
+    // Nanoseconds, because microseconds would round the answer to zero.
+    bench_line_ns("plan capacity: clusters + fit states", clusters_us * 1000 / iterations,
+               clusters_cycles / iterations, PLAN_ENTRY_MAX, "tracks");
+    bench_line_ns("plan capacity: TOC budget, groups included", toc_us * 1000 / iterations,
+               toc_cycles / iterations, budget->cells_used, "cells");
+    bench_line_ns("plan capacity:   of which the 254 track titles",
+               titles_us * 1000 / iterations, titles_cycles / iterations, PLAN_ENTRY_MAX, "titles");
+    bench_line_ns("plan capacity: multi disc first fit", split_us * 1000 / iterations,
+               split_cycles / iterations, split->disc_count, "discs");
+    bench_line_ns("plan capacity: full recompute of a 254 track disc",
+               (clusters_us + toc_us) * 1000 / iterations,
+               (clusters_cycles + toc_cycles) / iterations, PLAN_ENTRY_MAX, "tracks");
+    arena_release(text);
+    arena_release(arena);
+
+    BenchResult result;
+    result.name = "plan capacity recompute 254";
+    result.cycles = (clusters_cycles + toc_cycles) / iterations;
+    result.micros = (clusters_us + toc_us) / iterations;
+    result.bytes = 0;
+    return result;
+}
+
 int main(void) {
     os_init();
     bench_arena = arena_alloc(GB(1));
@@ -1286,5 +1396,6 @@ int main(void) {
     bench_print(bench_cover_decode());
     bench_print(bench_cover_atlas());
     bench_print(bench_plan_file());
+    bench_print(bench_plan_capacity());
     return 0;
 }
