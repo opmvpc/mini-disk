@@ -14,6 +14,8 @@
 #include "core/library/lib_search.h"
 #include "core/library/lib_cache.h"
 #include "core/library/lib_covers.h"
+#include "core/plan/plan_model.h"
+#include "core/plan/plan_file.h"
 #include "ui/gl_loader.h"
 #include "ui/r_core.h"
 #include "ui/r_backend.h"
@@ -62,6 +64,9 @@
 #include "core/library/lib_search.c"
 #include "core/library/lib_cache.c"
 #include "core/library/lib_covers.c"
+#include "core/plan/plan_model.c"
+#include "core/plan/plan_cmd.c"
+#include "core/plan/plan_file.c"
 
 #include "ui/gl_loader.c"
 #include "ui/r_atlas.c"

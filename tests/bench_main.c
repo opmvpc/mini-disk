@@ -15,6 +15,8 @@
 #include "../src/core/library/lib_search.h"
 #include "../src/core/library/lib_cache.h"
 #include "../src/core/library/lib_covers.h"
+#include "../src/core/plan/plan_model.h"
+#include "../src/core/plan/plan_file.h"
 #include "../src/app/prefs.h"
 #include "../src/ui/r_core.h"
 #include "../src/ui/r_backend.h"
@@ -58,6 +60,9 @@
 #include "../src/core/library/lib_search.c"
 #include "../src/core/library/lib_cache.c"
 #include "../src/core/library/lib_covers.c"
+#include "../src/core/plan/plan_model.c"
+#include "../src/core/plan/plan_cmd.c"
+#include "../src/core/plan/plan_file.c"
 #include "../src/app/prefs.c"
 
 // The renderer benches measure r_core and r_atlas, not the driver: the back end
@@ -1162,6 +1167,101 @@ static BenchResult bench_cover_atlas(void) {
     return result;
 }
 
+// T-030: the acceptance criterion of the plan document - a full disc (254
+// tracks, the TOC ceiling) written and read back. Both directions are measured
+// together because that is what an autosave plus a recovery costs; the budget
+// is 5 ms for the pair.
+static BenchResult bench_plan_file(void) {
+    // Two pairs of arenas: loading empties the ones the loaded plan owns, so
+    // the source document must not be sitting in them.
+    Arena *arena = arena_alloc(MB(16));
+    Arena *text = arena_alloc(MB(16));
+    Arena *load_arena = arena_alloc(MB(16));
+    Arena *load_text = arena_alloc(MB(16));
+    Plan *plan = push_struct(bench_arena, Plan);
+    Plan *loaded = push_struct(bench_arena, Plan);
+    plan_init(plan, arena, text);
+    plan_init(loaded, load_arena, load_text);
+
+    ArenaTemp scratch = scratch_begin(0, 0);
+    for (u32 i = 0; i < PLAN_ENTRY_MAX; i += 1) {
+        PlanEntry entry;
+        StructZero(&entry);
+        entry.track_id = i;
+        entry.path_id = lib_intern(&plan->strings,
+                                   str8f(scratch.arena, "C:\music\artist %u\album\%02u - a "
+                                                        "reasonably long file name.flac",
+                                         i / 12, i % 12));
+        entry.title_override =
+            lib_intern(&plan->strings, str8f(scratch.arena, "Track number %u", i));
+        entry.duration_ms = 180000 + i * 97;
+        entry.gain_db = (i16)(i - 128);
+        entry.mode = (u8)(i % PlanMode_COUNT);
+        entry.group_id = PLAN_GROUP_NONE;
+        plan_add(plan, 0, i, entry);
+    }
+    scratch_end(scratch);
+    plan_set_disc_title(plan, 0, str8_lit("Un disque plein"), 0);
+
+    String8 temp = os_known_folder(bench_arena, OsKnownFolder_Temp);
+    String8 path = os_path_join(bench_arena, temp, str8_lit("minidisk_bench.mdplan"));
+    u32 iterations = 64;
+    plan_save(plan, path);  // warm: the file exists, the pages are hot
+
+    // Three numbers, because they answer three different questions. The save
+    // is durable by construction (.tmp, FlushFileBuffers, MOVEFILE_WRITE_THROUGH):
+    // most of it is the barrier the OS puts between us and the platter, so the
+    // floor below measures exactly that with a buffer of the same size and
+    // nothing of ours in it.
+    u64 save_cycles = __rdtsc();
+    u64 save_us = os_time_now_us();
+    for (u32 i = 0; i < iterations; i += 1) { AssertAlways(plan_save(plan, path) == PlanFile_Ok); }
+    save_us = os_time_now_us() - save_us;
+    save_cycles = __rdtsc() - save_cycles;
+
+    u64 load_cycles = __rdtsc();
+    u64 load_us = os_time_now_us();
+    for (u32 i = 0; i < iterations; i += 1) { AssertAlways(plan_load(loaded, path) == PlanFile_Ok); }
+    load_us = os_time_now_us() - load_us;
+    load_cycles = __rdtsc() - load_cycles;
+    AssertAlways(loaded->discs[0].entry_count == PLAN_ENTRY_MAX);
+
+    OsFileInfo info;
+    AssertAlways(os_file_stat(path, &info));
+    u8 *floor_bytes = push_array_zero(bench_arena, u8, info.size);
+    String8 floor_path = os_path_join(bench_arena, temp, str8_lit("minidisk_bench_floor.mdplan"));
+    String8 floor_tmp = str8_cat(bench_arena, floor_path, str8_lit(".tmp"));
+    u64 floor_us = os_time_now_us();
+    for (u32 i = 0; i < iterations; i += 1) {
+        AssertAlways(os_file_write_all(floor_tmp, str8(floor_bytes, info.size)));
+        AssertAlways(os_file_move_replace(floor_tmp, floor_path));
+    }
+    floor_us = os_time_now_us() - floor_us;
+    os_file_delete(floor_path);
+    os_file_delete(path);
+
+    bench_line("plan .mdplan: save, durable (.tmp + flush + rename)", save_us / iterations,
+               save_cycles / iterations, info.size, "bytes");
+    bench_line("plan .mdplan:   of which the OS durability barrier", floor_us / iterations, 0,
+               info.size, "bytes");
+    bench_line("plan .mdplan: load (mapped, validated, rebuilt)", load_us / iterations,
+               load_cycles / iterations, PLAN_ENTRY_MAX, "tracks");
+    bench_line("plan .mdplan: save + load of a full 254 track disc",
+               (save_us + load_us) / iterations, (save_cycles + load_cycles) / iterations,
+               PLAN_ENTRY_MAX, "tracks");
+    arena_release(load_text);
+    arena_release(load_arena);
+    arena_release(text);
+    arena_release(arena);
+
+    BenchResult result;
+    result.name = "plan save+load 254";
+    result.cycles = (save_cycles + load_cycles) / iterations;
+    result.micros = (save_us + load_us) / iterations;
+    result.bytes = 0;
+    return result;
+}
+
 int main(void) {
     os_init();
     bench_arena = arena_alloc(GB(1));
@@ -1185,5 +1285,6 @@ int main(void) {
     bench_print(bench_prefs_round_trip());
     bench_print(bench_cover_decode());
     bench_print(bench_cover_atlas());
+    bench_print(bench_plan_file());
     return 0;
 }

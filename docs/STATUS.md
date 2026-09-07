@@ -2,7 +2,7 @@
 
 Dernière mise à jour : 2026-09-07
 
-## Phase actuelle : 4 · Plan & capacité — T-030 en cours (phase 3 en attente du driver WinUSB via Zadig)
+## Phase actuelle : 4 · Plan & capacité — T-030 fait, T-031 en cours (phase 3 en attente de Zadig)
 
 ### Fait (phase 0 terminée)
 - 4 rapports de recherche livrés (`research/01..04`, ~10 700 lignes) + tokens de design (`02b`).
@@ -16,9 +16,33 @@ Dernière mise à jour : 2026-09-07
 - Repo GitHub : https://github.com/opmvpc/mini-disk
 
 ### En cours
-- T-030 : modèle `.mdplan`, commandes réversibles, undo/redo, autosave (prompt `prompts/I-030`).
+- T-031 : capacité en clusters, budget TOC, sanitize/raccourcissement des titres, titrage auto, first-fit (prompt `prompts/I-031`).
 - Phase 3 (device) : bloquée tant que Zadig → WinUSB n'est pas installé sur le MZ-N505 (P-001).
   reste l'action utilisateur préalable.
+
+### Fait en phase 4
+- T-030 livré : le **plan de disque est un document** (ADR-011 D1). `src/core/plan/` — `Plan` = jusqu'à
+  8 `PlanDisc`, chacun ≤ **254 entrées en SoA** (B-28) avec mode SP/LP2/LP4 + mono, override de titre,
+  groupe, gain, rognage et fondus, longueur 60/74/80 et mode par défaut ; les plages de groupes sont
+  **dérivées** de la colonne `group_id`, donc aucune commande n'a de plage à recoller. **Toute**
+  modification passe par `plan_apply` : dix commandes réversibles (`Add, Remove, Move, SetMode,
+  SetTitle, SetDiscTitle, Group, Ungroup, SetDiscLength, SplitDisc`), un seul enregistrement plat de
+  80 octets qui porte son propre inverse, pile bornée à **256** dans la struct, **coalescence** des
+  frappes dans un titre (800 ms) et événements `PlanChanged` — B-25 est vrai par construction, pas par
+  discipline. Un `TrackId` n'est cru que tant qu'il désigne encore le chemin stocké : sinon il est
+  re-résolu par chemin, sinon marqué **manquant et conservé** (jamais supprimé en silence). Format
+  binaire `.mdplan` versionné, écrit atomiquement et relu **mappé**, avec validation intégrale de la
+  frontière (offsets, tailles, chaque `StringId` contre un **bitmap des débuts de chaîne** — un id au
+  milieu d'une chaîne est refusé) ; la table d'interne n'est pas stockée mais **rejouée**, ce qui
+  reproduit exactement les mêmes offsets. Export/import texte `.mdplan.txt` (une ligne par piste).
+  **Autosave** toutes les 5 s dans `%LOCALAPPDATA%\minidisk\plans\`, écriture immédiate à la
+  fermeture, **récupération au démarrage** ; la boucle ne se réveille pour lui que si le plan est sale.
+  Panneau Plan branché sur le vrai modèle (Entrée ajoute, Suppr retire, Ctrl+Z/Y, compteur et durée en
+  en-tête, piste manquante en rouge) — la vue complète reste T-032. **9 cas de test** dont 1 000
+  opérations aléatoires annulées et rétablies pas à pas avec comparaison d'empreinte
+  (**128 cas / 5 219 checks**), **exe 244 224 o**, imports toujours kernel32 + user32.
+  **P-009** ouvert : les 5 ms save+load ne sont pas tenues en temps mur (7,45 ms) parce que 7,1 ms sont
+  la barrière de durabilité de l'OS ; notre part fait 0,5 ms.
 
 ### Fait en phase 2
 - T-014 livré (dernier de la phase) : **drag & drop depuis l'Explorateur** par un `IDropTarget`
@@ -158,6 +182,17 @@ Dernière mise à jour : 2026-09-07
 | Trois panneaux visibles | jusqu'à **1024 × 640 logique** (biblio 597 px, plan 357, disque 300 à 125 %) | 1024 x 640 | 2026-09-07 |
 | Préférences | fichier de 789 o, aller-retour sérialisation + parsing en 13 µs, écriture atomique | — | 2026-09-07 |
 | Pochettes | **1,31 ms** par pochette (décodage WIC + mise à l'échelle vers 256 et 48), 10 000 pochettes = ~1,9 s réparties sur 7 workers, 64 en vol au plus | 10 000 sans jank | 2026-09-07 |
+
+## KPI — phase 4, T-030 (même machine)
+| Métrique | Valeur | Cible | Date |
+|----------|--------|-------|------|
+| Taille exe release | **244 224 o**, marge 114 176 o | budget CI 350 KB | 2026-09-07 |
+| Imports | kernel32 + user32 | ces deux-là | 2026-09-07 |
+| Tests | **128 cas, 5 219 checks**, 0 échec (ASan) | verts | 2026-09-07 |
+| Plan `.mdplan`, 254 pistes | **save 6,96 ms** (dont 7,09 ms de plancher OS) + **load 0,49 ms** = 7,45 ms | < 5 ms — **non tenu**, cf. P-009 | 2026-09-07 |
+| Sérialisation du plan (notre code) | **≈ 0,5 ms** pour un disque plein de 28 040 o | < 5 ms | 2026-09-07 |
+| Undo/redo | pile bornée à 256 commandes, 80 o chacune, 0 allocation ; 1 000 opérations aléatoires annulées et rétablies pas à pas | exact | 2026-09-07 |
+| Mémoire du plan | **~76 Ko** pour 8 disques × 254 pistes, tout compris (pile d'undo incluse) | — | 2026-09-07 |
 | Atlas de vignettes | 2048² RGBA8, 1 400 cellules de 48 px + 7 de 256 px, **15 µs** par vignette versée (16 par frame au plus : 0,24 ms), LRU par bande | vignettes < 100 ms après un scroll | 2026-09-07 |
 | Cache pochettes | 271 376 o par pochette, relu mappé, **0 décodage au deuxième lancement** | — | 2026-09-07 |
 | CPU au repos, 12 s, après un scan | **46,9 et 78,1 ms** sur trois mesures (46,9 ms après T-014 : le drop target OLE ne réveille rien), soit 0,4 à 0,65 % d'un cœur — même résidu de thread pilote GL qu'en T-008 (P-005) | 0 % | 2026-09-07 |

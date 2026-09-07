@@ -83,11 +83,28 @@ void app_index_rebuild(void) {
     app_filter();
 }
 
-// --- the plan (stub until T-030) --------------------------------------------
-void app_plan_add(TrackId id) {
-    if (app.plan_count >= APP_PLAN_MAX) { return; }
-    app.plan[app.plan_count] = id;
-    app.plan_count += 1;
+// --- the plan (T-030) --------------------------------------------------------
+// Every one of these goes through a command, so everything the panel does -
+// adding a selection of forty tracks included - is one Ctrl+Z away.
+void app_plan_add(TrackId id) { plan_add_track(&app.plan, &app.library, 0, id); }
+
+void app_plan_clear(void) {
+    while (app_plan_count() != 0) { plan_remove(&app.plan, 0, 0); }
+    app.plan_cursor = 0;
+}
+
+// Once per frame: the events tell the panel it must redraw, and the autosave
+// writes at most every five seconds and only when something changed (B-01).
+void app_plan_tick(void) {
+    PlanEvent event;
+    b32 changed = 0;
+    while (plan_events_next(&app.plan.events, &event)) { changed = 1; }
+    if (changed) {
+        u32 count = app_plan_count();
+        if (app.plan_cursor >= count) { app.plan_cursor = count ? count - 1 : 0; }
+        os_request_redraw();
+    }
+    plan_autosave_tick(&app.plan, app.plan_autosave_path, os_time_now_us());
 }
 
 void app_plan_add_selection(void) {
@@ -157,8 +174,10 @@ void app_scan_tick(void) {
     if (!done) { return; }
     app.scan_active = 0;
     lib_scan_end(&app.scan);
-    app.plan_count = 0;
     app_index_rebuild();
+    // A rescan renumbers the library; the plan is re-resolved by path rather
+    // than thrown away, which is the whole point of storing both (ADR-011 D1).
+    plan_resolve(&app.plan, &app.library);
     // The cache is reconstructible: writing it is best effort, and a failure
     // costs the next launch a rescan and nothing else.
     lib_cache_save(&app.library, app.cache_path, app.root);
@@ -208,6 +227,10 @@ void app_init(Arena *permanent, f32 scale) {
     lib_browser_init(&app.browser, permanent, APP_TRACK_MAX);
     lib_search_init(&app.finder, permanent, APP_TRACK_MAX);
     app.cache_dir = app_cache_dir(permanent);
+    // Two arenas of its own: opening a plan empties them, so nothing else may
+    // ever push into them.
+    plan_init(&app.plan, arena_alloc(MB(16)), arena_alloc(MB(16)));
+    app.plan_autosave_path = plan_autosave_path(permanent, app.cache_dir);
     app.cache_path = os_path_join(permanent, app.cache_dir, str8_lit("library.mdlib"));
     lib_covers_init(&app.covers, permanent, app.cache_dir);
 
@@ -234,6 +257,13 @@ void app_init(Arena *permanent, f32 scale) {
         app_index_rebuild();
     }
 
+    // Recovery: whatever the last autosave caught is on screen at startup, its
+    // entries re-resolved against the library we just brought back. A plan that
+    // fails to load is left on disk untouched - it is not reconstructible.
+    if (plan_load(&app.plan, app.plan_autosave_path) == PlanFile_Ok) {
+        plan_resolve(&app.plan, &app.library);
+    }
+
     ArenaTemp scratch = scratch_begin(&permanent, 1);
     String8 folder = app_command_line_value(scratch.arena, str8_lit("--scan "));
     if (folder.size != 0) {
@@ -253,4 +283,7 @@ void app_init(Arena *permanent, f32 scale) {
 
 void app_shutdown(void) {
     if (app.prefs_dirty) { prefs_save(&app.prefs, app.prefs_path); }
+    // The five second window does not apply to a close: whatever is unsaved
+    // goes out now, so the next launch opens on it.
+    if (app.plan.dirty) { plan_save(&app.plan, app.plan_autosave_path); }
 }

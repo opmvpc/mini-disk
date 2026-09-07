@@ -17,6 +17,8 @@
 #include "../core/library/lib_model.h"
 #include "../core/library/lib_scan.h"
 #include "../core/library/lib_search.h"
+#include "../core/plan/plan_file.h"
+#include "../core/plan/plan_model.h"
 #include "../ui/ui_widgets.h"
 #include "prefs.h"
 #include "strings.h"
@@ -24,7 +26,6 @@
 // The buffers the search, the browser and the selection are sized for once.
 // A library bigger than this is a dimensioning bug, not a runtime error.
 #define APP_TRACK_MAX 300000
-#define APP_PLAN_MAX  64
 
 // Minimum widths of the three panels, in dp. Their sum plus the two handles is
 // what "the three panels stay visible" means; below it the window cannot go.
@@ -67,9 +68,13 @@ typedef struct AppState {
     UI_Splitter disc_split;
     UI_ContextMenu menu;
 
-    // --- the plan (a stub until T-030) --------------------------------------
-    u32 plan[APP_PLAN_MAX];
-    u32 plan_count;
+    // --- the plan (T-030) ----------------------------------------------------
+    // The document itself, with the two arenas it owns: opening a file empties
+    // them, so nothing else may ever push into them.
+    Plan plan;
+    String8 plan_autosave_path;
+    u32 plan_cursor;    // the row Delete acts on; the real view is T-032
+    u32 plan_revision;  // the revision the panel last drew
 
     // --- preferences and the paths they live at ------------------------------
     Prefs prefs;
@@ -132,7 +137,13 @@ void     app_scan_folder(String8 folder);
 void     app_scan_tick(void);
 void     app_plan_add(TrackId id);
 void     app_plan_add_selection(void);
+void     app_plan_clear(void);  // one Remove per entry, so a clear is undoable
+void     app_plan_tick(void);   // drains the plan events, autosaves every 5 s
 void     app_query_set(String8 query);
+
+// The plan is a single disc until T-032 gives the panel its multi disc view.
+md_inline PlanDisc *app_plan_disc(void) { return &app.plan.discs[0]; }
+md_inline u32 app_plan_count(void) { return app.plan.discs[0].entry_count; }
 
 // view_library.c
 void app_library_panel(f32 width);
