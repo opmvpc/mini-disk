@@ -16,14 +16,14 @@ Dernière mise à jour : 2026-09-07
 - Repo GitHub : https://github.com/opmvpc/mini-disk
 
 ### En cours
-- **Phase 3** : T-020 et T-021 mergés. Tout ce qui touche le vrai MZ-N505 (ouverture WinUSB, ping, captures
-  `--netmd-trace`, chronométrage) attend le pilote : procédure dans `tools/zadig/README.md` (P-001, P-012).
-  T-022 (édition du disque) en cours.
-- **Phase 5** : T-040 (décodeurs) et T-041 (DSP + pipeline) mergés. T-042 (session sécurisée + upload SP)
-  en cours, puis T-043 (vue Transfert + cache).
-- **Budget de taille** : exe à 469 504 o après les quatre merges ; `SIZE_BUDGET_KB` relevé à **600** pour
-  laisser passer T-022/T-042/T-043 (DES, session, vue Transfert), à resserrer en phase 7 (levier `/O1`, P-007).
-- Ordre de merge du 2026-09-07 : T-020 → T-041 → T-040 → T-021 (conflits d'includes résolus en gardant les deux côtés).
+- **Phase 3** : T-020, T-021 et T-022 mergés. Pilote WinUSB installé (P-001 clos), lecture validée sur le vrai
+  MZ-N505 (disque « 202001 »). Restent : l'aller-retour d'écriture d'un titre (P-013, à faire dans l'app par
+  l'utilisateur ou le lead), les captures vierge/protégé/aucun disque (P-012), puis tag `v0.3.0-phase3`.
+- **Phase 5** : T-040, T-041 mergés. T-042 (session sécurisée + upload SP) en cours, puis T-043 (vue Transfert
+  + cache). L'utilisateur autorise la gravure de test dans l'espace libre du disque 202001 (56 min libres).
+- **Budget de taille** : exe à 497 664 o après T-022 ; `SIZE_BUDGET_KB` = 600, à resserrer en phase 7
+  (levier `/O1`, P-007).
+- UI : splitters verticaux ajoutés (navigateur artistes/albums, panneau Détail), hauteurs persistées.
 
 ### Fait en phase 3
 - **2026-09-07, validation sur le vrai MZ-N505** (WinUSB via Zadig, P-001 clos) : énumération → `Ready`,

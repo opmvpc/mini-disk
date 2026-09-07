@@ -1,6 +1,5 @@
 # P-012 — Les quatre transcriptions NetMD sont synthétiques : aucune capture n'a pu être faite
 
-Statut : **en cours** (2026-09-07) — P-001 levé le jour même ; **première capture réelle faite** (`tests/netmd/real/mzn505_session1.trace`, disque « 202001 », 8 pistes, 304 commandes, tous les status à 0x09). Restent à capturer : disque vierge, disque protégé, pas de disque (nécessite de changer de disque)
 Statut : **partiellement levé** (2026-09-07, T-022) — le pilote WinUSB est installé depuis, et la
 **lecture** est capturée (`tests/netmd/mzn505_real_read.trace`, 617 lignes, 88 commandes, disque de
 8 pistes, titre brut `0;202001//1-8;//`). Les transcriptions d'**écriture** de T-022 restent
