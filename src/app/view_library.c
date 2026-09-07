@@ -875,11 +875,29 @@ void app_library_panel(f32 width) {
     const u32 *rows = app_rows();
     ui_list_begin(list, app_row_count(), app_row_height());
     UI_ListEachRow(list, i) {
-        ui_list_row_begin(list, i);
+        UI_Signal signal = ui_list_row_begin(list, i);
         app_library_row(i, rows[i], ui_list_selected(list, i));
         ui_list_row_end(list);
+        // A press that travels is a drag towards the plan: the selection is
+        // already the one the press made, so the drop has nothing to decide.
+        if (signal.dragging && !app.lib_drag &&
+            abs_f32(signal.drag_delta.x) + abs_f32(signal.drag_delta.y) > ui_dp(6.0f)) {
+            app.lib_drag = 1;
+        }
     }
     ui_list_end(list);
+    if (app.lib_drag) {
+        app.lib_drag_pos = ui_mouse();
+        ui_request_animation();
+        ui_cursor_request(app_plan_hovered(app.lib_drag_pos) ? OsCursor_Hand
+                                                             : OsCursor_Forbidden);
+        // The button came up somewhere: over the plan it adds, anywhere else it
+        // was a change of mind and costs nothing.
+        if (ui_active_key() == 0) {
+            app.lib_drag = 0;
+            if (app_plan_hovered(app.lib_drag_pos)) { app_plan_drop_rows(0); }
+        }
+    }
 
     if (list->context) { ui_context_menu_open(&app.menu, list->context_pos, list->context_row); }
     if (list->activated) { app_plan_add_selection(); }

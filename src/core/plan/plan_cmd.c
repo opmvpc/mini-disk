@@ -282,7 +282,20 @@ md_inline b32 plan_cmd_is_text(u32 kind) {
 // Typing in a title is one undo step while the keystrokes keep coming: the
 // window is time based, and any other command - or plan_coalesce_break, which
 // the field calls when it loses focus - closes it.
-static void plan_push(Plan *plan, const PlanCmd *cmd) {
+static void plan_push(Plan *plan, PlanCmd *cmd) {
+    // Inside a gesture nothing coalesces: the run is already one undo step, and
+    // two titles set in a row are two different entries anyway.
+    if (plan->batch_open) {
+        cmd->batch = plan->batch_first ? 0 : 1;
+        plan->batch_first = 0;
+        plan->last = plan->done;
+        if (plan->done - plan->first >= PLAN_UNDO_MAX) { plan->first += 1; }
+        mem_copy(&plan->undo[plan->done % PLAN_UNDO_MAX], cmd, sizeof(PlanCmd));
+        plan->done += 1;
+        plan->last = plan->done;
+        plan->coalesce_open = 0;
+        return;
+    }
     if (plan_cmd_is_text(cmd->kind) && plan->coalesce_open && plan->done > plan->first &&
         plan->done == plan->last) {
         PlanCmd *prev = &plan->undo[(plan->done - 1) % PLAN_UNDO_MAX];
@@ -313,6 +326,17 @@ b32 plan_can_undo(const Plan *plan) { return plan->done > plan->first; }
 b32 plan_can_redo(const Plan *plan) { return plan->done < plan->last; }
 void plan_coalesce_break(Plan *plan) { plan->coalesce_open = 0; }
 
+void plan_batch_begin(Plan *plan) {
+    plan->coalesce_open = 0;
+    plan->batch_open = 1;
+    plan->batch_first = 1;
+}
+
+void plan_batch_end(Plan *plan) {
+    plan->batch_open = 0;
+    plan->batch_first = 0;
+}
+
 b32 plan_undo(Plan *plan) {
     if (!plan_can_undo(plan)) { return 0; }
     plan->done -= 1;
@@ -335,6 +359,27 @@ b32 plan_redo(Plan *plan) {
     plan->coalesce_open = 0;
     plan_touch(plan);
     plan_event_push(plan, PlanEvent_Changed, cmd, 2);
+    return 1;
+}
+
+// A gesture undoes whole: the run is walked backwards while each command it
+// takes back says it continues the one before it.
+b32 plan_undo_step(Plan *plan) {
+    if (!plan_can_undo(plan)) { return 0; }
+    for (;;) {
+        b32 continues = plan->undo[(plan->done - 1) % PLAN_UNDO_MAX].batch != 0;
+        plan_undo(plan);
+        // The oldest command of a run can be the one the ring dropped: stop at
+        // the bottom of the stack rather than walking off it.
+        if (!continues || !plan_can_undo(plan)) { return 1; }
+    }
+}
+
+b32 plan_redo_step(Plan *plan) {
+    if (!plan_redo(plan)) { return 0; }
+    while (plan_can_redo(plan) && plan->undo[plan->done % PLAN_UNDO_MAX].batch != 0) {
+        plan_redo(plan);
+    }
     return 1;
 }
 

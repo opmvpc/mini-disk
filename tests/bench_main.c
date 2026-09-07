@@ -20,6 +20,8 @@
 #include "../src/core/plan/plan_file.h"
 #include "../src/core/plan/plan_toc.h"
 #include "../src/app/prefs.h"
+#include "../src/ui/ui_widgets.h"
+#include "../src/app/plan_view.h"
 #include "../src/ui/r_core.h"
 #include "../src/ui/r_backend.h"
 #include "../src/ui/r_atlas.h"
@@ -39,6 +41,8 @@
 #include "../src/platform/win32/win32_platform.c"
 #include "../src/platform/win32/win32_file.c"
 #include "../src/platform/win32/win32_thread.c"
+#include "../src/platform/win32/win32_window.c"
+#include "../src/platform/win32/win32_dialog.c"
 #include "../src/platform/win32/win32_image.c"
 #include "../src/ui/r_atlas.c"
 #include "../src/ui/r_thumbs.c"
@@ -67,7 +71,12 @@
 #include "../src/core/plan/plan_capacity.c"
 #include "../src/core/plan/plan_file.c"
 #include "../src/core/plan/plan_toc.c"
+#include "../src/ui/ui_widgets.c"
 #include "../src/app/prefs.c"
+#include "../src/app/plan_view.c"
+#include "../src/app/app_state.c"
+#include "../src/app/view_library.c"
+#include "../src/app/view_plan.c"
 
 // The renderer benches measure r_core and r_atlas, not the driver: the back end
 // is a stub, exactly as in the tests.
@@ -96,9 +105,6 @@ void r_backend_texture_upload_rgba8(u32 texture, u32 atlas_size, const u8 *pixel
     Unused(texture); Unused(atlas_size); Unused(pixels);
     Unused(x); Unused(y); Unused(width); Unused(height);
 }
-
-// The cover jobs ask for a redraw when they land; the bench has no window.
-void os_request_redraw(void) {}
 
 typedef struct BenchResult {
     const char *name;
@@ -1372,6 +1378,150 @@ static BenchResult bench_plan_capacity(void) {
     return result;
 }
 
+// T-032. Two numbers: the geometry of the gauge on its own, which is pure and
+// runs on every resize, and one whole frame of the plan view on a full disc of
+// 254 entries - the boxes, the five layout passes and the draw commands, with
+// no GL submit behind them. The budget is 1.5 ms of CPU per frame.
+static void bench_plan_view_fill(Plan *plan, u32 count) {
+    ArenaTemp scratch = scratch_begin(0, 0);
+    for (u32 i = 0; i < count; i += 1) {
+        PlanEntry entry;
+        StructZero(&entry);
+        entry.track_id = LIB_TRACK_NONE;
+        entry.path_id =
+            lib_intern(&plan->strings, str8f(scratch.arena, "C:/music/%03u.flac", i));
+        entry.title_override = lib_intern(
+            &plan->strings, str8f(scratch.arena, "Artist %u - A Track Title %u", i / 12, i));
+        entry.duration_ms = 180000 + i * 97;
+        entry.gain_db = PLAN_GAIN_NONE;
+        entry.mode = (u8)(i % PlanMode_COUNT);
+        entry.group_id = PLAN_GROUP_NONE;
+        plan_add(plan, 0, i, entry);
+    }
+    scratch_end(scratch);
+}
+
+static BenchResult bench_plan_gauge_layout(void) {
+    Arena *arena = arena_alloc(MB(16));
+    Arena *text = arena_alloc(MB(16));
+    Plan *plan = push_struct(bench_arena, Plan);
+    plan_init(plan, arena, text);
+    bench_plan_view_fill(plan, PLAN_ENTRY_MAX);
+
+    PlanCapacity *capacity = push_struct(bench_arena, PlanCapacity);
+    PlanGaugeLayout *layout = push_struct(bench_arena, PlanGaugeLayout);
+    plan_capacity_compute(plan_disc(plan, 0), capacity);
+    plan_gauge_layout(capacity, 800.0f, layout);  // warm the pages
+    AssertAlways(layout->count > 0);
+
+    u32 iterations = 2000;
+    u64 start_cycles = __rdtsc();
+    u64 start_us = os_time_now_us();
+    for (u32 i = 0; i < iterations; i += 1) { plan_gauge_layout(capacity, 800.0f, layout); }
+    u64 wide_us = os_time_now_us() - start_us;
+    u64 wide_cycles = __rdtsc() - start_cycles;
+
+    // The compact bar merges most of the segments, and merging is the work.
+    start_cycles = __rdtsc();
+    start_us = os_time_now_us();
+    for (u32 i = 0; i < iterations; i += 1) { plan_gauge_layout(capacity, 120.0f, layout); }
+    u64 narrow_us = os_time_now_us() - start_us;
+    u64 narrow_cycles = __rdtsc() - start_cycles;
+
+    bench_line_ns("plan gauge: layout of 254 segments, 800 px", wide_us * 1000 / iterations,
+                  wide_cycles / iterations, PLAN_ENTRY_MAX, "entries");
+    bench_line_ns("plan gauge: layout on the compact 120 px bar",
+                  narrow_us * 1000 / iterations, narrow_cycles / iterations, layout->count,
+                  "segments");
+    arena_release(arena);
+    arena_release(text);
+
+    BenchResult result;
+    result.name = "plan gauge layout 254";
+    result.cycles = wide_cycles / iterations;
+    result.micros = wide_us / iterations;
+    result.bytes = 0;
+    return result;
+}
+
+static BenchResult bench_plan_view_frame(void) {
+    Arena *ui_arena = arena_alloc(MB(256));
+    Arena *frame_arena = arena_alloc(MB(64));
+    r_atlas_init(ui_arena);
+    if (!os_font_init() || !ui_fonts_build(1.0f)) {
+        BenchResult skipped;
+        skipped.name = "plan view frame (no system font)";
+        skipped.cycles = 0;
+        skipped.micros = 0;
+        skipped.bytes = 0;
+        return skipped;
+    }
+    ui_text_init(ui_arena);
+    UI_Theme theme;
+    ui_theme_dark(&theme);
+    ui_theme_set(&theme);
+    ui_init(ui_arena);
+
+    // The application state the panel reads, built by hand: no window, no scan,
+    // no cache - just the document and the widgets that outlive a frame.
+    app.permanent = ui_arena;
+    lib_init(&app.library, arena_alloc(MB(64)), arena_alloc(MB(64)));
+    plan_init(&app.plan, arena_alloc(MB(16)), arena_alloc(MB(16)));
+    ui_list_init(&app.plan_list, app.plan_selection, ArrayCount(app.plan_selection));
+    ui_list_init(&app.list, 0, 0);
+    ui_text_input_init(&app.search, str8_lit(""));
+    ui_text_input_init(&app.plan_rename, str8_lit(""));
+    ui_text_input_init(&app.plan_disc_title, str8_lit(""));
+    ui_text_input_init(&app.plan_group_name, str8_lit(""));
+    bench_plan_view_fill(&app.plan, PLAN_ENTRY_MAX);
+    plan_set_disc_title(&app.plan, 0, str8_lit("Une compilation de 254 pistes"), 0);
+    for (u32 g = 0; g < 20; g += 1) { plan_group(&app.plan, 0, g * 12, 12, str8_lit("Album")); }
+    app_plan_recompute();
+
+    V2 viewport = v2(900.0f, 1000.0f);  // a plan panel the height of a screen
+    u32 iterations = 300;
+    u64 best_us = U64_MAX;
+    u64 boxes = 0;
+    u64 start_cycles = __rdtsc();
+    u64 start_us = os_time_now_us();
+    for (u32 i = 0; i < iterations; i += 1) {
+        arena_clear(frame_arena);
+        u64 pass_start = os_time_now_us();
+        r_begin_frame(frame_arena, viewport.x, viewport.y, 1.0f);
+        ui_begin(frame_arena, 0, 0, 1.0f / 60.0f, viewport, 1.0f);
+        UI_Box *root = ui_root(UI_Layer_Content);
+        root->child_layout_axis = Axis2_Y;
+        UI_Parent(root) { app_plan_panel(); }
+        ui_widgets_end_frame();
+        ui_end();
+        u64 pass_us = os_time_now_us() - pass_start;
+        if (pass_us < best_us) { best_us = pass_us; }
+        boxes = ui_frame_box_count();
+        r_end_frame();
+    }
+    u64 end_cycles = __rdtsc();
+    u64 end_us = os_time_now_us();
+    u64 mean_us = (end_us - start_us) / iterations;
+    AssertAlways(boxes > 0);
+
+    ArenaTemp scratch = scratch_begin(0, 0);
+    os_debug_print(str8f(scratch.arena,
+                         "  plan view: %llu boxes for 254 entries, %llu us per frame "
+                         "(best of %u, mean %llu, budget 1500)\n",
+                         boxes, best_us, iterations, mean_us));
+    scratch_end(scratch);
+    AssertAlways(best_us < 1500);
+
+    arena_release(frame_arena);
+
+    BenchResult result;
+    result.name = "plan view frame, 254 entries";
+    result.cycles = (end_cycles - start_cycles) / iterations;
+    result.micros = best_us;
+    result.bytes = boxes * iterations;  // the MB/s column reads as M boxes/s
+    return result;
+}
+
 int main(void) {
     os_init();
     bench_arena = arena_alloc(GB(1));
@@ -1397,5 +1547,7 @@ int main(void) {
     bench_print(bench_cover_atlas());
     bench_print(bench_plan_file());
     bench_print(bench_plan_capacity());
+    bench_print(bench_plan_gauge_layout());
+    bench_print(bench_plan_view_frame());
     return 0;
 }

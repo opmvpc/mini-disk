@@ -1,0 +1,416 @@
+// test_view_plan.c - the plan view without a window (T-032): the geometry of
+// the capacity gauge, and the mapping from a gesture to the command it issues.
+//
+// Everything here goes through plan_view.c, which is exactly what view_plan.c
+// calls: a click on a badge is plan_mode_cycle then plan_set_mode, a drop is
+// plan_drop_index then plan_move. Testing that is testing the view, minus the
+// pixels the capture in the Livraison is there for.
+
+global Arena *test_view_plan_arena;
+
+typedef struct TestPlanFixture {
+    Plan *plan;
+    Arena *arena;
+    Arena *text;
+    PlanCapacity *capacity;
+    PlanGaugeLayout *layout;
+} TestPlanFixture;
+
+static void test_view_plan_begin(TestPlanFixture *fixture, Arena *arena) {
+    fixture->arena = arena_alloc(MB(8));
+    fixture->text = arena_alloc(MB(8));
+    fixture->plan = push_struct(arena, Plan);
+    fixture->capacity = push_struct(arena, PlanCapacity);
+    fixture->layout = push_struct(arena, PlanGaugeLayout);
+    plan_init(fixture->plan, fixture->arena, fixture->text);
+}
+
+static void test_view_plan_end(TestPlanFixture *fixture) {
+    arena_release(fixture->arena);
+    arena_release(fixture->text);
+}
+
+// One entry with a duration and a mode, appended. No library behind it: the
+// plan carries its own durations, which is what makes it read standalone.
+static void test_view_plan_add(TestPlanFixture *fixture, u32 duration_ms, u32 mode,
+                               const char *title) {
+    PlanEntry entry;
+    StructZero(&entry);
+    entry.track_id = LIB_TRACK_NONE;
+    entry.path_id = lib_intern(&fixture->plan->strings, str8_lit("C:/music/x.flac"));
+    entry.title_override =
+        title ? lib_intern(&fixture->plan->strings, str8_cstr(title)) : LIB_STRING_NONE;
+    entry.duration_ms = duration_ms;
+    entry.gain_db = PLAN_GAIN_NONE;
+    entry.mode = (u8)mode;
+    entry.group_id = PLAN_GROUP_NONE;
+    plan_add(fixture->plan, 0, plan_disc(fixture->plan, 0)->entry_count, entry);
+}
+
+static void test_view_plan_recompute(TestPlanFixture *fixture, f32 width) {
+    plan_capacity_compute(plan_disc(fixture->plan, 0), fixture->capacity);
+    plan_gauge_layout(fixture->capacity, width, fixture->layout);
+}
+
+// --- geometry ------------------------------------------------------------------
+TEST(view_plan_gauge_segments_tile_the_bar) {
+    TestPlanFixture fixture;
+    test_view_plan_begin(&fixture, arena);
+    // Twenty tracks, three modes: the mix the capture of the ticket shows.
+    for (u32 i = 0; i < 20; i += 1) {
+        u32 mode = (i < 8) ? PlanMode_SP : ((i < 14) ? PlanMode_LP2 : PlanMode_LP4);
+        test_view_plan_add(&fixture, 180000 + i * 1013, mode, 0);
+    }
+    f32 width = 800.0f;
+    test_view_plan_recompute(&fixture, width);
+    PlanGaugeLayout *layout = fixture.layout;
+    EXPECT(layout->count == 20);  // nothing is thin enough to be merged here
+    EXPECT(!layout->overflow);
+
+    // Order preserved, no gap and no overlap, and the total is the used width
+    // to the pixel: the running total is what places the edges, so the error
+    // never accumulates however many segments there are.
+    f32 sum = 0.0f;
+    f32 previous_end = 0.0f;
+    u32 previous_first = 0;
+    for (u32 i = 0; i < layout->count; i += 1) {
+        PlanGaugeSegment *segment = &layout->segments[i];
+        EXPECT(segment->x == previous_end);
+        EXPECT(i == 0 || segment->first > previous_first);
+        EXPECT(segment->width > 0.0f);
+        // The hatched tail is inside its own segment, and it is empty only for
+        // a track whose duration lands exactly on a cluster boundary.
+        EXPECT(segment->hatch_x >= segment->x);
+        EXPECT(segment->hatch_x <= segment->x + segment->width);
+        u32 padding = fixture.capacity->entry_padding_ms[segment->first];
+        EXPECT((padding == 0) == (segment->hatch_x == segment->x + segment->width));
+        sum += segment->width;
+        previous_end = segment->x + segment->width;
+        previous_first = segment->first;
+    }
+    EXPECT(abs_f32(sum - layout->used_width) < 1.0f);
+    EXPECT(layout->used_width <= width);
+
+    // The used width is the used clusters, at one pixel of tolerance.
+    f32 expected = width * (f32)fixture.capacity->used_clusters /
+                   (f32)fixture.capacity->capacity_clusters;
+    EXPECT(abs_f32(layout->used_width - expected) < 1.0f);
+    test_view_plan_end(&fixture);
+}
+
+TEST(view_plan_gauge_hatch_and_alternation) {
+    TestPlanFixture fixture;
+    test_view_plan_begin(&fixture, arena);
+    // Exactly two clusters of SP and no padding at all: 4 s.
+    test_view_plan_add(&fixture, 4000, PlanMode_SP, 0);
+    // One millisecond more: a third cluster, almost all of it wasted.
+    test_view_plan_add(&fixture, 4001, PlanMode_SP, 0);
+    test_view_plan_recompute(&fixture, 2400.0f);  // one pixel per cluster
+    PlanGaugeLayout *layout = fixture.layout;
+    EXPECT(layout->count == 2);
+    EXPECT(layout->segments[0].width == 2.0f);
+    // Nothing wasted, so no hatching: the tail starts at the end.
+    EXPECT(layout->segments[0].hatch_x == layout->segments[0].x + 2.0f);
+    EXPECT(layout->segments[1].width == 3.0f);
+    // 1999 ms of 6000 wasted -> one pixel of the three.
+    EXPECT(layout->segments[1].hatch_x == layout->segments[1].x + 2.0f);
+    // Two neighbours of the same mode alternate, so the border is visible even
+    // without a separator (s9.3).
+    EXPECT(layout->segments[0].alternate == 0);
+    EXPECT(layout->segments[1].alternate == 1);
+
+    // A third one in another mode restarts the alternation.
+    test_view_plan_add(&fixture, 4000, PlanMode_LP2, 0);
+    test_view_plan_recompute(&fixture, 2400.0f);
+    EXPECT(fixture.layout->segments[2].alternate == 0);
+    EXPECT(fixture.layout->segments[2].mode == PlanCapMode_LP2);
+    test_view_plan_end(&fixture);
+}
+
+TEST(view_plan_gauge_overflow_zone) {
+    TestPlanFixture fixture;
+    test_view_plan_begin(&fixture, arena);
+    // An 80 minute disc is 2400 clusters. Twenty seven tracks of three minutes
+    // are 2430: the twenty seventh is the one that no longer fits whole.
+    for (u32 i = 0; i < 27; i += 1) { test_view_plan_add(&fixture, 180000, PlanMode_SP, 0); }
+    f32 width = 1200.0f;
+    test_view_plan_recompute(&fixture, width);
+    PlanCapacity *capacity = fixture.capacity;
+    PlanGaugeLayout *layout = fixture.layout;
+    EXPECT(capacity->first_overflow == 26);
+    EXPECT(layout->overflow);
+    // The red zone starts where the twenty seventh track does: 26 * 90 clusters
+    // of 2400, over 1200 pixels.
+    f32 expected = round_f32(width * (f32)(26 * 90) / 2400.0f);
+    EXPECT(layout->overflow_x == expected);
+    EXPECT(layout->overflow_x < width);
+    // The bar keeps its width: what spills is clamped, never drawn past the end.
+    for (u32 i = 0; i < layout->count; i += 1) {
+        EXPECT(layout->segments[i].x + layout->segments[i].width <= width);
+    }
+    // An empty plan has no red zone and no segment.
+    plan_batch_begin(fixture.plan);
+    while (plan_disc(fixture.plan, 0)->entry_count != 0) { plan_remove(fixture.plan, 0, 0); }
+    plan_batch_end(fixture.plan);
+    test_view_plan_recompute(&fixture, width);
+    EXPECT(fixture.layout->count == 0 && !fixture.layout->overflow);
+    EXPECT(fixture.layout->used_width == 0.0f);
+    test_view_plan_end(&fixture);
+}
+
+TEST(view_plan_gauge_merges_thin_segments) {
+    TestPlanFixture fixture;
+    test_view_plan_begin(&fixture, arena);
+    // A full disc of very short tracks, on the compact 120 px bar of the status
+    // bar: no segment can be two pixels wide, so neighbours merge.
+    for (u32 i = 0; i < PLAN_ENTRY_MAX; i += 1) {
+        test_view_plan_add(&fixture, 8000, PlanMode_SP, 0);
+    }
+    f32 width = 120.0f;
+    test_view_plan_recompute(&fixture, width);
+    PlanGaugeLayout *layout = fixture.layout;
+    EXPECT(layout->count < PLAN_ENTRY_MAX);
+    EXPECT(layout->count > 0);
+    u32 covered = 0;
+    f32 previous_end = 0.0f;
+    for (u32 i = 0; i < layout->count; i += 1) {
+        EXPECT(layout->segments[i].x == previous_end);
+        EXPECT(layout->segments[i].first == covered);
+        EXPECT(layout->segments[i].count >= 1);
+        covered += layout->segments[i].count;
+        previous_end = layout->segments[i].x + layout->segments[i].width;
+    }
+    // Every entry is in exactly one segment, and the whole is still the width.
+    EXPECT(covered == PLAN_ENTRY_MAX);
+    EXPECT(abs_f32(previous_end - layout->used_width) < 1.0f);
+
+    // The same plan on the full width has one segment per entry again.
+    test_view_plan_recompute(&fixture, 2400.0f);
+    EXPECT(fixture.layout->count == PLAN_ENTRY_MAX);
+    test_view_plan_end(&fixture);
+}
+
+TEST(view_plan_gauge_hit_test_and_scale) {
+    TestPlanFixture fixture;
+    test_view_plan_begin(&fixture, arena);
+    for (u32 i = 0; i < 4; i += 1) { test_view_plan_add(&fixture, 300000, PlanMode_SP, 0); }
+    f32 width = 1000.0f;
+    test_view_plan_recompute(&fixture, width);
+    PlanGaugeLayout *layout = fixture.layout;
+    // The pointer over the middle of segment 2 finds segment 2, and the free
+    // zone past the end finds nothing to point at.
+    PlanGaugeSegment *second = &layout->segments[2];
+    EXPECT(plan_gauge_segment_at(layout, second->x + second->width * 0.5f) == 2);
+    EXPECT(plan_gauge_segment_at(layout, layout->used_width + 10.0f) == layout->count);
+
+    // The scale is graduated in the mode most of the plan is written in.
+    EXPECT(plan_gauge_reference_mode(fixture.capacity) == PlanCapMode_SP);
+    // Half the bar is half of the disc: 40 minutes of an 80 minute disc in SP.
+    u64 middle = plan_gauge_time_at(fixture.capacity, layout, width * 0.5f);
+    EXPECT(middle > 2390000 && middle < 2410000);
+
+    for (u32 i = 0; i < 12; i += 1) { test_view_plan_add(&fixture, 300000, PlanMode_LP4, 0); }
+    test_view_plan_recompute(&fixture, width);
+    EXPECT(plan_gauge_reference_mode(fixture.capacity) == PlanCapMode_LP4);
+    test_view_plan_end(&fixture);
+}
+
+// --- gestures --------------------------------------------------------------------
+TEST(view_plan_badge_click_cycles_the_mode) {
+    TestPlanFixture fixture;
+    test_view_plan_begin(&fixture, arena);
+    test_view_plan_add(&fixture, 180000, PlanMode_SP, 0);
+    PlanDisc *disc = plan_disc(fixture.plan, 0);
+
+    // SP -> LP2 -> LP4 -> SP mono -> SP: four clicks are the identity, and each
+    // one is a command of its own.
+    u32 modes[4] = {PlanMode_LP2, PlanMode_LP4, PlanMode_SP, PlanMode_SP};
+    u32 monos[4] = {0, 0, 1, 0};
+    for (u32 i = 0; i < 4; i += 1) {
+        PlanModeStep step =
+            plan_mode_cycle(disc->mode[0], (disc->flags[0] & PlanEntryFlag_Mono) != 0);
+        EXPECT(step.mode == modes[i]);
+        EXPECT(step.mono == (b32)monos[i]);
+        EXPECT(plan_set_mode(fixture.plan, 0, 0, step.mode, step.mono));
+        EXPECT(disc->mode[0] == modes[i]);
+        EXPECT(((disc->flags[0] & PlanEntryFlag_Mono) != 0) == (b32)monos[i]);
+    }
+    EXPECT(plan_cap_mode_of(disc, 0) == PlanCapMode_SP);
+    // And four undos put it back, one per click.
+    for (u32 i = 0; i < 4; i += 1) { EXPECT(plan_undo_step(fixture.plan)); }
+    EXPECT(disc->mode[0] == PlanMode_SP);
+    EXPECT(!plan_can_undo(fixture.plan) || disc->entry_count == 1);
+    test_view_plan_end(&fixture);
+}
+
+TEST(view_plan_drop_issues_one_move) {
+    TestPlanFixture fixture;
+    test_view_plan_begin(&fixture, arena);
+    for (u32 i = 0; i < 5; i += 1) {
+        test_view_plan_add(&fixture, 60000 + i * 1000, PlanMode_SP, 0);
+    }
+    PlanDisc *disc = plan_disc(fixture.plan, 0);
+
+    // Dragging row 0 into the gap before row 3 leaves it at index 2: the entry
+    // is pulled out before it is put back, so the gap shifts by one.
+    EXPECT(plan_drop_index(0, 3) == 2);
+    // Dragging row 4 into the gap before row 1 lands on index 1: upwards, the
+    // gap is the index.
+    EXPECT(plan_drop_index(4, 1) == 1);
+    // The two gaps around a row are both "leave it alone".
+    EXPECT(plan_drop_index(2, 2) == 2);
+    EXPECT(plan_drop_index(2, 3) == 2);
+    // A drop at the very end lands on the last index.
+    EXPECT(plan_drop_index(1, 5) == 4);
+
+    u32 before = fixture.plan->done;
+    u32 durations[5];
+    for (u32 i = 0; i < 5; i += 1) { durations[i] = disc->duration_ms[i]; }
+    EXPECT(plan_move(fixture.plan, 0, 0, plan_drop_index(0, 3)));
+    // Exactly one command, whatever the distance travelled.
+    EXPECT(fixture.plan->done == before + 1);
+    EXPECT(disc->duration_ms[0] == durations[1]);
+    EXPECT(disc->duration_ms[2] == durations[0]);
+    EXPECT(disc->duration_ms[4] == durations[4]);
+    EXPECT(plan_undo_step(fixture.plan));
+    for (u32 i = 0; i < 5; i += 1) { EXPECT(disc->duration_ms[i] == durations[i]); }
+    test_view_plan_end(&fixture);
+}
+
+TEST(view_plan_delete_of_a_selection_is_one_undo_step) {
+    TestPlanFixture fixture;
+    test_view_plan_begin(&fixture, arena);
+    for (u32 i = 0; i < 6; i += 1) { test_view_plan_add(&fixture, 60000 + i, PlanMode_SP, 0); }
+    PlanDisc *disc = plan_disc(fixture.plan, 0);
+    u32 durations[6];
+    for (u32 i = 0; i < 6; i += 1) { durations[i] = disc->duration_ms[i]; }
+
+    // Three rows, not contiguous, deleted in one gesture.
+    u32 selection[3] = {1, 3, 4};
+    EXPECT(plan_remove_entries(fixture.plan, 0, selection, 3) == 3);
+    EXPECT(disc->entry_count == 3);
+    EXPECT(disc->duration_ms[0] == durations[0]);
+    EXPECT(disc->duration_ms[1] == durations[2]);
+    EXPECT(disc->duration_ms[2] == durations[5]);
+
+    // One Ctrl+Z brings all three back, in their places.
+    EXPECT(plan_undo_step(fixture.plan));
+    EXPECT(disc->entry_count == 6);
+    for (u32 i = 0; i < 6; i += 1) { EXPECT(disc->duration_ms[i] == durations[i]); }
+    // And one Ctrl+Y takes them away again.
+    EXPECT(plan_redo_step(fixture.plan));
+    EXPECT(disc->entry_count == 3);
+    EXPECT(plan_undo_step(fixture.plan));
+    EXPECT(disc->entry_count == 6);
+
+    // A grouped mode change is one step too (MI-12).
+    PlanModeStep step;
+    step.mode = PlanMode_LP4;
+    step.mono = 0;
+    EXPECT(plan_set_mode_entries(fixture.plan, 0, selection, 3, step) == 3);
+    EXPECT(disc->mode[1] == PlanMode_LP4 && disc->mode[4] == PlanMode_LP4);
+    EXPECT(plan_undo_step(fixture.plan));
+    EXPECT(disc->mode[1] == PlanMode_SP && disc->mode[3] == PlanMode_SP &&
+           disc->mode[4] == PlanMode_SP);
+    test_view_plan_end(&fixture);
+}
+
+TEST(view_plan_fill_remaining_stops_where_it_must) {
+    TestPlanFixture fixture;
+    test_view_plan_begin(&fixture, arena);
+    // 78 minutes of an 80 minute disc are used: 2340 clusters of 2400.
+    for (u32 i = 0; i < 26; i += 1) { test_view_plan_add(&fixture, 180000, PlanMode_SP, 0); }
+    plan_capacity_compute(plan_disc(fixture.plan, 0), fixture.capacity);
+    EXPECT(fixture.capacity->free_clusters == 60);  // two minutes left
+
+    // A selection of a one minute track, another one minute track, then a five
+    // minute one: the walk takes the first two and stops at the third rather
+    // than skipping it, because the order on screen is the order it fills in.
+    u32 durations[4] = {60000, 60000, 300000, 30000};
+    EXPECT(plan_fill_count(fixture.capacity, durations, 4, PlanCapMode_SP) == 2);
+    // In LP2 the five minute track still does not fit, but in LP4 - four times
+    // the audio per cluster - the whole selection goes in.
+    EXPECT(plan_fill_count(fixture.capacity, durations, 4, PlanCapMode_LP2) == 2);
+    EXPECT(plan_fill_count(fixture.capacity, durations, 4, PlanCapMode_LP4) == 4);
+    // Nothing fits on a disc that is already over.
+    for (u32 i = 0; i < 4; i += 1) { test_view_plan_add(&fixture, 180000, PlanMode_SP, 0); }
+    plan_capacity_compute(plan_disc(fixture.plan, 0), fixture.capacity);
+    EXPECT(fixture.capacity->free_clusters == 0);
+    EXPECT(plan_fill_count(fixture.capacity, durations, 4, PlanCapMode_SP) == 0);
+    test_view_plan_end(&fixture);
+}
+
+TEST(view_plan_shorten_fits_the_toc_in_one_step) {
+    TestPlanFixture fixture;
+    test_view_plan_begin(&fixture, arena);
+    PlanTocBudget *budget = push_struct(arena, PlanTocBudget);
+    // Sixty long titles: 60 * 8 cells is well past the 255 the TOC holds.
+    for (u32 i = 0; i < 60; i += 1) {
+        test_view_plan_add(&fixture, 180000, PlanMode_SP,
+                           "Un titre beaucoup trop long pour la table des matieres");
+    }
+    plan_toc_budget(fixture.plan, 0, 0, budget);
+    EXPECT(budget->cells_used > PLAN_TOC_CELLS);
+
+    u32 revision = fixture.plan->revision;
+    u32 quota = plan_shorten_apply(fixture.plan, 0, 0, PLAN_TOC_CELLS - budget->cells_disc);
+    EXPECT(quota != 0);
+    EXPECT(fixture.plan->revision > revision);
+
+    // Every title is inside the quota, and the budget now fits.
+    PlanTitlePreview preview;
+    for (u32 i = 0; i < 60; i += 1) {
+        plan_toc_preview(plan_entry_title(fixture.plan, 0, 0, i), 0, &preview);
+        EXPECT(preview.chars <= quota);
+    }
+    plan_toc_budget(fixture.plan, 0, 0, budget);
+    EXPECT(budget->cells_used <= PLAN_TOC_CELLS);
+    EXPECT(!budget->overflow);
+
+    // And it is one undo step, not sixty.
+    EXPECT(plan_undo_step(fixture.plan));
+    plan_toc_budget(fixture.plan, 0, 0, budget);
+    EXPECT(budget->cells_used > PLAN_TOC_CELLS);
+    EXPECT(!plan_can_undo(fixture.plan) == 0);  // the sixty adds are still there
+    test_view_plan_end(&fixture);
+}
+
+TEST(view_plan_shorten_quota_shares_what_is_left) {
+    Unused(arena);
+    // Four titles, two of them short: the short ones keep what they take and
+    // the budget that is left is split between the two long ones.
+    u32 chars[4] = {3, 5, 90, 120};
+    u8 non_sp[4] = {0, 0, 0, 0};
+    // 1 + 1 cells for the short ones leaves 8 cells, so 4 each: 28 characters.
+    u32 quota = plan_shorten_quota(chars, non_sp, 4, 10);
+    EXPECT(quota == 28);
+    EXPECT(plan_toc_cells_for_chars(3) + plan_toc_cells_for_chars(5) +
+               2 * plan_toc_cells_for_chars(quota) <=
+           10);
+    // One more character each would not fit any more: the quota is the largest.
+    EXPECT(plan_toc_cells_for_chars(3) + plan_toc_cells_for_chars(5) +
+               2 * plan_toc_cells_for_chars(quota + 1) >
+           10);
+    // A budget that cannot even pay the mandatory cell of an LP track is a
+    // refusal, not a silent truncation to nothing.
+    u8 lp[4] = {1, 1, 1, 1};
+    EXPECT(plan_shorten_quota(chars, lp, 4, 3) == 0);
+    test_report("");  // keeps the case name attached to the checks above
+}
+
+static void test_view_plan_run_all(void) {
+    test_report("view plan\n");
+    test_view_plan_arena = arena_alloc(MB(16));
+
+    RUN(view_plan_gauge_segments_tile_the_bar);
+    RUN(view_plan_gauge_hatch_and_alternation);
+    RUN(view_plan_gauge_overflow_zone);
+    RUN(view_plan_gauge_merges_thin_segments);
+    RUN(view_plan_gauge_hit_test_and_scale);
+    RUN(view_plan_badge_click_cycles_the_mode);
+    RUN(view_plan_drop_issues_one_move);
+    RUN(view_plan_delete_of_a_selection_is_one_undo_step);
+    RUN(view_plan_fill_remaining_stops_where_it_must);
+    RUN(view_plan_shorten_fits_the_toc_in_one_step);
+    RUN(view_plan_shorten_quota_shares_what_is_left);
+}

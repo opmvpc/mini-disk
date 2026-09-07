@@ -367,6 +367,13 @@ b32 os_image_decode(Arena *arena, String8 bytes, u32 size, OsImage *out);
 // size 0 when the user cancelled. ole32/shell32 are loaded on the first call
 // and never unloaded, so the import table stays kernel32 + user32.
 String8 os_dialog_pick_folder(Arena *arena, String8 title);
+// The same picker, for one file. `filter_name` labels the file type in the
+// dialog and `filter_spec` is its pattern ("*.mdplan"); `suggested` pre-fills
+// the name of a save. Size 0 when the user cancelled.
+String8 os_dialog_open_file(Arena *arena, String8 title, String8 filter_name,
+                            String8 filter_spec);
+String8 os_dialog_save_file(Arena *arena, String8 title, String8 filter_name,
+                            String8 filter_spec, String8 suggested);
 
 String8 os_clipboard_get(Arena *arena);   // size 0 when there is no text
 b32     os_clipboard_set(String8 text);

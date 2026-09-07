@@ -1,217 +1,9 @@
-// app.c - the frame loop and the two panels that are still sketches: the plan
-// and the disc (T-030 and T-022 will make them real). The application state
-// lives in app_state.c, the library panel in view_library.c.
+// app.c - the frame loop, the toolbar and the status bar. The application state
+// lives in app_state.c, the library panel in view_library.c, and the plan panel,
+// the capacity gauge and the disc panel in view_plan.c (T-032).
 //
 // The loop still only wakes on an event or while something animates (ADR-004).
 #define APP_MAX_EVENTS 256
-
-// --- the plan panel ---------------------------------------------------------
-// The minimal wiring of T-030: the real view, with drag and drop, inline
-// editing and the group headers, is T-032. What is real here is the model
-// underneath - every row comes from the document, and every key goes through a
-// command, so Ctrl+Z takes back the last thing that happened whatever it was.
-static u32 app_plan_ui_mode(const PlanDisc *disc, u32 index) {
-    if (disc->flags[index] & PlanEntryFlag_Mono) { return UI_Mode_Mono; }
-    if (disc->mode[index] == PlanMode_LP2) { return UI_Mode_LP2; }
-    if (disc->mode[index] == PlanMode_LP4) { return UI_Mode_LP4; }
-    return UI_Mode_SP;
-}
-
-// Delete, Ctrl+Z and Ctrl+Y, unless a text field owns the keyboard - in which
-// case Delete is a character deletion and nothing to do with the plan.
-static void app_plan_keys(void) {
-    if (ui_focus_key() != 0) { return; }
-    PlanDisc *disc = app_plan_disc();
-    for (u32 i = 0; i < ui_key_event_count(); i += 1) {
-        UI_KeyEvent event = ui_key_event(i);
-        b32 ctrl = (event.modifiers & OsMod_Ctrl) != 0;
-        b32 shift = (event.modifiers & OsMod_Shift) != 0;
-        if (ctrl && event.key == OsKey_Z) {
-            if (shift) { plan_redo(&app.plan); } else { plan_undo(&app.plan); }
-        } else if (ctrl && event.key == OsKey_Y) {
-            plan_redo(&app.plan);
-        } else if (event.key == OsKey_Delete && disc->entry_count != 0) {
-            plan_remove(&app.plan, 0, app.plan_cursor);
-        } else if (event.key == OsKey_Up && app.plan_cursor != 0) {
-            app.plan_cursor -= 1;
-        } else if (event.key == OsKey_Down && app.plan_cursor + 1 < disc->entry_count) {
-            app.plan_cursor += 1;
-        }
-    }
-}
-
-static void app_plan_panel(void) {
-    const UI_Theme *theme = ui_theme();
-    app_plan_keys();
-    PlanDisc *disc = app_plan_disc();
-    u32 count = disc->entry_count;
-    if (app.plan_cursor >= count) { app.plan_cursor = count ? count - 1 : 0; }
-
-    // The billed time, not the sum of the durations: what the disc is charged
-    // once every track is rounded up to its cluster (T-031).
-    app_plan_sync();
-    String8 subtitle = str8f(ui_frame_arena(), app_str_c(Str_PlanSubtitle), count,
-                             app_duration((u32)(app.capacity.billed_ms / 1000)));
-    app_panel_begin(str8_lit("###plan"), ui_pct(1.0f, 0.0f), app_str(Str_PlanTitle), subtitle);
-
-    UI_PrefWidth(ui_pct(1.0f, 0.0f))
-    UI_PrefHeight(ui_pct(1.0f, 0.0f))
-    UI_ChildLayoutAxis(Axis2_Y)
-    UI_BgColor(theme->surface) {
-        UI_Box *body = ui_build_box_from_key(UI_DrawBackground | UI_Clip, 0);
-        UI_Parent(body) {
-            if (count == 0) {
-                UI_PrefHeight(ui_px(ui_dp(theme->row_comfortable), 1.0f))
-                UI_TextPadding(ui_dp(theme->space[UI_Space_12])) {
-                    ui_label_styled(UI_FontStyle_Ui, theme->fg_muted, app_str(Str_PlanEmptyBody));
-                }
-            }
-            for (u32 i = 0; i < count; i += 1) {
-                b32 missing = (disc->flags[i] & PlanEntryFlag_Missing) != 0;
-                u32 background = (i == app.plan_cursor) ? theme->row_selected : theme->surface;
-                UI_Seed(hash64_mix((u64)i + 1))
-                UI_PrefWidth(ui_pct(1.0f, 0.0f))
-                UI_PrefHeight(ui_px(ui_dp(theme->row_compact), 1.0f))
-                UI_ChildLayoutAxis(Axis2_X)
-                UI_BgColor(background) {
-                    UI_Box *row = ui_build_box(UI_Clickable | UI_DrawBackground,
-                                               str8_lit("###planrow"));
-                    if (ui_signal(row).clicked) { app.plan_cursor = i; }
-                    UI_Parent(row) {
-                        app_cell_number(ui_dp(32.0f), str8f(ui_frame_arena(), "%u", i + 1),
-                                        theme->fg_muted);
-                        // The mode pastille: colour carries meaning, only here.
-                        UI_PrefWidth(ui_px(ui_dp(theme->space[UI_Space_8]), 1.0f))
-                        UI_PrefHeight(ui_pct(1.0f, 1.0f)) {
-                            UI_Box *cell = ui_build_box_from_key(0, 0);
-                            UI_Parent(cell)
-                            UI_FixedY(ui_dp(7.0f))
-                            UI_PrefWidth(ui_px(ui_dp(theme->space[UI_Space_8]), 1.0f))
-                            UI_PrefHeight(ui_px(ui_dp(theme->space[UI_Space_8]), 1.0f))
-                            UI_CornerRadius(ui_dp(4.0f))
-                            UI_BgColor(theme->mode[app_plan_ui_mode(disc, i)]) {
-                                ui_build_box_from_key(UI_FloatingY | UI_DrawBackground, 0);
-                            }
-                        }
-                        // A source that no longer resolves stays in the plan and
-                        // says so; nothing is dropped behind the user's back (B-27).
-                        app_cell(ui_pct(1.0f, 0.0f),
-                                 plan_entry_title(&app.plan, &app.library, 0, i),
-                                 missing ? theme->danger : theme->fg_primary, 0,
-                                 UI_TextAlign_Left);
-                        app_cell_number(ui_dp(64.0f), app_duration(disc->duration_ms[i] / 1000),
-                                        theme->fg_secondary);
-                    }
-                }
-            }
-        }
-    }
-    app_panel_end();
-}
-
-// A capacity gauge: one segment per planned track, coloured by its mode.
-static void app_disc_panel(f32 width) {
-    const UI_Theme *theme = ui_theme();
-    PlanDisc *disc = app_plan_disc();
-    app_plan_sync();
-    const PlanCapacity *cap = &app.capacity;
-    // Everything below is counted in clusters and only turned into seconds to
-    // be printed: 2 s of disc per cluster, whatever mode wrote them (D2).
-    u32 used = cap->used_clusters * (PLAN_CLUSTER_SP_MS / 1000);
-    u32 total = cap->capacity_clusters * (PLAN_CLUSTER_SP_MS / 1000);
-    app_panel_begin(str8_lit("###disc"), ui_px(width, 1.0f), app_str(Str_DiscTitle),
-                    str8_lit("MZ-N505"));
-
-    UI_PrefWidth(ui_pct(1.0f, 0.0f))
-    UI_PrefHeight(ui_pct(1.0f, 0.0f))
-    UI_ChildLayoutAxis(Axis2_Y)
-    UI_BgColor(theme->surface) {
-        UI_Box *body = ui_build_box_from_key(UI_DrawBackground | UI_Clip, 0);
-        UI_Parent(body) UI_TextPadding(ui_dp(theme->space[UI_Space_12])) {
-            ui_label_styled(UI_FontStyle_Emphasis, theme->fg_primary,
-                            str8f(ui_frame_arena(), "%S / %S", app_duration(used),
-                                  app_duration(total)));
-
-            // The gauge: free space in control, then one segment per track.
-            UI_PrefWidth(ui_pct(1.0f, 0.0f))
-            UI_PrefHeight(ui_px(ui_dp(theme->space[UI_Space_12]), 1.0f))
-            UI_ChildLayoutAxis(Axis2_X)
-            UI_BgColor(theme->control)
-            UI_CornerRadius(ui_dp(theme->space[UI_Space_2])) {
-                UI_Box *gauge = ui_build_box_from_key(UI_DrawBackground, 0);
-                UI_Parent(gauge) UI_CornerRadius(0.0f) {
-                    for (u32 i = 0; i < disc->entry_count; i += 1) {
-                        // One segment per track, its width the clusters it
-                        // costs; what spills past the end of the disc is drawn
-                        // in the danger colour rather than silently clipped.
-                        f32 fraction = (f32)cap->clusters[i] / (f32)cap->capacity_clusters;
-                        u32 colour = (cap->fit[i] == PlanFit_Fits)
-                                         ? theme->mode[app_plan_ui_mode(disc, i)]
-                                         : theme->danger;
-                        UI_PrefWidth(ui_pct(fraction, 0.0f))
-                        UI_PrefHeight(ui_pct(1.0f, 1.0f))
-                        UI_BgColor(colour) {
-                            ui_build_box_from_key(UI_DrawBackground, 0);
-                        }
-                    }
-                }
-            }
-
-            ui_spacer(ui_px(ui_dp(theme->space[UI_Space_8]), 1.0f));
-            static const char *mode_names[UI_Mode_COUNT] = {"SP", "Mono", "LP2", "LP4"};
-            for (u32 mode = 0; mode < UI_Mode_COUNT; mode += 1) {
-                UI_PrefWidth(ui_pct(1.0f, 0.0f))
-                UI_PrefHeight(ui_px(ui_dp(theme->row_compact), 1.0f))
-                UI_ChildLayoutAxis(Axis2_X) {
-                    UI_Box *row = ui_build_box_from_key(0, 0);
-                    UI_Parent(row) {
-                        UI_PrefWidth(ui_px(ui_dp(theme->space[UI_Space_24]), 1.0f))
-                        UI_PrefHeight(ui_pct(1.0f, 1.0f)) {
-                            UI_Box *cell = ui_build_box_from_key(0, 0);
-                            UI_Parent(cell)
-                            UI_FixedX(ui_dp(theme->space[UI_Space_12]))
-                            UI_FixedY(ui_dp(7.0f))
-                            UI_PrefWidth(ui_px(ui_dp(theme->space[UI_Space_8]), 1.0f))
-                            UI_PrefHeight(ui_px(ui_dp(theme->space[UI_Space_8]), 1.0f))
-                            UI_CornerRadius(ui_dp(4.0f))
-                            UI_BgColor(theme->mode[mode]) {
-                                ui_build_box_from_key(UI_FloatingX | UI_FloatingY |
-                                                          UI_DrawBackground,
-                                                      0);
-                            }
-                        }
-                        app_cell(ui_text_size(app_cell_padding(), 1.0f),
-                                 str8_cstr(mode_names[mode]), theme->fg_secondary, 0,
-                                 UI_TextAlign_Left);
-                    }
-                }
-            }
-
-            ui_spacer(ui_px(ui_dp(theme->space[UI_Space_12]), 1.0f));
-            UI_PrefWidth(ui_pct(1.0f, 0.0f))
-            UI_PrefHeight(ui_px(ui_dp(theme->row_standard), 1.0f))
-            UI_ChildLayoutAxis(Axis2_X) {
-                UI_Box *row = ui_build_box_from_key(0, 0);
-                UI_Parent(row) {
-                    ui_spacer(ui_px(ui_dp(theme->space[UI_Space_12]), 1.0f));
-                    if (ui_button_primary(str8f(ui_frame_arena(), "%S###burn",
-                                                app_str(Str_DiscBurn)))
-                            .clicked) {
-                        app_plan_clear();
-                    }
-                    ui_tooltip(app_str(Str_DiscBurnHint));
-                    ui_spacer(ui_px(ui_dp(theme->space[UI_Space_8]), 1.0f));
-                    if (ui_button(str8f(ui_frame_arena(), "%S###clear", app_str(Str_DiscClear)))
-                            .clicked) {
-                        app_plan_clear();
-                    }
-                    ui_tooltip(app_str(Str_DiscClearHint));
-                }
-            }
-        }
-    }
-    app_panel_end();
-}
 
 static void app_toolbar(void) {
     const UI_Theme *theme = ui_theme();
@@ -273,6 +65,16 @@ static void app_status_bar(void) {
                                   app.list.box_count, app.list.visible_count,
                                   ui_frame_box_count()));
             ui_spacer(ui_pct(1.0f, 0.0f));
+            // The plan, always in sight: the 12 px gauge of s9.10 and the two
+            // numbers that go with it.
+            ui_label_styled(UI_FontStyle_Caption, theme->fg_muted,
+                            str8f(ui_frame_arena(), app_str_c(Str_StatusPlan), app_plan_count(),
+                                  app_duration((u32)(app.capacity.used_clusters *
+                                                     (PLAN_CLUSTER_SP_MS / 1000))),
+                                  app_duration((u32)(app.capacity.capacity_clusters *
+                                                     (PLAN_CLUSTER_SP_MS / 1000)))));
+            app_plan_gauge_compact(ui_dp(120.0f));
+            ui_spacer(ui_px(ui_dp(theme->space[UI_Space_12]), 1.0f));
             ui_label_styled(UI_FontStyle_Caption, theme->fg_muted, app_str(Str_StatusKeys));
         }
     }
@@ -340,6 +142,7 @@ static void app_build_ui(void) {
         app_status_bar();
     }
     app_library_context_menu();
+    app_plan_context_menu();
 }
 
 // A dropped folder is a library folder; a dropped file means the folder it is

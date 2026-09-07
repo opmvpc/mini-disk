@@ -22,6 +22,7 @@
 #include "../core/plan/plan_toc.h"
 #include "../core/plan/plan_model.h"
 #include "../ui/ui_widgets.h"
+#include "plan_view.h"
 #include "prefs.h"
 #include "strings.h"
 
@@ -75,12 +76,46 @@ typedef struct AppState {
     // them, so nothing else may ever push into them.
     Plan plan;
     String8 plan_autosave_path;
-    u32 plan_cursor;    // the row Delete acts on; the real view is T-032
+    String8 plan_path;  // what Save writes to; empty until the first Save as
+    u32 plan_disc;      // the tab the view edits, an index into plan.discs
     u32 plan_revision;  // the revision the header numbers were computed at
     // What the gauge and the header show (T-031). Recomputed only when the
     // document changes: a frame that draws the same plan reads the same numbers.
     PlanCapacity capacity;
     PlanTocBudget toc;
+
+    // --- the plan view (T-032) -----------------------------------------------
+    // The list, its selection bitset and the two fields that edit text in
+    // place. The bitset is 254 bits, so it lives in the struct: a plan is
+    // bounded and a pointer to four words would only add an indirection.
+    UI_List plan_list;
+    u64 plan_selection[(PLAN_ENTRY_MAX + 63) / 64];
+    UI_TextInput plan_rename;   // the inline title editor
+    u32 plan_rename_row;        // the row it edits, + 1; 0 when it is closed
+    UI_TextInput plan_disc_title;
+    b32 plan_disc_title_open;   // the header field is live and owns its text
+    u32 plan_group_editing;     // the group header being renamed, + 1
+    UI_TextInput plan_group_name;
+    UI_ContextMenu plan_menu;
+    u32 plan_group_collapsed;   // bit i: group i is folded away
+
+    // A reorder in flight: the row that was picked up and the gap the
+    // insertion line is sitting in. One plan_move is issued, at the drop.
+    b32 plan_drag;
+    u32 plan_drag_row;
+    u32 plan_drag_target;  // 0..entry_count, the gap before that row
+    V2 plan_drag_pos;
+
+    // The gauge. Two layouts and a parameter between them: a change of plan
+    // does not jump, it slides over 120 ms (research/02 s9, MI-09/MI-11).
+    PlanGaugeLayout gauge;
+    PlanGaugeLayout gauge_from;
+    f32 gauge_t;           // 0 at the start of the slide, 1 once it landed
+    f32 gauge_width;       // the width both layouts were computed for
+    u32 gauge_revision;    // the plan revision `gauge` was laid out at
+    u32 gauge_hover;       // segment under the pointer, + 1; 0 when none
+    b32 gauge_hover_free;  // the pointer is over the free zone
+    f32 gauge_hover_x;     // where it is, for the playhead
 
     // --- preferences and the paths they live at ------------------------------
     Prefs prefs;
@@ -116,6 +151,12 @@ typedef struct AppState {
     // "here" before the user lets go. Cleared by DragLeave and by the drop.
     b32 drag_active;
     V2 drag_pos;
+
+    // The drag that goes the other way (T-032): a row picked up in the library
+    // and carried over the plan. It is not an OLE drag - it never leaves the
+    // window - so it is two fields and the mouse.
+    b32 lib_drag;
+    V2 lib_drag_pos;
 } AppState;
 
 // One instance, named by everything above app/: the unity build defines it in
@@ -147,8 +188,12 @@ void     app_plan_clear(void);  // one Remove per entry, so a clear is undoable
 void     app_plan_tick(void);   // drains the plan events, autosaves every 5 s
 void     app_query_set(String8 query);
 
-// The plan is a single disc until T-032 gives the panel its multi disc view.
-md_inline PlanDisc *app_plan_disc(void) { return &app.plan.discs[0]; }
+// The disc the view is on. Every disc of the plan is a tab, and the active one
+// is what the list, the gauge and the TOC bar are all about.
+md_inline PlanDisc *app_plan_disc(void) {
+    Assert(app.plan_disc < app.plan.disc_count);
+    return &app.plan.discs[app.plan_disc];
+}
 
 // The clusters and the title cells of the current disc (T-031). Cheap enough to
 // call every frame: it only recomputes when the revision moved.
@@ -156,7 +201,19 @@ void app_plan_recompute(void);
 md_inline void app_plan_sync(void) {
     if (app.plan_revision != app.plan.revision) { app_plan_recompute(); }
 }
-md_inline u32 app_plan_count(void) { return app.plan.discs[0].entry_count; }
+md_inline u32 app_plan_count(void) { return app_plan_disc()->entry_count; }
+
+// view_plan.c
+void app_plan_panel(void);
+void app_disc_panel(f32 width);
+// The 12 px variant of the gauge, for the status bar (research/02 s9.10).
+void app_plan_gauge_compact(f32 width);
+void app_plan_context_menu(void);
+// The drop of a library drag inside the plan panel: the rows land at `row`.
+void app_plan_drop_rows(u32 row);
+// Is the pointer over the plan list right now? The library drag asks, to know
+// whether letting go adds to the plan or to the library.
+b32 app_plan_hovered(V2 pos);
 
 // view_library.c
 void app_library_panel(f32 width);

@@ -39,9 +39,12 @@ void plan_capacity_compute(const PlanDisc *disc, PlanCapacity *out) {
         u32 start = used;
         used += clusters;
 
+        u32 entry_billed_ms = clusters * MD_MODE_TABLE[mode].cluster_ms;
         out->clusters[i] = clusters;
+        out->entry_mode[i] = (u8)mode;
+        out->entry_padding_ms[i] = entry_billed_ms - duration_ms;
         audio_ms += duration_ms;
-        billed_ms += (u64)clusters * MD_MODE_TABLE[mode].cluster_ms;
+        billed_ms += entry_billed_ms;
 
         u8 fit = PlanFit_Fits;
         if (start >= capacity) {
@@ -141,10 +144,12 @@ void plan_capacity_split(const PlanDisc *disc, const Library *lib, u32 policy, u
             // keeping it together was a preference, not a promise.
             if (run > 1) { run = 1; continue; }
             out->unplaced = count - i;
-            for (u32 k = i; k < count; k += 1) { out->disc_of[k] = (u8)PLAN_DISC_MAX; }
+            // mem_set and not a loop: under /GL MSVC recognises the loop and
+            // emits a call to the CRT's memset, which we do not link (T-004).
+            mem_set(out->disc_of + i, (u8)PLAN_DISC_MAX, count - i);
             return;
         }
-        for (u32 k = 0; k < run; k += 1) { out->disc_of[i + k] = (u8)target; }
+        mem_set(out->disc_of + i, (u8)target, run);  // C2268 again: see above
         out->clusters[target] += clusters;
         out->counts[target] += run;
         i += run;

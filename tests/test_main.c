@@ -32,6 +32,7 @@
 #include "../src/ui/ui_widgets.h"
 #include "../src/ui/ui_debug_overlay.h"
 #include "../src/app/prefs.h"
+#include "../src/app/plan_view.h"
 
 #include "../src/base/base_arena.c"
 #include "../src/base/base_string.c"
@@ -73,6 +74,7 @@
 #include "../src/core/plan/plan_file.c"
 #include "../src/core/plan/plan_toc.c"
 #include "../src/app/prefs.c"
+#include "../src/app/plan_view.c"
 
 typedef struct TestState {
     Arena *arena;         // per test case arena, reset between cases
@@ -130,6 +132,7 @@ static void test_check(b32 condition, const char *expression, i32 line) {
 #include "test_covers.c"
 #include "test_plan.c"
 #include "test_capacity.c"
+#include "test_view_plan.c"
 
 int main(void) {
     os_init();
@@ -150,6 +153,7 @@ int main(void) {
     test_covers_run_all();
     test_plan_run_all();
     test_capacity_run_all();
+    test_view_plan_run_all();
 
     test_report("%llu case(s), %llu check(s), %llu failure(s)\n", test_state.cases,
                 test_state.checks, test_state.failures);

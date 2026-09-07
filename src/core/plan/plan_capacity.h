@@ -99,7 +99,13 @@ typedef struct PlanCapacity {
     u32 remaining_entries;  // PLAN_ENTRY_MAX - entry_count
 
     u32 clusters[PLAN_ENTRY_MAX];  // per entry cost, the gauge's segment widths
-    u8 fit[PLAN_ENTRY_MAX];        // PlanFit
+    // The two columns the gauge reads and would otherwise have to recompute
+    // from the disc while it lays out (T-032): the billing mode carries the
+    // colour, the padding carries the hatched tail of the segment. Both fall
+    // out of the pass that is already running, so they cost a store each.
+    u32 entry_padding_ms[PLAN_ENTRY_MAX];
+    u8 entry_mode[PLAN_ENTRY_MAX];  // PlanCapMode
+    u8 fit[PLAN_ENTRY_MAX];         // PlanFit
 } PlanCapacity;
 
 // One pass, no allocation. `out` may be reused across frames.

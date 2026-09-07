@@ -4,6 +4,8 @@
 param(
     [string]$Folder = "$env:TEMP\minidisk_demo",
     [string]$Query = "",
+    # Plan a ouvrir au demarrage (.mdplan ou .mdplan.txt), cf. gen_demo_plan.py.
+    [string]$Plan = "",
     [string]$Out = "build\demo.png",
     [int]$WaitMs = 5000
 )
@@ -31,6 +33,7 @@ $exe = Join-Path $root "build\minidisk.exe"
 $args = ""
 if ($Folder -ne "") { $args = "--scan `"$Folder`"" }
 if ($Query -ne "") { $args += " --query `"$Query`"" }
+if ($Plan -ne "") { $args += " --plan `"$Plan`"" }
 if ($args -eq "") { $args = "--noscan" }
 
 $proc = Start-Process -FilePath $exe -ArgumentList $args -PassThru

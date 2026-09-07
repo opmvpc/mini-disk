@@ -126,7 +126,7 @@ typedef struct PlanCmd {
     u8 kind;
     u8 disc;
     u8 group;      // Group / Ungroup: the slot that was taken or freed
-    u8 pad_;
+    u8 batch;      // 1: continues the gesture of the command before it (T-032)
     u32 index;     // entry index; Move: from; Group: first; SplitDisc: cut
     u32 aux;       // Move: to; Group / Ungroup: count
     u32 old_value; // StringId, mode|mono, disc length, group live mask
@@ -176,6 +176,12 @@ typedef struct Plan {
     PlanCmd undo[PLAN_UNDO_MAX];
     u32 first, done, last;
     b32 coalesce_open;  // the last command may still absorb a keystroke
+    // One gesture, one Ctrl+Z (T-032): Delete over a selection, a grouped mode
+    // change and an automatic shortening are still one command per entry - they
+    // have to be, since each carries its own inverse - but the ones after the
+    // first are flagged as continuations, and plan_undo_step walks the run.
+    b32 batch_open;
+    b32 batch_first;
 
     u32 revision;    // bumped by every change; the view compares and rebuilds
     b32 dirty;       // something changed since the last save
@@ -225,6 +231,14 @@ b32 plan_can_undo(const Plan *plan);
 b32 plan_can_redo(const Plan *plan);
 // Closes the coalescing window: the next title edit starts its own undo step.
 void plan_coalesce_break(Plan *plan);
+
+// The commands applied between these two are one undo step. Nesting is not a
+// thing: a gesture is a gesture, and the view opens exactly one at a time.
+void plan_batch_begin(Plan *plan);
+void plan_batch_end(Plan *plan);
+// What Ctrl+Z and Ctrl+Y are bound to: a whole gesture, not one command of it.
+b32 plan_undo_step(Plan *plan);
+b32 plan_redo_step(Plan *plan);
 
 // The builders. They are the whole vocabulary of the editor.
 b32 plan_add(Plan *plan, u32 disc, u32 index, PlanEntry entry);

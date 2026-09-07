@@ -39,8 +39,9 @@ AppTrack app_track(TrackId id) {
 // of disc (ADR-011 D2). The title budget is measured in the same pass because
 // both answers come from the same walk over the entries.
 void app_plan_recompute(void) {
+    if (app.plan_disc >= app.plan.disc_count) { app.plan_disc = app.plan.disc_count - 1; }
     plan_capacity_compute(app_plan_disc(), &app.capacity);
-    plan_toc_budget(&app.plan, &app.library, 0, &app.toc);
+    plan_toc_budget(&app.plan, &app.library, app.plan_disc, &app.toc);
     app.plan_revision = app.plan.revision;
 }
 
@@ -96,11 +97,13 @@ void app_index_rebuild(void) {
 // --- the plan (T-030) --------------------------------------------------------
 // Every one of these goes through a command, so everything the panel does -
 // adding a selection of forty tracks included - is one Ctrl+Z away.
-void app_plan_add(TrackId id) { plan_add_track(&app.plan, &app.library, 0, id); }
+void app_plan_add(TrackId id) { plan_add_track(&app.plan, &app.library, app.plan_disc, id); }
 
+// One gesture, one Ctrl+Z: emptying a plan of forty tracks comes back whole.
 void app_plan_clear(void) {
-    while (app_plan_count() != 0) { plan_remove(&app.plan, 0, 0); }
-    app.plan_cursor = 0;
+    plan_batch_begin(&app.plan);
+    while (app_plan_count() != 0) { plan_remove(&app.plan, app.plan_disc, 0); }
+    plan_batch_end(&app.plan);
 }
 
 // Once per frame: the events tell the panel it must redraw, and the autosave
@@ -109,20 +112,18 @@ void app_plan_tick(void) {
     PlanEvent event;
     b32 changed = 0;
     while (plan_events_next(&app.plan.events, &event)) { changed = 1; }
-    if (changed) {
-        u32 count = app_plan_count();
-        if (app.plan_cursor >= count) { app.plan_cursor = count ? count - 1 : 0; }
-        os_request_redraw();
-    }
+    if (changed) { os_request_redraw(); }
     plan_autosave_tick(&app.plan, app.plan_autosave_path, os_time_now_us());
 }
 
 void app_plan_add_selection(void) {
     const u32 *rows = app_rows();
     u32 count = app_row_count();
+    plan_batch_begin(&app.plan);
     for (u32 i = 0; i < count; i += 1) {
         if (ui_list_selected(&app.list, i)) { app_plan_add(rows[i]); }
     }
+    plan_batch_end(&app.plan);
 }
 
 // --- the scan ----------------------------------------------------------------
@@ -249,7 +250,11 @@ void app_init(Arena *permanent, f32 scale) {
     ui_list_init(&app.list, push_array_zero(permanent, u64, selection_words), selection_words);
     ui_list_init(&app.artist_list, 0, 0);
     ui_list_init(&app.album_list, 0, 0);
+    ui_list_init(&app.plan_list, app.plan_selection, ArrayCount(app.plan_selection));
     ui_text_input_init(&app.search, str8_lit(""));
+    ui_text_input_init(&app.plan_rename, str8_lit(""));
+    ui_text_input_init(&app.plan_disc_title, str8_lit(""));
+    ui_text_input_init(&app.plan_group_name, str8_lit(""));
 
     // Three panels that all stay on screen down to 1024 x 640 logical: the disc
     // is measured from the right, the library from the left, and each splitter
@@ -283,6 +288,19 @@ void app_init(Arena *permanent, f32 scale) {
         app_scan_folder(folder);
     } else if (cached_root.size != 0) {
         if (prefs_add_folder(&app.prefs, cached_root)) { app.prefs_dirty = 1; }
+    }
+    // "--plan <file>": the same door the Open button takes, without the dialog.
+    // A .mdplan.txt is imported, a .mdplan is loaded; either way the entries are
+    // re-resolved against the library that has just come back.
+    String8 plan_path = app_command_line_value(scratch.arena, str8_lit("--plan "));
+    if (plan_path.size != 0) {
+        b32 text = str8_ends_with(plan_path, str8_lit(".txt"));
+        PlanFileStatus status = text ? plan_import_text(&app.plan, plan_path)
+                                     : plan_load(&app.plan, plan_path);
+        if (status == PlanFile_Ok) {
+            plan_resolve(&app.plan, &app.library);
+            if (!text) { app.plan_path = str8_copy(permanent, plan_path); }
+        }
     }
     String8 query = app_command_line_value(scratch.arena, str8_lit("--query "));
     if (query.size != 0) {

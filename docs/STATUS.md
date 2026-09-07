@@ -2,7 +2,7 @@
 
 Dernière mise à jour : 2026-09-07
 
-## Phase actuelle : 4 · Plan & capacité — T-030 et T-031 faits (phase 3 en attente de Zadig)
+## Phase actuelle : 4 · Plan & capacité — **terminée** (phase 3 en attente de Zadig)
 
 ### Fait (phase 0 terminée)
 - 4 rapports de recherche livrés (`research/01..04`, ~10 700 lignes) + tokens de design (`02b`).
@@ -16,11 +16,39 @@ Dernière mise à jour : 2026-09-07
 - Repo GitHub : https://github.com/opmvpc/mini-disk
 
 ### En cours
-- T-032 : la vraie vue Plan et la jauge segmentée, sur les nombres que T-031 fournit.
+- **Phase 4 terminée, tag `v0.4.0-phase4` à poser par le lead ; phase 3 en attente de Zadig.**
 - Phase 3 (device) : bloquée tant que Zadig → WinUSB n'est pas installé sur le MZ-N505 (P-001).
   reste l'action utilisateur préalable.
 
 ### Fait en phase 4
+- T-032 livré (dernier de la phase) : la **vraie vue Plan et la jauge signature**. `src/app/plan_view.{h,c}`
+  isole toute la géométrie et toute la traduction « geste → commande » **sans une box ni un appel GL**,
+  ce qui est exactement ce que les tests pilotent : `plan_gauge_layout` place les bords des segments
+  depuis le **total courant de clusters** (la somme des segments vaut la largeur utilisée au pixel,
+  quel qu'en soit le nombre), fusionne les voisins de même mode sous 2 px, hachure le padding de
+  cluster (minimum 1 px), alterne la luminosité entre voisins de même mode et ouvre la zone de
+  dépassement à `first_overflow` **sans jamais comprimer la barre** (ce serait mentir sur la capacité) ;
+  les gestes sont `plan_mode_cycle`, `plan_drop_index`, `plan_fill_count`, `plan_shorten_quota` et les
+  trois gestes multi-entrées. `src/app/view_plan.c` porte le panneau : liste virtualisée (n°, badge de
+  mode cliquable, **titre MD tel qu'il sera écrit** avec pictogramme et cause du raccourcissement,
+  source ou « piste manquante », durée, clusters), **DnD interne** (fantôme, ligne d'insertion,
+  autoscroll, **une seule commande `Move` au lâcher**), Alt+↑/↓, Suppr, Ctrl+Z/Y, F2, sélection
+  multiple, changement de mode groupé, groupes repliables à en-tête éditable, menu contextuel,
+  onglets multi-disques, en-tête (titre, 60/74/80, mode par défaut, Ouvrir / Enregistrer / Enregistrer
+  sous, point d'autosave), « Remplir l'espace restant », « Nouveau disque » et les deux politiques de
+  répartition. **Jauge de 56 dp** conforme à research/02 §9 (bandes vérifiées par un `StaticAssert`,
+  graduations dont la dernière porte la capacité du média, ligne de lecture dans ses cinq états, ligne
+  de lecture au survol, info-bulles par segment et par zone libre, animation de 120 ms) et **variante
+  compacte de 12 dp** dans la barre de statut ; **barre TOC** avec part disque / part pistes, seuils
+  80 % et 100 %, et « Raccourcir automatiquement » qui bissecte le quota par titre sur le prédicat
+  exact des cellules et l'applique **en un seul geste annulable**. Deux ajouts au cœur : le geste
+  annulable en un pas (`plan_batch_begin/end`, `plan_undo_step/redo_step` — N commandes qui portent
+  chacune son inverse, mais un seul Ctrl+Z) et deux colonnes par entrée dans `PlanCapacity`, pour que
+  `plan_gauge_layout` garde la signature du ticket. `os_dialog_open_file`/`save_file` ajoutés
+  (imports toujours kernel32 + user32). Les panneaux provisoires de `app.c` sont supprimés.
+  **Frame de 254 entrées en 407 µs pour 775 boxes** (budget 1,5 ms), **jauge de 254 segments en
+  6,86 µs**, **31,25 ms de CPU sur 12 s au repos** (0,26 % d'un cœur, en baisse), 11 cas de test
+  ajoutés (**144 cas / 5 731 checks**), **exe 308 224 o**. Captures : `docs/captures/T-032-*.png`.
 - T-031 livré : la **capacité se compte en clusters, pas en secondes** (ADR-011 D2).
   `plan_capacity.{h,c}` — `MD_MODE_TABLE` unique (SP 2 s, mono 4 s, LP2 4 s, LP4 8 s par cluster,
   documentée **à valider sur le device en phase 5, T-045**), coût d'une piste = arrondi supérieur
@@ -203,6 +231,20 @@ Dernière mise à jour : 2026-09-07
 | Trois panneaux visibles | jusqu'à **1024 × 640 logique** (biblio 597 px, plan 357, disque 300 à 125 %) | 1024 x 640 | 2026-09-07 |
 | Préférences | fichier de 789 o, aller-retour sérialisation + parsing en 13 µs, écriture atomique | — | 2026-09-07 |
 | Pochettes | **1,31 ms** par pochette (décodage WIC + mise à l'échelle vers 256 et 48), 10 000 pochettes = ~1,9 s réparties sur 7 workers, 64 en vol au plus | 10 000 sans jank | 2026-09-07 |
+
+## KPI — phase 4, T-032 (même machine)
+| Métrique | Valeur | Cible | Date |
+|----------|--------|-------|------|
+| Taille exe release | **308 224 o**, marge 29 696 o sous les 330 KB du ticket, 50 176 o sous le budget CI | < 330 KB (CI 350 KB) | 2026-09-07 |
+| Imports | kernel32 + user32 | ces deux-là | 2026-09-07 |
+| Tests | **144 cas, 5 731 checks**, 0 échec (ASan) | verts | 2026-09-07 |
+| Cibles `build.bat` | debug, release, test, check, analyze, bench toutes vertes | vertes | 2026-09-07 |
+| Frame de la vue Plan, 254 entrées et 20 groupes | **407 µs** (meilleure de 300 ; moyenne 809 µs), **775 boxes** | < 1,5 ms | 2026-09-07 |
+| `plan_gauge_layout`, 254 entrées | **6,86 µs** (13 658 cycles) ; 8,13 µs sur la barre compacte de 120 px | < 20 µs | 2026-09-07 |
+| Recalcul capacité + budget TOC, 254 pistes | 30,2 µs (+3 µs pour les deux colonnes ajoutées à `PlanCapacity`) | < 50 µs | 2026-09-07 |
+| CPU au repos, 12 s après 3 s de chauffe | **31,25 ms**, soit 0,26 % d'un cœur — résidu de thread pilote GL (P-005), en baisse sur les 46,9-78,1 ms de T-030 | 0 % sur nos threads | 2026-09-07 |
+| 60 fps pendant le DnD | tenu par le budget : 0,4 ms de CPU pour la frame la plus lourde, le DnD y ajoute 3 boxes (16,3 ms de marge) ; **pas de capture d'un DnD en cours** (l'injection de touches n'atteint pas la fenêtre) | 60 fps | 2026-09-07 |
+| Chaînes i18n | 61 chaînes FR/EN ajoutées, aucune littérale hors `strings.h` | ADR-011 D10 | 2026-09-07 |
 
 ## KPI — phase 4, T-031 (même machine)
 | Métrique | Valeur | Cible | Date |
