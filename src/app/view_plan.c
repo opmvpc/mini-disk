@@ -1547,7 +1547,9 @@ void app_disc_panel(f32 width) {
                     ui_spacer(ui_px(ui_dp(theme->space[UI_Space_12]), 1.0f));
                     if (ui_button_primary(str8f(ui_frame_arena(), "%S###burn",
                                                 app_str(Str_DiscBurn)))
-                            .clicked) {}
+                            .clicked) {
+                        app_plan_burn();
+                    }
                     ui_tooltip(app_str(Str_DiscBurnHint));
                     ui_spacer(ui_px(ui_dp(theme->space[UI_Space_8]), 1.0f));
                     if (ui_button(str8f(ui_frame_arena(), "%S###clear", app_str(Str_DiscClear)))

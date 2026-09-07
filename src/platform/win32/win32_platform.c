@@ -189,6 +189,52 @@ void os_time_local(OsWallClock *out) {
 
 void os_sleep_us(u64 us) { Sleep((DWORD)((us + 999) / 1000)); }
 
+// --- power (T-042) ---------------------------------------------------------
+// A SP transfer runs at 1x real time: an album is 45 minutes of the machine
+// doing nothing the user can see, and the default idle timer suspends it in the
+// middle of a track. ES_SYSTEM_REQUIRED without ES_DISPLAY_REQUIRED keeps the
+// machine awake and lets the screen go dark, which is what a long copy wants.
+// The flag is per thread, so this is called on the device thread and nowhere
+// else, and cleared there too - a process that forgets it never sleeps again.
+void os_power_keep_awake(b32 keep_awake) {
+    SetThreadExecutionState(keep_awake ? (ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_AWAYMODE_REQUIRED)
+                                       : ES_CONTINUOUS);
+}
+
+// --- entropy (T-042) -------------------------------------------------------
+// The host nonce and the packet key have to be unpredictable, and bcrypt.dll is
+// loaded by name rather than linked so the import table stays kernel32 +
+// user32 (the KPI of every milestone). When it is not there - Wine, a stripped
+// image - the fallback mixes QPC, the thread id and a counter through the
+// project's hash: not cryptographic, and the comment says so, but a transfer
+// that refuses to start because an optional DLL is missing helps nobody.
+typedef LONG(WINAPI *Win32BCryptGenRandom)(void *, unsigned char *, ULONG, ULONG);
+global Win32BCryptGenRandom win32_bcrypt_gen_random;
+global b32 win32_bcrypt_tried;
+
+void os_random_bytes(void *dst, u64 size) {
+    if (!win32_bcrypt_tried) {
+        win32_bcrypt_tried = 1;
+        HMODULE module = LoadLibraryW(L"bcrypt.dll");
+        if (module) {
+            win32_bcrypt_gen_random =
+                (Win32BCryptGenRandom)GetProcAddress(module, "BCryptGenRandom");
+        }
+    }
+    if (win32_bcrypt_gen_random &&
+        win32_bcrypt_gen_random(0, (unsigned char *)dst, (ULONG)size, 0x00000002u) >= 0) {
+        return;  // BCRYPT_USE_SYSTEM_PREFERRED_RNG
+    }
+    global u64 fallback_counter;
+    u8 *out = (u8 *)dst;
+    for (u64 i = 0; i < size; i += 1) {
+        fallback_counter += 1;
+        u64 mixed = hash64_mix(os_time_now_us() ^ (fallback_counter * 0x9E3779B97F4A7C15ull) ^
+                             ((u64)os_thread_current_id() << 32));
+        out[i] = (u8)(mixed >> 24);
+    }
+}
+
 u32 os_thread_current_id(void) { return GetCurrentThreadId(); }
 
 // --- diagnostics -----------------------------------------------------------

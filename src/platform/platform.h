@@ -109,6 +109,13 @@ typedef struct OsWallClock {
 } OsWallClock;
 void os_time_local(OsWallClock *out);
 void os_sleep_us(u64 us);
+// T-042: hold off the idle sleep timer for the length of a transfer. Per
+// thread, so the thread that turns it on is the thread that turns it off.
+void os_power_keep_awake(b32 keep_awake);
+// Unpredictable bytes for the NetMD nonces and packet keys (research/01 s4.6,
+// s4.10). BCryptGenRandom when bcrypt.dll is there, a QPC/counter mix when it
+// is not - documented at the implementation, never used for anything at rest.
+void os_random_bytes(void *dst, u64 size);
 u32 os_thread_current_id(void);
 
 // --- atomics ---------------------------------------------------------------

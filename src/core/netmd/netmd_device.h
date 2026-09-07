@@ -18,6 +18,7 @@
 #include "netmd_proto.h"
 #include "netmd_replay.h"
 #include "netmd_transport.h"
+#include "netmd_upload.h"
 
 // A NetMD command, posted by the main thread.
 typedef enum NetmdCmdKind {
@@ -42,6 +43,11 @@ typedef enum NetmdCmdKind {
     // runs is the same one every time: back the TOC up, write, read the disc
     // again (ADR-011 D4).
     NetmdCmd_Edit,
+    // T-042. The plan itself never travels through the ring: netmd_device_upload
+    // publishes the pointer before posting, the way the trace path is published
+    // before the thread starts.
+    NetmdCmd_UploadPlan,
+    NetmdCmd_CancelUpload,
     NetmdCmd_COUNT
 } NetmdCmdKind;
 
@@ -67,6 +73,12 @@ typedef enum NetmdEventKind {
     // T-022. An edit answers exactly once, whether it was refused before any
     // USB traffic (`refusal`), written (`writes`), or failed halfway.
     NetmdEvent_Edit,
+    // T-042: one Progress at most every 250 ms, one TrackDone per commit, and
+    // exactly one of Done / Error to close the run.
+    NetmdEvent_UploadProgress,
+    NetmdEvent_TrackDone,
+    NetmdEvent_UploadDone,
+    NetmdEvent_UploadError,
     NetmdEvent_COUNT
 } NetmdEventKind;
 
@@ -91,6 +103,10 @@ typedef struct NetmdEvent {
     u32 track_count;   // Disc: how many tracks it holds
     u32 elapsed_ms;    // Disc: how long the whole read took, the < 2 s criterion
     u32 device_count;  // NetMD devices the last enumeration found
+    u32 entry;         // upload: which plan entry the event is about
+    u32 eta_s;         // upload: seconds left at the current rate
+    u64 bytes_done;    // upload: payload bytes sent so far
+    u64 bytes_total;   // upload: payload bytes the run will send
     u32 problem_code;  // CM_PROB_*, 28 when the driver is missing (P-001)
     u32 edit_kind;     // Edit: the NetmdEditKind that was asked for
     u32 refusal;       // Edit: NetmdEditRefusal, none when it went through
@@ -160,6 +176,11 @@ typedef struct NetmdDevice {
     u32 trace_path_size;
     u8 trace_path[NETMD_PATH_MAX];
 
+    // T-042: the burn in flight. The plan is owned by the caller and must stay
+    // alive until UploadDone or UploadError comes back.
+    NetmdUploadPlan *upload_plan;
+    NetmdUploadState upload;
+
     // --- tests --------------------------------------------------------------
     // A transport set before the thread starts replaces WinUSB entirely: the
     // enumeration answers with `test_vid`/`test_pid` and the open binds this.
@@ -205,5 +226,11 @@ void netmd_device_set_trace(NetmdDevice *device, String8 path);
 // The last published layout, or 0 when no disc has been read. Safe to call from
 // the main thread at any point: the slot it names is not the one being written.
 const DiscLayout *netmd_device_disc(const NetmdDevice *device);
+
+// T-042. `plan` stays the caller's, and must outlive the run. 0 when a burn is
+// already in flight - two at once would fight over the disc.
+b32 netmd_device_upload(NetmdDevice *device, NetmdUploadPlan *plan);
+// Live state, safe to read from the main thread at any point.
+const NetmdUploadState *netmd_device_upload_state(const NetmdDevice *device);
 
 #endif  // NETMD_DEVICE_H
