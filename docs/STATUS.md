@@ -99,6 +99,33 @@ Dernière mise à jour : 2026-09-07
 | 8 pistes de 4 min à travers les jobs (7 workers) | **1,82 s, 1058× temps réel** | — | 2026-09-07 |
 | Allocation par bloc | **aucune** : arène par job, `ArenaTemp` rendu même en cas d'annulation (testé) | 0 | 2026-09-07 |
 
+### Fait en phase 5
+- T-040 livré : les **décodeurs**. `third_party/` vendorise minimp3 (CC0, `ea99364f`), dr_flac 0.13.4 et
+  dr_wav 0.14.6 (`dfe83776`, Unlicense ou MIT-0) et stb_vorbis 1.22 (`2c980bb5`, MIT ou domaine public),
+  épinglés, non modifiés, licences intégrales dans `third_party/LICENSES.md` ; ils sont compilés
+  **sans CRT** par `src/third_party.c` et `src/third_party_vorbis.c` (deux unités : minimp3 et stb_vorbis
+  ont chacun un `get_bits` statique), allocateurs redirigés vers **une arène par décodeur** liée par
+  `tp_arena_bind`, `stdio` désactivé, et **une libm maison** (`floor`, `ldexp`, `exp`, `log`, `pow`,
+  `sin`, `cos`, `sqrt`, `abs`, `qsort`) pour stb_vorbis. `src/core/codecs/codec.h` porte l'interface
+  unique `Decoder` : ouverture par signature (jamais par extension, en réutilisant `TagsReader` de
+  `tags.c`), lecture du fichier par **une fenêtre de 256 KB** sur `os_file_read_at` — jamais le fichier
+  entier —, sortie **f32 désentrelacée par blocs de 4 096 frames** dans les tampons de l'appelant, seek
+  **exact pour tous les formats**, fermeture qui libère l'arène d'un bloc. `codec_wav.c` fait WAVE par
+  dr_wav et **AIFF/AIFF-C à la main** (COMM/SSND, taux en flottant étendu 80 bits, PCM BE 8/16/24/32,
+  `sowt`, `fl32`, `fl64`), `codec_flac.c` FLAC, `codec_mp3.c` la boucle de trames MPEG (ID3v2, Xing/VBRI,
+  réservoir de bits), `codec_ogg.c` Vorbis en **pushdata** (seule API qui n'exige pas le fichier entier et
+  qui accepte un `stb_vorbis_alloc`). AAC/M4A, ALAC et WMA passent par **Media Foundation** :
+  `os_media_decoder_open/read/seek/close` dans `platform.h`, `win32_media.c` charge `mfplat`/`mfreadwrite`
+  par `LoadLibraryW` avec des vtables COM écrites à la main et des GUID en dur (pas de `mfuuid.lib`),
+  sortie forcée en PCM float 32 bits ; Opus rend une erreur « format non supporté » propre. Le fuzz
+  d'en-têtes a trouvé un **vrai débordement de stb_vorbis 1.22** (longueur de commentaire Vorbis à
+  `0x7FFFFFFF`) : corrigé **à notre frontière** (`codec_ogg_headers_are_sane` réassemble les paquets
+  d'en-tête et vérifie chaque longueur), pas par un patch sur du code vendorisé. Vecteurs golden générés
+  par `tools/gen_audio_vectors.py`, encodeur FLAC minimal en Python compris. Exe **419 328 o**, imports
+  kernel32 + user32, 155 cas / 5 842 checks verts, FLAC à 451x et MP3 à 401x temps réel.
+  `build.bat bench` est vert machine au repos, mais s'arrête au milieu quand elle est chargée, pour une
+  raison antérieure au ticket (P-010).
+
 ### Fait en phase 4
 - T-032 livré (dernier de la phase) : la **vraie vue Plan et la jauge signature**. `src/app/plan_view.{h,c}`
   isole toute la géométrie et toute la traduction « geste → commande » **sans une box ni un appel GL**,
@@ -323,6 +350,22 @@ Dernière mise à jour : 2026-09-07
 | Détection du device réel | `054c:0084` → « Sony MZ-N505 », état `NoDriver`, ProblemCode 28, bus « Net MD Walkman » | l'écran guidé s'affiche | 2026-09-07 |
 | Ouverture / control transfer sur le vrai device | **en attente de Zadig** (P-001) | ping → `0x09` | — |
 | Chaînes i18n | 13 FR + 13 EN, aucune littérale hors `strings.h` | ADR-011 D10 | 2026-09-07 |
+## KPI — phase 5, T-040 (même machine)
+| Métrique | Valeur | Cible | Date |
+|----------|--------|-------|------|
+| Taille exe release | **419 328 o** (308 224 o avant T-040, +111 104 o pour cinq décodeurs), marge 10 752 o sous les 420 KB du ticket et 92 672 o sous le budget CI | < 420 KB (CI 500 KB) | 2026-09-07 |
+| Imports | kernel32 + user32 (table d'import lue à la main) | ces deux-là | 2026-09-07 |
+| Tests | **155 cas, 5 842 checks**, 0 échec (ASan) | verts | 2026-09-07 |
+| Cibles `build.bat` | debug, release, test, check, analyze, bench toutes vertes (bench sensible à la charge machine, P-010) | vertes | 2026-09-07 |
+| Décodage FLAC | **451x temps réel** (220 à 451x selon la charge), décodeur scalaire — `DR_FLAC_NO_SIMD` rend 27,5 Ko | ≥ 300x | 2026-09-07 |
+| Décodage MP3 | **401x temps réel** (234 à 401x) | ≥ 100x | 2026-09-07 |
+| Décodage Ogg Vorbis | **234x temps réel** (111 à 234x) | — | 2026-09-07 |
+| Décodage WAV s16 | **922x temps réel** (525 à 1 101x) | — | 2026-09-07 |
+| SNR du sinus décodé | MP3 **73 dB**, Ogg **53 dB**, AAC **27 dB** — plafonds des encodeurs de VLC (pas de ffmpeg ici) ; le décodeur de VLC donne les mêmes chiffres à 0,4 dB près | > 60 dB MP3 | 2026-09-07 |
+| FLAC et AIFF vs WAV | **bit-exact** sur 22 050 frames | bit-exact | 2026-09-07 |
+| Fuzz des en-têtes de codecs | 11 vecteurs × 200 mutations, 2 026 ouvertures, **0 crash, 0 rapport ASan** ; 1 débordement réel de stb_vorbis trouvé et fermé à la frontière | 0 | 2026-09-07 |
+| Mémoire par décodeur | 1 arène, fenêtre de fichier de **256 KB**, ~1,3 MB engagés au pire (Vorbis) ; **0 `malloc`** | 0 malloc | 2026-09-07 |
+| Vecteurs audio commités | 13 fichiers, 265 263 o | < 40 KB par fichier compressé | 2026-09-07 |
 
 ## KPI — phase 4, T-032 (même machine)
 | Métrique | Valeur | Cible | Date |

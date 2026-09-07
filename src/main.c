@@ -28,6 +28,7 @@
 #include "core/dsp/dsp_edit.h"
 #include "core/dsp/dsp_dither.h"
 #include "core/pipeline/pipeline.h"
+#include "core/codecs/codec.h"
 #include "ui/gl_loader.h"
 #include "ui/r_core.h"
 #include "ui/r_backend.h"
@@ -65,6 +66,7 @@
 #include "platform/win32/win32_font_dwrite.c"
 #include "platform/win32/win32_image.c"
 #include "platform/win32/win32_usb.c"
+#include "platform/win32/win32_media.c"
 
 #include "core/library/lib_model.c"
 #include "core/library/tags.c"
@@ -92,6 +94,13 @@
 #include "core/dsp/dsp_edit.c"
 #include "core/dsp/dsp_dither.c"
 #include "core/pipeline/pipeline.c"
+
+#include "core/codecs/codec.c"
+#include "core/codecs/codec_mp3.c"
+#include "core/codecs/codec_flac.c"
+#include "core/codecs/codec_wav.c"
+#include "core/codecs/codec_ogg.c"
+#include "core/codecs/codec_mf.c"
 
 #include "ui/gl_loader.c"
 #include "ui/r_atlas.c"

@@ -29,6 +29,7 @@
 #include "../src/core/dsp/dsp_edit.h"
 #include "../src/core/dsp/dsp_dither.h"
 #include "../src/core/pipeline/pipeline.h"
+#include "../src/core/codecs/codec.h"
 #include "../src/ui/r_core.h"
 #include "../src/ui/r_backend.h"
 #include "../src/ui/r_atlas.h"
@@ -55,6 +56,7 @@
 #include "../src/platform/win32/win32_window.c"
 #include "../src/platform/win32/win32_image.c"
 #include "../src/platform/win32/win32_usb.c"
+#include "../src/platform/win32/win32_media.c"
 #include "../src/ui/r_atlas.c"
 #include "../src/ui/r_thumbs.c"
 #include "../src/ui/r_raster.c"
@@ -93,6 +95,12 @@
 #include "../src/core/dsp/dsp_edit.c"
 #include "../src/core/dsp/dsp_dither.c"
 #include "../src/core/pipeline/pipeline.c"
+#include "../src/core/codecs/codec.c"
+#include "../src/core/codecs/codec_mp3.c"
+#include "../src/core/codecs/codec_flac.c"
+#include "../src/core/codecs/codec_wav.c"
+#include "../src/core/codecs/codec_ogg.c"
+#include "../src/core/codecs/codec_mf.c"
 #include "../src/app/prefs.c"
 #include "../src/app/plan_view.c"
 
@@ -155,6 +163,7 @@ static void test_check(b32 condition, const char *expression, i32 line) {
 #include "test_view_plan.c"
 #include "test_usb_replay.c"
 #include "test_dsp.c"
+#include "test_codecs.c"
 
 int main(void) {
     os_init();
@@ -178,6 +187,7 @@ int main(void) {
     test_view_plan_run_all();
     test_usb_replay_run_all();
     test_dsp_run_all();
+    test_codecs_run_all();
 
     test_report("%llu case(s), %llu check(s), %llu failure(s)\n", test_state.cases,
                 test_state.checks, test_state.failures);

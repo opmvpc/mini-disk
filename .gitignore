@@ -10,3 +10,4 @@ build/
 .vs/
 tools/zadig/*.exe
 tools/zadig/*.log
+__pycache__/

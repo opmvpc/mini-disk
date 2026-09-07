@@ -9,4 +9,7 @@ Checks: >
   -bugprone-suspicious-include
 WarningsAsErrors: '*'
 HeaderFilterRegex: '^.*[\/]src[\/].*$'
+# third_party/ n'est pas notre code : ses en-tetes arrivent par src/third_party.h et
+# tombaient donc dans le filtre ci-dessus (T-040).
+ExcludeHeaderFilterRegex: '^.*[\/]third_party[\/].*$'
 # bugprone-suspicious-include : le unity build (ADR-002) inclut volontairement les .c

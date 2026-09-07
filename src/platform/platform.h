@@ -424,6 +424,28 @@ b32 os_usb_reset(OsUsb usb);
 // Opens `url` in the user's browser (the Zadig page of the driver screen).
 // shell32 is loaded by hand, so the import table stays kernel32 + user32.
 void os_open_url(String8 url);
+// --- system audio decoding -------------------------------------------------
+// AAC/M4A, ALAC and WMA are Media Foundation's job (ADR-007): patent encumbered
+// formats Windows already decodes, for zero bytes of exe. mfplat/mfreadwrite are
+// loaded on the first open, so the import table stays kernel32 + user32.
+//
+// A boundary like every other file input: an unreadable or unsupported stream
+// is a 0 return, never a crash. Samples come out interleaved f32, which is what
+// the reader is configured to produce whatever the file actually holds.
+typedef struct OsMediaDecoder { void *v; } OsMediaDecoder;  // v == 0: not open
+
+typedef struct OsMediaInfo {
+    u32 sample_rate;
+    u32 channels;
+    u64 total_frames;  // 0 when the container does not carry a duration
+} OsMediaInfo;
+
+b32  os_media_decoder_open(OsMediaDecoder *out, String8 path, OsMediaInfo *info);
+u64  os_media_decoder_read(OsMediaDecoder decoder, f32 *dst, u64 frames);  // frames written
+// Seeks to the sample the container can start on, which for a compressed audio
+// stream is the frame asked for or a hair before it.
+b32  os_media_decoder_seek(OsMediaDecoder decoder, u64 frame);
+void os_media_decoder_close(OsMediaDecoder decoder);
 
 // --- clipboard and cursor --------------------------------------------------
 // The system folder picker (IFileDialog): modal on the active window, returns
