@@ -44,10 +44,14 @@ ont un fichier `T-NNN-*.md` ; les suivants sont des lignes à détailler au mome
 | [T-031](T-031-capacite-clusters-budget-toc.md) | Capacité en clusters, budget TOC 255×7, sanitize/raccourcissement des titres, titrage auto, first-fit | doing |
 | [T-032](T-032-vue-plan-jauge.md) | Vue Plan : DnD interne, modes, groupes, jauge de capacité au pixel, barre TOC, tag v0.4.0 | todo |
 
-## Phase 5 — Pipeline & SP
-T-040 minimp3/dr_flac/dr_wav/stb_vorbis · T-041 Media Foundation AAC/ALAC/WMA · T-042 resampler sinc ·
-T-043 R128 + true-peak + dither · T-044 session sécurisée + upload SP · T-045 titrage post-upload ·
-T-046 vue Transfert (progression, ETA, annulation, reprise) · T-047 cache de transcodage.
+## Phase 5 — Pipeline & SP (premier disque gravé)
+
+| Ticket | Titre | Statut |
+|--------|-------|--------|
+| [T-040](T-040-decodeurs.md) | Décodeurs minimp3 / dr_flac / dr_wav+AIFF / stb_vorbis sans CRT + Media Foundation (AAC/ALAC/WMA), interface Decoder f32 planaire | todo |
+| [T-041](T-041-dsp-resampler-r128-dither.md) | DSP : sinc polyphase, EBU R128 + true-peak, trim/fade/gap/mono, dither TPDF, PCM BE 2048 o, pipeline en jobs, aperçu WAV | todo |
+| [T-042](T-042-session-securisee-upload-sp.md) | NetMD : DES/3DES maison, EKB, session key, paquets chiffrés, upload SP, titrage, reprise, validation de MD_MODE_TABLE sur le device | todo |
+| [T-043](T-043-vue-transfert-cache.md) | Vue Transfert (simulation, progression, ETA, annulation, reprise, journal) + cache de transcodage LRU, tag v0.5.0 | todo |
 
 ## Phase 6 — ATRAC3 & LP
 T-050 QMF + MDCT + bitstream writer · T-051 frame silencieuse valide (ffmpeg décode) · T-052 quantif + Huffman ·
