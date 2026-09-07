@@ -196,7 +196,9 @@ static String8 app_gauge_segment_tooltip(u32 index) {
     for (u32 i = 0; i < segment->count; i += 1) {
         duration_ms += disc->duration_ms[segment->first + i];
     }
-    u64 billed_ms = (u64)segment->clusters * MD_MODE_TABLE[segment->mode].cluster_ms;
+    // Not clusters x cluster_ms: one cluster per track is the 2 s link cluster
+    // of T-045, worth 2 000 ms of disc even inside an LP4 segment.
+    u64 billed_ms = plan_billed_ms_of(segment->clusters, segment->count, segment->mode);
     if (segment->count > 1) {
         return str8f(ui_frame_arena(), app_str_c(Str_GaugeMergedTip), segment->count,
                      app_ms_duration(duration_ms), app_mode_names[segment->mode]);

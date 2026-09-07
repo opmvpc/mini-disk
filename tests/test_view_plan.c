@@ -101,19 +101,21 @@ TEST(view_plan_gauge_segments_tile_the_bar) {
 TEST(view_plan_gauge_hatch_and_alternation) {
     TestPlanFixture fixture;
     test_view_plan_begin(&fixture, arena);
-    // Exactly two clusters of SP and no padding at all: 4 s.
+    // Exactly two audio clusters of SP and no padding at all: 4 s. Plus the
+    // link cluster of T-045, which is charged and is not padding: 3 in all.
     test_view_plan_add(&fixture, 4000, PlanMode_SP, 0);
-    // One millisecond more: a third cluster, almost all of it wasted.
+    // One millisecond more: a third audio cluster, almost all of it wasted, 4.
     test_view_plan_add(&fixture, 4001, PlanMode_SP, 0);
     test_view_plan_recompute(&fixture, 2400.0f);  // one pixel per cluster
     PlanGaugeLayout *layout = fixture.layout;
     EXPECT(layout->count == 2);
-    EXPECT(layout->segments[0].width == 2.0f);
-    // Nothing wasted, so no hatching: the tail starts at the end.
-    EXPECT(layout->segments[0].hatch_x == layout->segments[0].x + 2.0f);
-    EXPECT(layout->segments[1].width == 3.0f);
-    // 1999 ms of 6000 wasted -> one pixel of the three.
-    EXPECT(layout->segments[1].hatch_x == layout->segments[1].x + 2.0f);
+    EXPECT(layout->segments[0].width == 3.0f);
+    // Nothing wasted, so no hatching: the tail starts at the end. The link
+    // cluster widens the segment, it never hatches it.
+    EXPECT(layout->segments[0].hatch_x == layout->segments[0].x + 3.0f);
+    EXPECT(layout->segments[1].width == 4.0f);
+    // 1999 ms of padding over 4 clusters of 2 000 -> one pixel of the four.
+    EXPECT(layout->segments[1].hatch_x == layout->segments[1].x + 3.0f);
     // Two neighbours of the same mode alternate, so the border is visible even
     // without a separator (s9.3).
     EXPECT(layout->segments[0].alternate == 0);
@@ -130,8 +132,9 @@ TEST(view_plan_gauge_hatch_and_alternation) {
 TEST(view_plan_gauge_overflow_zone) {
     TestPlanFixture fixture;
     test_view_plan_begin(&fixture, arena);
-    // An 80 minute disc is 2400 clusters. Twenty seven tracks of three minutes
-    // are 2430: the twenty seventh is the one that no longer fits whole.
+    // An 80 minute disc is 2400 clusters. A three minute SP track is 90 audio
+    // clusters plus its link cluster, 91; twenty seven of them are 2457, and
+    // the twenty seventh is the one that no longer fits whole (26 x 91 = 2366).
     for (u32 i = 0; i < 27; i += 1) { test_view_plan_add(&fixture, 180000, PlanMode_SP, 0); }
     f32 width = 1200.0f;
     test_view_plan_recompute(&fixture, width);
@@ -139,9 +142,9 @@ TEST(view_plan_gauge_overflow_zone) {
     PlanGaugeLayout *layout = fixture.layout;
     EXPECT(capacity->first_overflow == 26);
     EXPECT(layout->overflow);
-    // The red zone starts where the twenty seventh track does: 26 * 90 clusters
+    // The red zone starts where the twenty seventh track does: 26 * 91 clusters
     // of 2400, over 1200 pixels.
-    f32 expected = round_f32(width * (f32)(26 * 90) / 2400.0f);
+    f32 expected = round_f32(width * (f32)(26 * 91) / 2400.0f);
     EXPECT(layout->overflow_x == expected);
     EXPECT(layout->overflow_x < width);
     // The bar keeps its width: what spills is clamped, never drawn past the end.
@@ -318,18 +321,22 @@ TEST(view_plan_delete_of_a_selection_is_one_undo_step) {
 TEST(view_plan_fill_remaining_stops_where_it_must) {
     TestPlanFixture fixture;
     test_view_plan_begin(&fixture, arena);
-    // 78 minutes of an 80 minute disc are used: 2340 clusters of 2400.
-    for (u32 i = 0; i < 26; i += 1) { test_view_plan_add(&fixture, 180000, PlanMode_SP, 0); }
+    // Twenty six tracks of 2:56 at 88 audio clusters + 1 link cluster = 89 each,
+    // 2314 of the 2400 an 80 minute disc holds: 86 clusters left, 2:52 in SP.
+    for (u32 i = 0; i < 26; i += 1) { test_view_plan_add(&fixture, 176000, PlanMode_SP, 0); }
     plan_capacity_compute(plan_disc(fixture.plan, 0), fixture.capacity);
-    EXPECT(fixture.capacity->free_clusters == 60);  // two minutes left
+    EXPECT(fixture.capacity->used_clusters == 26 * 89);
+    EXPECT(fixture.capacity->free_clusters == 86);
 
     // A selection of a one minute track, another one minute track, then a five
     // minute one: the walk takes the first two and stops at the third rather
     // than skipping it, because the order on screen is the order it fills in.
+    // In SP that is 31 + 31 = 62 of the 86, and the third would be 151 more.
     u32 durations[4] = {60000, 60000, 300000, 30000};
     EXPECT(plan_fill_count(fixture.capacity, durations, 4, PlanCapMode_SP) == 2);
-    // In LP2 the five minute track still does not fit, but in LP4 - four times
-    // the audio per cluster - the whole selection goes in.
+    // In LP2 (16 + 16, then 76) the five minute track still does not fit, but in
+    // LP4 - four times the audio per cluster - the whole selection goes in at
+    // 9 + 9 + 39 + 5 = 62 clusters.
     EXPECT(plan_fill_count(fixture.capacity, durations, 4, PlanCapMode_LP2) == 2);
     EXPECT(plan_fill_count(fixture.capacity, durations, 4, PlanCapMode_LP4) == 4);
     // Nothing fits on a disc that is already over.

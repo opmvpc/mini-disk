@@ -339,9 +339,12 @@ static void app_disc_build_capacity(const DiscLayout *disc, PlanCapacity *out) {
         out->fit[i] = PlanFit_Fits;  // it is already on the disc: it fits
         out->used_clusters += clusters;
         out->audio_ms += track->duration_ms;
-        out->billed_ms += (u64)clusters * PLAN_CLUSTER_SP_MS;
+        // The link cluster of T-045 is charged here too: a track already on the
+        // disc spent one when it was written, and it is 2 s of disc whatever the
+        // encoding, which is exactly what plan_billed_ms_of separates out.
+        out->billed_ms += plan_billed_ms_of(clusters, 1, mode);
+        out->padding_ms += out->entry_padding_ms[i];
     }
-    out->padding_ms = out->billed_ms - out->audio_ms;
     out->first_overflow = out->entry_count;
     // The device's own "available" is the truth, not our sum: a fragmented disc
     // has less room than the arithmetic says (s7.3).

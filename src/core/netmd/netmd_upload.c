@@ -176,6 +176,7 @@ static u32 netmd_upload_check_capacity(NetmdSession *session, Arena *arena,
         if (entry->status == NetmdUploadStatus_Done) { continue; }
         u64 clusters = (entry->duration_ms + NETMD_SP_CLUSTER_MS - 1u) / NETMD_SP_CLUSTER_MS;
         if (clusters == 0) { clusters = 1; }  // a track always costs one
+        clusters += 1;  // and one more: the link cluster measured in T-043 (T-045)
         needed_ms += clusters * NETMD_SP_CLUSTER_MS;
     }
     return (needed_ms > capacity.available.ms) ? NetmdResult_NoSpace : NetmdResult_Ok;

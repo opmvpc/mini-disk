@@ -1,5 +1,5 @@
 // plan_capacity.c - clusters, not seconds (ADR-011 D2). See plan_capacity.h for
-// the model and for what still has to be validated on the device (T-045).
+// the model, the measured per track overhead and what is still unmeasured (T-045).
 
 const PlanModeSpec MD_MODE_TABLE[PlanCapMode_COUNT] = {
     {2000, 292, "SP"},    // ATRAC SP stereo: the cluster itself, ~2 s
@@ -8,16 +8,24 @@ const PlanModeSpec MD_MODE_TABLE[PlanCapMode_COUNT] = {
     {8000, 66, "LP4"},    // ATRAC3 joint stereo 66 kbit/s
 };
 
-u32 plan_clusters_for(u32 duration_ms, u32 cap_mode) {
+// The audio half: what the samples themselves take, rounded up, never zero.
+static u32 plan_audio_clusters_for(u32 duration_ms, u32 cap_mode) {
     Assert(cap_mode < PlanCapMode_COUNT);
     u32 cluster_ms = MD_MODE_TABLE[cap_mode].cluster_ms;
     u32 clusters = (duration_ms + cluster_ms - 1) / cluster_ms;
     return clusters ? clusters : 1;  // a track always takes a cluster
 }
 
+u32 plan_clusters_for(u32 duration_ms, u32 cap_mode) {
+    // Plus the link cluster the device spends per track, measured on the real
+    // MZ-N505 (T-043/T-045). See PLAN_TRACK_OVERHEAD_CLUSTERS.
+    return plan_audio_clusters_for(duration_ms, cap_mode) + PLAN_TRACK_OVERHEAD_CLUSTERS;
+}
+
 u32 plan_padding_ms(u32 duration_ms, u32 cap_mode) {
+    // The audio clusters only: the overhead is not wasted audio (see the header).
     u32 cluster_ms = MD_MODE_TABLE[cap_mode].cluster_ms;
-    return plan_clusters_for(duration_ms, cap_mode) * cluster_ms - duration_ms;
+    return plan_audio_clusters_for(duration_ms, cap_mode) * cluster_ms - duration_ms;
 }
 
 void plan_capacity_compute(const PlanDisc *disc, PlanCapacity *out) {
@@ -26,7 +34,7 @@ void plan_capacity_compute(const PlanDisc *disc, PlanCapacity *out) {
 
     u32 capacity = plan_clusters_capacity(disc->length_min);
     u32 used = 0;
-    u64 audio_ms = 0, billed_ms = 0;
+    u64 audio_ms = 0, billed_ms = 0, padding_ms = 0;
     u32 first_overflow = count;
 
     // One pass over three columns. The running total is what decides the per
@@ -39,12 +47,17 @@ void plan_capacity_compute(const PlanDisc *disc, PlanCapacity *out) {
         u32 start = used;
         used += clusters;
 
-        u32 entry_billed_ms = clusters * MD_MODE_TABLE[mode].cluster_ms;
+        // What the disc is charged, and what of it is wasted audio. They are
+        // not the same number any more: the link cluster is charged and is not
+        // padding, so billed - audio is padding + one cluster per track.
+        u32 entry_padding_ms = plan_padding_ms(duration_ms, mode);
         out->clusters[i] = clusters;
         out->entry_mode[i] = (u8)mode;
-        out->entry_padding_ms[i] = entry_billed_ms - duration_ms;
+        out->entry_padding_ms[i] = entry_padding_ms;
         audio_ms += duration_ms;
-        billed_ms += entry_billed_ms;
+        billed_ms += (u64)duration_ms + entry_padding_ms +
+                     (u64)PLAN_TRACK_OVERHEAD_CLUSTERS * PLAN_CLUSTER_SP_MS;
+        padding_ms += entry_padding_ms;
 
         u8 fit = PlanFit_Fits;
         if (start >= capacity) {
@@ -65,7 +78,7 @@ void plan_capacity_compute(const PlanDisc *disc, PlanCapacity *out) {
     out->first_overflow = first_overflow;
     out->audio_ms = audio_ms;
     out->billed_ms = billed_ms;
-    out->padding_ms = billed_ms - audio_ms;
+    out->padding_ms = padding_ms;
     out->remaining_entries = PLAN_ENTRY_MAX - count;
     for (u32 mode = 0; mode < PlanCapMode_COUNT; mode += 1) {
         out->remaining_ms[mode] = out->free_clusters * MD_MODE_TABLE[mode].cluster_ms;
