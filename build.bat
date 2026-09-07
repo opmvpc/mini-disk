@@ -36,9 +36,13 @@ set COMMON=/nologo /std:c11 /utf-8 /Zi /Isrc /FC /diagnostics:column %WARN%
 set DEFS=/DUNICODE /D_UNICODE /DWIN32_LEAN_AND_MEAN /DNOMINMAX
 set REL_CL=/DBUILD_DEBUG=0 /DBUILD_NO_CRT=1 /O2 /Oi /Gy /Gw /GS- /Gs9999999 /GR- /EHa- /GL
 set DBG_CL=/DBUILD_DEBUG=1 /DBUILD_NO_CRT=0 /Od /MTd /fsanitize=address
+REM  /INCLUDE:codec_open : les decodeurs de T-040 sont livres avant le pipeline
+REM  qui les appellera (T-041). Sans ce point d'ancrage, /OPT:REF les retire de
+REM  l'exe et le KPI de taille ne mesurerait rien.
 set REL_LINK=/LTCG /INCREMENTAL:NO /NODEFAULTLIB /ENTRY:entry_point /SUBSYSTEM:WINDOWS ^
  /OPT:REF /OPT:ICF /MERGE:.rdata=.text /MERGE:.pdata=.text /STACK:0x100000,0x10000 ^
  /DYNAMICBASE /NXCOMPAT /HIGHENTROPYVA /PDBALTPATH:%%_PDB%% ^
+ /INCLUDE:codec_open ^
  /MANIFEST:EMBED /MANIFESTINPUT:src\app.manifest
 
 if "%MODE%"=="release" goto :release
@@ -53,9 +57,14 @@ exit /b 1
 REM ---------------------------------------------------------------------------
 :release
 echo [release] build...
-cl %COMMON% %DEFS% %REL_CL% /c src\third_party.c /Fobuild\third_party.obj /Fdbuild\minidisk.pdb || exit /b 1
+REM  /GL- sur le code tiers : sous LTCG, MSVC transforme leurs affectations de
+REM  struct en appels memcpy "library helper" que /NODEFAULTLIB ne peut pas
+REM  resoudre (C2268, cf. CONVENTIONS.md et T-004). On ne patche pas les sources
+REM  vendorisees : on retire /GL de ces deux unites, elles restent en /O2.
+cl %COMMON% %DEFS% %REL_CL% /GL- /c src\third_party.c /Fobuild\third_party.obj /Fdbuild\minidisk.pdb || exit /b 1
+cl %COMMON% %DEFS% %REL_CL% /GL- /c src\third_party_vorbis.c /Fobuild\third_party_vorbis.obj /Fdbuild\minidisk.pdb || exit /b 1
 cl %COMMON% %DEFS% %REL_CL% src\main.c /Fobuild\main.obj /Fdbuild\minidisk.pdb ^
-   /link %REL_LINK% /OUT:build\minidisk.exe build\third_party.obj ^
+   /link %REL_LINK% /OUT:build\minidisk.exe build\third_party.obj build\third_party_vorbis.obj ^
    kernel32.lib user32.lib || exit /b 1
 goto :size
 
@@ -63,10 +72,11 @@ REM ---------------------------------------------------------------------------
 :debug
 echo [debug] build...
 cl %COMMON% %DEFS% %DBG_CL% /c src\third_party.c /Fobuild\third_party_debug.obj /Fdbuild\minidisk_debug.pdb || exit /b 1
+cl %COMMON% %DEFS% %DBG_CL% /c src\third_party_vorbis.c /Fobuild\third_party_vorbis_debug.obj /Fdbuild\minidisk_debug.pdb || exit /b 1
 cl %COMMON% %DEFS% %DBG_CL% src\main.c /Fobuild\main_debug.obj /Fdbuild\minidisk_debug.pdb ^
    /link /INCREMENTAL:NO /SUBSYSTEM:WINDOWS /ENTRY:wWinMainCRTStartup ^
    /MANIFEST:EMBED /MANIFESTINPUT:src\app.manifest ^
-   /OUT:build\minidisk_debug.exe build\third_party_debug.obj ^
+   /OUT:build\minidisk_debug.exe build\third_party_debug.obj build\third_party_vorbis_debug.obj ^
    kernel32.lib user32.lib || exit /b 1
 REM  ASan est toujours dynamique chez MSVC : sans cette DLL a cote, l'exe debug
 REM  ne demarre pas depuis l'explorateur.
@@ -76,8 +86,11 @@ goto :size
 REM ---------------------------------------------------------------------------
 :test
 echo [test] build ^(debug + ASan^)...
+cl %COMMON% %DEFS% %DBG_CL% /c src\third_party.c /Fobuild\third_party_test.obj /Fdbuild\tests.pdb || exit /b 1
+cl %COMMON% %DEFS% %DBG_CL% /c src\third_party_vorbis.c /Fobuild\third_party_vorbis_test.obj /Fdbuild\tests.pdb || exit /b 1
 cl %COMMON% %DEFS% %DBG_CL% /DBUILD_TEST=1 tests\test_main.c /Fobuild\tests.obj /Fdbuild\tests.pdb ^
-   /link /INCREMENTAL:NO /SUBSYSTEM:CONSOLE /OUT:build\tests.exe kernel32.lib user32.lib || exit /b 1
+   /link /INCREMENTAL:NO /SUBSYSTEM:CONSOLE /OUT:build\tests.exe ^
+   build\third_party_test.obj build\third_party_vorbis_test.obj kernel32.lib user32.lib || exit /b 1
 echo [test] run...
 build\tests.exe || exit /b 1
 exit /b 0
@@ -85,9 +98,13 @@ exit /b 0
 REM ---------------------------------------------------------------------------
 :bench
 echo [bench] build...
-cl %COMMON% %DEFS% /DBUILD_DEBUG=0 /DBUILD_NO_CRT=0 /DBUILD_BENCH=1 /O2 /Oi /Gy /MT ^
+set BENCH_CL=/DBUILD_DEBUG=0 /DBUILD_NO_CRT=0 /DBUILD_BENCH=1 /O2 /Oi /Gy /MT
+cl %COMMON% %DEFS% %BENCH_CL% /c src\third_party.c /Fobuild\third_party_bench.obj /Fdbuild\bench.pdb || exit /b 1
+cl %COMMON% %DEFS% %BENCH_CL% /c src\third_party_vorbis.c /Fobuild\third_party_vorbis_bench.obj /Fdbuild\bench.pdb || exit /b 1
+cl %COMMON% %DEFS% %BENCH_CL% ^
    tests\bench_main.c /Fobuild\bench.obj /Fdbuild\bench.pdb ^
-   /link /INCREMENTAL:NO /SUBSYSTEM:CONSOLE /OUT:build\bench.exe kernel32.lib user32.lib || exit /b 1
+   /link /INCREMENTAL:NO /SUBSYSTEM:CONSOLE /OUT:build\bench.exe ^
+   build\third_party_bench.obj build\third_party_vorbis_bench.obj kernel32.lib user32.lib || exit /b 1
 echo [bench] run...
 build\bench.exe || exit /b 1
 exit /b 0

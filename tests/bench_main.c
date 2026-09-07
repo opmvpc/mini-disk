@@ -19,6 +19,7 @@
 #include "../src/core/plan/plan_capacity.h"
 #include "../src/core/plan/plan_file.h"
 #include "../src/core/plan/plan_toc.h"
+#include "../src/core/codecs/codec.h"
 #include "../src/app/prefs.h"
 #include "../src/ui/ui_widgets.h"
 #include "../src/app/plan_view.h"
@@ -44,6 +45,7 @@
 #include "../src/platform/win32/win32_window.c"
 #include "../src/platform/win32/win32_dialog.c"
 #include "../src/platform/win32/win32_image.c"
+#include "../src/platform/win32/win32_media.c"
 #include "../src/ui/r_atlas.c"
 #include "../src/ui/r_thumbs.c"
 #include "../src/ui/r_raster.c"
@@ -71,6 +73,12 @@
 #include "../src/core/plan/plan_capacity.c"
 #include "../src/core/plan/plan_file.c"
 #include "../src/core/plan/plan_toc.c"
+#include "../src/core/codecs/codec.c"
+#include "../src/core/codecs/codec_mp3.c"
+#include "../src/core/codecs/codec_flac.c"
+#include "../src/core/codecs/codec_wav.c"
+#include "../src/core/codecs/codec_ogg.c"
+#include "../src/core/codecs/codec_mf.c"
 #include "../src/ui/ui_widgets.c"
 #include "../src/app/prefs.c"
 #include "../src/app/plan_view.c"
@@ -1522,6 +1530,52 @@ static BenchResult bench_plan_view_frame(void) {
     return result;
 }
 
+
+// --- codecs (T-040) --------------------------------------------------------
+// Decode speed in multiples of realtime, the number ADR-007 sets a target for:
+// >= 100x for MP3 and >= 300x for FLAC, on one core, one file at a time. The
+// vectors are short, so each one is decoded from scratch many times: that keeps
+// the open path (header parse, seek table, codebooks) inside the measurement,
+// which is where a transcode of 20 short tracks actually spends its time.
+static void bench_codec_decode(const char *label, const char *path, u32 iterations) {
+    ArenaTemp scratch = arena_temp_begin(bench_arena);
+    f32 *block[CODEC_MAX_CHANNELS];
+    for (u32 c = 0; c < CODEC_MAX_CHANNELS; c += 1) {
+        block[c] = push_array(bench_arena, f32, CODEC_BLOCK_FRAMES);
+    }
+    String8 file = str8_cstr(path);
+    u64 frames = 0;
+    u32 rate = 0;
+
+    u64 start_us = os_time_now_us();
+    u64 start_cycles = __rdtsc();
+    for (u32 i = 0; i < iterations; i += 1) {
+        Decoder *decoder = 0;
+        if (codec_open(&decoder, file) != CODEC_OK) {
+            os_debug_print(str8f(scratch.arena, "%s: vecteur absent (%s)\n", label, path));
+            arena_temp_end(scratch);
+            return;
+        }
+        rate = decoder->info.sample_rate;
+        for (;;) {
+            u32 got = codec_read_f32_planar(decoder, block, CODEC_BLOCK_FRAMES);
+            if (!got) { break; }
+            frames += got;
+        }
+        codec_close(decoder);
+    }
+    u64 end_cycles = __rdtsc();
+    u64 end_us = os_time_now_us();
+
+    u64 micros = end_us - start_us;
+    f64 audio_us = (f64)frames * 1000000.0 / (f64)rate;
+    f64 realtime = (micros != 0) ? audio_us / (f64)micros : 0.0;
+    os_debug_print(str8f(scratch.arena,
+                         "%s: %llu us, %llu cycles, %llu frames, %f x temps reel\n", label,
+                         micros, end_cycles - start_cycles, frames, realtime));
+    arena_temp_end(scratch);
+}
+
 int main(void) {
     os_init();
     bench_arena = arena_alloc(GB(1));
@@ -1549,5 +1603,9 @@ int main(void) {
     bench_print(bench_plan_capacity());
     bench_print(bench_plan_gauge_layout());
     bench_print(bench_plan_view_frame());
+    bench_codec_decode("codec_wav_s16", "tests\\data\\audio\\sine_16.wav", 400);
+    bench_codec_decode("codec_flac", "tests\\data\\audio\\sine.flac", 200);
+    bench_codec_decode("codec_mp3", "tests\\data\\audio\\sine.mp3", 100);
+    bench_codec_decode("codec_ogg", "tests\\data\\audio\\sine.ogg", 100);
     return 0;
 }
