@@ -36,13 +36,13 @@ ont un fichier `T-NNN-*.md` ; les suivants sont des lignes à détailler au mome
 | [T-021](T-021-protocole-netmd-lecture.md) | Protocole NetMD lecture : trames/poll, identification, capacité, pistes, titres, groupes, charsets, transcriptions MZ-N505 | todo |
 | [T-022](T-022-edition-disque.md) | Édition : renommer, déplacer, effacer, groupes, simulation + sauvegarde TOC, budget TOC, tag v0.3.0 | todo |
 
-## Phase 4 — Plan & capacité (le cœur produit : D1, D2, D3)
+## Phase 4 — Plan & capacité (le cœur produit : D1, D2, D3) — terminée, tag v0.4.0-phase4
 
 | Ticket | Titre | Statut |
 |--------|-------|--------|
 | [T-030](T-030-modele-plan-undo.md) | Modèle `.mdplan` multi-disques, commandes réversibles, undo/redo, autosave, résolution des pistes | fait |
 | [T-031](T-031-capacite-clusters-budget-toc.md) | Capacité en clusters, budget TOC 255×7, sanitize/raccourcissement des titres, titrage auto, first-fit | fait |
-| [T-032](T-032-vue-plan-jauge.md) | Vue Plan : DnD interne, modes, groupes, jauge de capacité au pixel, barre TOC, tag v0.4.0 | doing |
+| [T-032](T-032-vue-plan-jauge.md) | Vue Plan : DnD interne, modes, groupes, jauge de capacité au pixel, barre TOC, tag v0.4.0 | fait |
 
 ## Phase 5 — Pipeline & SP (premier disque gravé)
 
@@ -60,6 +60,7 @@ T-053 bit allocation · T-054 psy + gain control · T-055 LP4 joint stereo · T-
 ## Phase 7 — Polish
 T-060 raccourcis complets · T-061 i18n FR/EN · T-062 thème clair · T-063 toasts/confirmations/simulation TOC ·
 T-064 prefs · T-065 barre de titre custom · T-066 IDropTarget.
+| T-07x | Durée du plan en équivalent disque partout (en-tête = jauge, revue T-032) ; hachures diagonales de la jauge via motif d'atlas ; sauvegarde durable du plan hors du thread de frame (P-009) | todo |
 
 ## Phase 8 — Portabilité
 T-070 `platform/linux` · T-071 `platform/macos`.

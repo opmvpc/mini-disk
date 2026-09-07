@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### Phase 4 — Plan & capacité (T-030..T-032), terminée — tag v0.4.0-phase4
+Le cœur produit, dans un exe de 308 224 octets :
+- **Plan = document** (T-030) : multi-disques (8 × 254 entrées en SoA), commandes réversibles avec
+  undo/redo (256, coalescence de la saisie, undo par geste), `.mdplan` binaire + `.mdplan.txt`,
+  autosave, résolution des pistes par identifiant puis par chemin.
+- **Capacité en clusters** (T-031) : SP 2 s, mono/LP2 4 s, LP4 8 s par cluster (à valider sur
+  l'appareil), états par piste, « ce qui rentrerait encore » dans les quatre modes, répartition
+  multi-disques first-fit ou par albums ; budget TOC 255 × 7 avec syntaxe de groupes, sanitize vers le
+  jeu NetMD par tables générées, raccourcissement ordonné avec aperçu exact, titrage automatique.
+  Recalcul de 254 pistes en 30 µs.
+- **Vue Plan** (T-032) : liste virtualisée réordonnable (DnD interne, clavier complet), badges de
+  mode, titres MD tels qu'ils seront écrits, groupes, onglets multi-disques, jauge 56 dp au pixel de
+  la recherche §9 et variante compacte, barre TOC avec raccourcissement automatique, remplir l'espace
+  restant, nouveau disque, ouvrir / enregistrer. 144 cas / 5 731 checks.
+
 ### Phase 2 — Bibliothèque (T-009..T-015), terminée
 Une bibliothèque qui tient 100 000 pistes dans un exe de 229 376 octets, toujours sans CRT et sans
 autres imports que kernel32 et user32 :
