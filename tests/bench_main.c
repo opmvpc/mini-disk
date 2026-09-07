@@ -19,6 +19,12 @@
 #include "../src/core/plan/plan_capacity.h"
 #include "../src/core/plan/plan_file.h"
 #include "../src/core/plan/plan_toc.h"
+#include "../src/core/dsp/dsp_math.h"
+#include "../src/core/dsp/dsp_resample.h"
+#include "../src/core/dsp/dsp_loudness.h"
+#include "../src/core/dsp/dsp_edit.h"
+#include "../src/core/dsp/dsp_dither.h"
+#include "../src/core/pipeline/pipeline.h"
 #include "../src/app/prefs.h"
 #include "../src/ui/ui_widgets.h"
 #include "../src/app/plan_view.h"
@@ -71,6 +77,12 @@
 #include "../src/core/plan/plan_capacity.c"
 #include "../src/core/plan/plan_file.c"
 #include "../src/core/plan/plan_toc.c"
+#include "../src/core/dsp/dsp_math.c"
+#include "../src/core/dsp/dsp_resample.c"
+#include "../src/core/dsp/dsp_loudness.c"
+#include "../src/core/dsp/dsp_edit.c"
+#include "../src/core/dsp/dsp_dither.c"
+#include "../src/core/pipeline/pipeline.c"
 #include "../src/ui/ui_widgets.c"
 #include "../src/app/prefs.c"
 #include "../src/app/plan_view.c"
@@ -1522,6 +1534,281 @@ static BenchResult bench_plan_view_frame(void) {
     return result;
 }
 
+
+// --- T-041: DSP and pipeline ------------------------------------------------
+#define BENCH_DSP_SECONDS 240u  // the four-minute track of the ticket
+
+typedef struct BenchDspSource {
+    u64 total;
+    u64 pos;
+    u32 channels;
+    const f32 *tone;  // one pre-generated block, replayed
+    u64 tone_len;
+} BenchDspSource;
+
+static u64 bench_dsp_read(void *user, f32 *const *planar, u64 max_frames) {
+    BenchDspSource *source = (BenchDspSource *)user;
+    u64 count = Min(source->total - source->pos, max_frames);
+    if (count == 0) { return 0; }
+    // tone_len is a power of two: a mask, not a 64-bit division per sample.
+    u64 mask = source->tone_len - 1u;
+    u64 offset = source->pos & mask;
+    for (u64 i = 0; i < count; i += 1) {
+        f32 v = source->tone[(offset + i) & mask];
+        planar[0][i] = v;
+        if (source->channels == 2) { planar[1][i] = v; }
+    }
+    source->pos += count;
+    return count;
+}
+
+static b32 bench_dsp_rewind(void *user) {
+    ((BenchDspSource *)user)->pos = 0;
+    return 1;
+}
+
+static b32 bench_dsp_sink(void *user, const u8 *bytes, u64 size) {
+    Unused(bytes);
+    *(u64 *)user += size;
+    return 1;
+}
+
+static f32 *bench_dsp_tone(u64 length, f64 freq, u32 rate) {
+    f32 *tone = push_array(bench_arena, f32, length);
+    f64 omega = 2.0 * DSP_PI * freq / (f64)rate;
+    for (u64 i = 0; i < length; i += 1) { tone[i] = (f32)(0.3 * dsp_sin_f64(omega * (f64)i)); }
+    return tone;
+}
+
+static BenchResult bench_dsp_resampler(void) {
+    u32 in_rate = 48000;
+    u64 frames = (u64)in_rate * BENCH_DSP_SECONDS;
+    f32 *tone = bench_dsp_tone(4096, 997.0, in_rate);
+
+    DspResampler r;
+    dsp_resampler_init(&r, bench_arena, in_rate, 44100, 2, 4096, frames);
+    u64 out_cap = dsp_resampler_out_capacity(&r, 4096) + r.taps_per_phase;
+    f32 *in[2];
+    f32 *out[2];
+    for (u32 c = 0; c < 2; c += 1) {
+        in[c] = tone;
+        out[c] = push_array(bench_arena, f32, out_cap);
+    }
+
+    u64 start_us = os_time_now_us();
+    u64 start_cycles = __rdtsc();
+    u64 produced = 0;
+    for (u64 done = 0; done < frames; done += 4096) {
+        produced += dsp_resampler_process(&r, (const f32 *const *)in, 4096, out, out_cap);
+    }
+    u64 end_cycles = __rdtsc();
+    u64 end_us = os_time_now_us();
+    AssertAlways(produced > 0);
+
+    u64 micros = end_us - start_us;
+    f64 realtime = (f64)BENCH_DSP_SECONDS * 1000000.0 / (f64)Max(micros, (u64)1);
+    ArenaTemp scratch = scratch_begin(0, 0);
+    os_debug_print(str8f(scratch.arena,
+                         "  resampler 48000 -> 44100 stereo, %u s of audio: %llu us, %f x real "
+                         "time (target 200), %u taps/phase\n",
+                         BENCH_DSP_SECONDS, micros, realtime, r.taps_per_phase));
+    scratch_end(scratch);
+    // The guard catches a regression, not a busy machine: the number that
+    // matters is the one printed above, against the 200x of the ticket.
+    AssertAlways(realtime > 150.0);
+
+    BenchResult result;
+    result.name = "dsp resample 48k->44.1k stereo, 4 min";
+    result.cycles = end_cycles - start_cycles;
+    result.micros = micros;
+    result.bytes = produced * 2 * sizeof(f32);
+    return result;
+}
+
+static BenchResult bench_dsp_r128(void) {
+    u64 frames = (u64)44100u * BENCH_DSP_SECONDS;
+    f32 *tone = bench_dsp_tone(4096, 997.0, 44100);
+    const f32 *planar[2];
+    planar[0] = tone;
+    planar[1] = tone;
+
+    DspR128 state;
+    dsp_r128_init(&state, bench_arena, 44100, 2, frames);
+    dsp_r128_reset(&state);
+
+    u64 start_us = os_time_now_us();
+    u64 start_cycles = __rdtsc();
+    for (u64 done = 0; done < frames; done += 4096) { dsp_r128_feed(&state, planar, 4096); }
+    u64 end_cycles = __rdtsc();
+    u64 end_us = os_time_now_us();
+
+    u64 micros = end_us - start_us;
+    f64 realtime = (f64)BENCH_DSP_SECONDS * 1000000.0 / (f64)Max(micros, (u64)1);
+    ArenaTemp scratch = scratch_begin(0, 0);
+    os_debug_print(str8f(scratch.arena,
+                         "  R128 + true peak, %u s of stereo: %llu us, %f x real time "
+                         "(target 500), %f LUFS\n",
+                         BENCH_DSP_SECONDS, micros, realtime,
+                         (f64)dsp_r128_integrated_lufs(&state)));
+    scratch_end(scratch);
+    AssertAlways(realtime > 300.0);  // printed target: 500x, see T-041
+
+    BenchResult result;
+    result.name = "dsp R128 measure, 4 min stereo";
+    result.cycles = end_cycles - start_cycles;
+    result.micros = micros;
+    result.bytes = frames * 2 * sizeof(f32);
+    return result;
+}
+
+static void bench_dsp_setup_task(PipelineTask *task, BenchDspSource *source, u64 *sink,
+                                 Arena *arena, u64 frames, const f32 *tone) {
+    StructZero(source);
+    source->total = frames;
+    source->channels = 2;
+    source->tone = tone;
+    source->tone_len = 4096;
+    *sink = 0;
+
+    StructZero(task);
+    pipeline_config_defaults(&task->config);
+    task->config.normalize = 1;
+    task->config.trim = 1;
+    task->config.dither = 1;
+    task->config.fade_in_s = 0.01f;
+    task->config.fade_out_s = 0.01f;
+    task->source.read = bench_dsp_read;
+    task->source.rewind = bench_dsp_rewind;
+    task->source.user = source;
+    task->source.sample_rate = 44100;
+    task->source.channels = 2;
+    task->source.total_frames = frames;
+    task->write = bench_dsp_sink;
+    task->write_user = sink;
+    task->arena = arena;
+}
+
+static BenchResult bench_dsp_pipeline(void) {
+    u64 frames = (u64)44100u * BENCH_DSP_SECONDS;
+    f32 *tone = bench_dsp_tone(4096, 997.0, 44100);
+    Arena *track_arena = arena_alloc(MB(64));
+    BenchDspSource source;
+    u64 sink;
+    PipelineTask task;
+    bench_dsp_setup_task(&task, &source, &sink, track_arena, frames, tone);
+
+    u64 start_us = os_time_now_us();
+    u64 start_cycles = __rdtsc();
+    pipeline_run(&task);
+    u64 end_cycles = __rdtsc();
+    u64 end_us = os_time_now_us();
+    AssertAlways(task.result.status == PIPELINE_OK);
+
+    u64 micros = end_us - start_us;
+    ArenaTemp scratch = scratch_begin(0, 0);
+    os_debug_print(str8f(scratch.arena,
+                         "  pipeline, one 4 min stereo track, R128 + trim + fades "
+                         "+ dither, single thread: %llu us (two passes), "
+                         "%llu SP frames, %f LUFS, gain %f dB\n",
+                         micros, task.result.sp_frames, (f64)task.result.measured_lufs,
+                         (f64)task.result.applied_gain_db));
+    scratch_end(scratch);
+    AssertAlways(micros < 1500000);  // two passes; see the render-only bench
+    arena_release(track_arena);
+
+    BenchResult result;
+    result.name = "dsp pipeline, 4 min stereo, 1 thread";
+    result.cycles = end_cycles - start_cycles;
+    result.micros = micros;
+    result.bytes = sink;
+    return result;
+}
+
+// The same track with normalisation and trim off: one pass, which is the shape
+// the ticket's "< 0,5 s for a four minute track" budget was written for.
+static BenchResult bench_dsp_pipeline_render(void) {
+    u64 frames = (u64)44100u * BENCH_DSP_SECONDS;
+    f32 *tone = bench_dsp_tone(4096, 997.0, 44100);
+    Arena *track_arena = arena_alloc(MB(64));
+    BenchDspSource source;
+    u64 sink;
+    PipelineTask task;
+    bench_dsp_setup_task(&task, &source, &sink, track_arena, frames, tone);
+    task.config.normalize = 0;
+    task.config.trim = 0;
+    task.config.fixed_gain_db = -3.0f;
+
+    u64 start_us = os_time_now_us();
+    u64 start_cycles = __rdtsc();
+    pipeline_run(&task);
+    u64 end_cycles = __rdtsc();
+    u64 end_us = os_time_now_us();
+    AssertAlways(task.result.status == PIPELINE_OK);
+
+    u64 micros = end_us - start_us;
+    ArenaTemp scratch = scratch_begin(0, 0);
+    os_debug_print(str8f(scratch.arena,
+                         "  pipeline, one 4 min stereo track, render only: %llu us "
+                         "(budget 500000), %f x real time\n",
+                         micros, (f64)BENCH_DSP_SECONDS * 1000000.0 / (f64)Max(micros, (u64)1)));
+    scratch_end(scratch);
+    AssertAlways(micros < 800000);
+    arena_release(track_arena);
+
+    BenchResult result;
+    result.name = "dsp pipeline render only, 4 min stereo";
+    result.cycles = end_cycles - start_cycles;
+    result.micros = micros;
+    result.bytes = sink;
+    return result;
+}
+
+static BenchResult bench_dsp_pipeline_jobs(void) {
+    u32 count = 8;
+    u64 frames = (u64)44100u * BENCH_DSP_SECONDS;
+    f32 *tone = bench_dsp_tone(4096, 997.0, 44100);
+    BenchDspSource *sources = push_array_zero(bench_arena, BenchDspSource, count);
+    u64 *sinks = push_array_zero(bench_arena, u64, count);
+    PipelineTask *tasks = push_array_zero(bench_arena, PipelineTask, count);
+    Arena *arenas[8];
+    for (u32 i = 0; i < count; i += 1) {
+        arenas[i] = arena_alloc(MB(64));
+        bench_dsp_setup_task(&tasks[i], &sources[i], &sinks[i], arenas[i], frames, tone);
+    }
+
+    jobs_init(0);
+    u64 start_us = os_time_now_us();
+    u64 start_cycles = __rdtsc();
+    pipeline_run_many(tasks, count);
+    u64 end_cycles = __rdtsc();
+    u64 end_us = os_time_now_us();
+    u32 workers = jobs_worker_count();
+    jobs_shutdown();
+
+    u64 total_bytes = 0;
+    for (u32 i = 0; i < count; i += 1) {
+        AssertAlways(tasks[i].result.status == PIPELINE_OK);
+        total_bytes += sinks[i];
+        arena_release(arenas[i]);
+    }
+
+    u64 micros = end_us - start_us;
+    f64 realtime = (f64)(BENCH_DSP_SECONDS * count) * 1000000.0 / (f64)Max(micros, (u64)1);
+    ArenaTemp scratch = scratch_begin(0, 0);
+    os_debug_print(str8f(scratch.arena,
+                         "  pipeline, %u tracks of 4 min through jobs (%u workers): %llu us, "
+                         "%f x real time\n",
+                         count, workers, micros, realtime));
+    scratch_end(scratch);
+
+    BenchResult result;
+    result.name = "dsp pipeline, 8 x 4 min, jobs";
+    result.cycles = end_cycles - start_cycles;
+    result.micros = micros;
+    result.bytes = total_bytes;
+    return result;
+}
+
 int main(void) {
     os_init();
     bench_arena = arena_alloc(GB(1));
@@ -1549,5 +1836,10 @@ int main(void) {
     bench_print(bench_plan_capacity());
     bench_print(bench_plan_gauge_layout());
     bench_print(bench_plan_view_frame());
+    bench_print(bench_dsp_resampler());
+    bench_print(bench_dsp_r128());
+    bench_print(bench_dsp_pipeline());
+    bench_print(bench_dsp_pipeline_render());
+    bench_print(bench_dsp_pipeline_jobs());
     return 0;
 }

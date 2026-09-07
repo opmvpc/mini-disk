@@ -20,6 +20,54 @@ Dernière mise à jour : 2026-09-07
 - Phase 3 (device) : bloquée tant que Zadig → WinUSB n'est pas installé sur le MZ-N505 (P-001).
   reste l'action utilisateur préalable.
 
+### Fait en phase 5
+- T-041 livré : **tout le DSP et le pipeline par piste** (`src/core/dsp/`, `src/core/pipeline/`).
+  `dsp_math` fournit sin/cos/tan/exp/log/pow/I0/sinc en `f64` sans libm (réduction d'argument + Taylor,
+  exécutés au montage des tables, pas dans une boucle d'échantillons) — on lie `/NODEFAULTLIB`, ces
+  fonctions n'existent pas. `dsp_resample` : sinc fenêtré Kaiser β = 9, 512 phases plus une phase de
+  garde, table construite à l'init dans l'arène, produit scalaire SSE2 sur deux phases, filtre
+  **centré** (une impulsion d'entrée *i* ressort en `i·out/in` : la latence est compensée par
+  l'historique, pas par un décalage en aval), position en 32.32, chemin passe-plat quand le taux est
+  déjà 44 100. `dsp_loudness` : BS.1770-4 avec les biquads du filtre K **dérivés** par transformation
+  bilinéaire pour le taux donné (jamais recopiés de la table 48 kHz de la norme, cf. research/03 §6.8),
+  blocs de 400 ms à 75 % de recouvrement, portes −70 LUFS puis −10 LU comparées en énergie, true-peak
+  ×4 en polyphase 4 × 12 taps ; le gain vers la cible est **rabaissé** jusqu'à tenir sous −1 dBTP, on
+  ne limite jamais. `dsp_edit` : downmix, trim de silence sur l'enveloppe (fenêtre de 1 ms, hystérésis
+  de 50 fenêtres — une hystérésis comptée en échantillons ne basculerait jamais, un sinus pose un
+  échantillon sous le seuil à chaque traversée de zéro), fondu cosinus sans état, gain fixe.
+  `dsp_dither` : TPDF + noise-shaping optionnel, quantification à l'échelle **32768 avec clamp** (c'est
+  ce qui rend le bypass bit-exact), frames SP de 2048 octets en s16 big-endian zéro-paddées, en-tête
+  WAV de 44 octets. `pipeline` : la chaîne d'ADR-007 par piste, **deux passes** (mesure puis rendu)
+  plutôt qu'un tampon — 42 Mo par piste de 4 min en `f32` contre un second décodage à plus de 100×
+  temps réel —, un job par piste, une arène par job, progression atomique, annulation lue par bloc de
+  4096 frames, sortie par callback (T-043 y branchera le cache). Écarts assumés : taps variables
+  (64 à 44,1/48 kHz, 128 à 88,2/96 kHz) pour que la bande de transition reste une fraction constante du
+  taux de sortie, coefficients true-peak générés au runtime plutôt que recopiés, trim appliqué avant le
+  gain (le seuil de trim est un niveau absolu), et le banc « pipeline complet < 0,5 s » non tenu à
+  669 ms — la passe de rendu seule est à 195 ms, c'est la passe de mesure R128 qui coûte les 403 ms
+  restants. Détail et justifications dans `tickets/T-041-dsp-resampler-r128-dither.md`.
+
+## KPI — phase 5, T-041 (i7-8550U, 4 cœurs / 8 threads, Windows 11 ; **machine partagée avec l'agent T-040 pendant les mesures**, meilleur de trois passes)
+| Métrique | Valeur | Cible | Date |
+|----------|--------|-------|------|
+| Taille exe release | **308 224 o, inchangée** — rien dans `app/` n'appelle encore le pipeline, `/OPT:REF` élague le module ; les tables sont calculées au runtime, zéro donnée figée | < 470 KB | 2026-09-07 |
+| Tests | **168 cas, 5 855 checks**, 0 échec sous ASan (24 cas ajoutés par `test_dsp.c`) | verts | 2026-09-07 |
+| Cibles `build.bat` | debug, release, test, check, analyze, bench toutes vertes | vertes | 2026-09-07 |
+| Resampler, sinus 1 kHz 48 k → 44,1 k | **SNR 102,8 dB** ; 96 k → 44,1 k : 106,0 dB ; 22,05 k → 44,1 k : 96,8 dB | > 90 dB | 2026-09-07 |
+| Resampler, image d'un 20 kHz repliée à 16,1 kHz | **−121,5 dBFS** | < −90 dB | 2026-09-07 |
+| Resampler, impulsion 48 k → 44,1 k | pic exactement en sortie **147** pour une entrée 160, réponse symétrique à 1e-6 | pic à l'endroit prévu | 2026-09-07 |
+| EBU Tech 3341, cas 1 / 2 / 3 / 4 | **−22,991 / −32,991 / −23,011 / −23,011 LUFS** | ±0,1 LU | 2026-09-07 |
+| True-peak, sinus à fs/4 déphasé (échantillons à −3,01 dBFS) | **+0,088 dBTP** | 0,0 ± 0,2 dB | 2026-09-07 |
+| Dither TPDF, erreur totale | moyenne **−0,001 LSB**, variance **0,250 LSB²** (= 1/12 + 1/6) ; avec noise-shaping 0,333 LSB² | 0 et 1/4 | 2026-09-07 |
+| Bypass 44,1 k stéréo sans traitement | **bit-exact** sur 100 000 frames aléatoires | bit-exact | 2026-09-07 |
+| Trim / gap / framing SP | fenêtre gardée et longueurs **exactes** ; 4 120 octets utiles → 3 frames de 2048, padding vérifié octet par octet | exact | 2026-09-07 |
+| Resampler 48 k → 44,1 k stéréo, 4 min | **671 ms, 358× temps réel** (257–358× selon la charge) | ≥ 200× | 2026-09-07 |
+| R128 + true-peak, 4 min stéréo | **403 ms, 595× temps réel** (421–595×) | ≥ 500× | 2026-09-07 |
+| Pipeline complet 4 min (R128 + trim + fondus + dither, deux passes) | **669 ms** — **non tenu**, cf. T-041 §Écarts 2 | < 500 ms | 2026-09-07 |
+| Pipeline 4 min, passe de rendu seule | **195 ms, 1234× temps réel** | < 500 ms | 2026-09-07 |
+| 8 pistes de 4 min à travers les jobs (7 workers) | **1,82 s, 1058× temps réel** | — | 2026-09-07 |
+| Allocation par bloc | **aucune** : arène par job, `ArenaTemp` rendu même en cas d'annulation (testé) | 0 | 2026-09-07 |
+
 ### Fait en phase 4
 - T-032 livré (dernier de la phase) : la **vraie vue Plan et la jauge signature**. `src/app/plan_view.{h,c}`
   isole toute la géométrie et toute la traduction « geste → commande » **sans une box ni un appel GL**,

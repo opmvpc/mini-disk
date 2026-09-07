@@ -19,6 +19,12 @@
 #include "../src/core/plan/plan_capacity.h"
 #include "../src/core/plan/plan_file.h"
 #include "../src/core/plan/plan_toc.h"
+#include "../src/core/dsp/dsp_math.h"
+#include "../src/core/dsp/dsp_resample.h"
+#include "../src/core/dsp/dsp_loudness.h"
+#include "../src/core/dsp/dsp_edit.h"
+#include "../src/core/dsp/dsp_dither.h"
+#include "../src/core/pipeline/pipeline.h"
 #include "../src/ui/r_core.h"
 #include "../src/ui/r_backend.h"
 #include "../src/ui/r_atlas.h"
@@ -73,6 +79,12 @@
 #include "../src/core/plan/plan_capacity.c"
 #include "../src/core/plan/plan_file.c"
 #include "../src/core/plan/plan_toc.c"
+#include "../src/core/dsp/dsp_math.c"
+#include "../src/core/dsp/dsp_resample.c"
+#include "../src/core/dsp/dsp_loudness.c"
+#include "../src/core/dsp/dsp_edit.c"
+#include "../src/core/dsp/dsp_dither.c"
+#include "../src/core/pipeline/pipeline.c"
 #include "../src/app/prefs.c"
 #include "../src/app/plan_view.c"
 
@@ -133,6 +145,7 @@ static void test_check(b32 condition, const char *expression, i32 line) {
 #include "test_plan.c"
 #include "test_capacity.c"
 #include "test_view_plan.c"
+#include "test_dsp.c"
 
 int main(void) {
     os_init();
@@ -154,6 +167,7 @@ int main(void) {
     test_plan_run_all();
     test_capacity_run_all();
     test_view_plan_run_all();
+    test_dsp_run_all();
 
     test_report("%llu case(s), %llu check(s), %llu failure(s)\n", test_state.cases,
                 test_state.checks, test_state.failures);
