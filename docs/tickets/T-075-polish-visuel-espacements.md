@@ -86,6 +86,33 @@ au bord droit (x = 1690), « Suivant » est invisible, « Effacer le disque » e
   plan » commence hors cadre) : aligner à droite avec `space_12` de marge, et ellipser à gauche si trop long —
   P2.
 
+### Ce que la seconde revue (Codex, GPT-6 — [annexe](T-075-annexe-codex.md)) ajoute, et ce qu'on en garde
+Elle confirme D1–D2, T1–T4, P1, S1 et la grille 4/8/12/16/24. En plus, **gardé** :
+- C1. **Largeur des panneaux** : Disque à **360 dp minimum** (`APP_MIN_DISC_DP` 200 → 360) et Plan à
+  **400 dp** (`APP_MIN_PLAN_DP` 280 → 400), pris sur la Bibliothèque ; et la répartition par défaut
+  (première ouverture) revue en conséquence. Le repli des rangées reste nécessaire.
+- C2. **Répartition verticale de la Bibliothèque au premier lancement** : navigateur 190 dp, détail 230 dp
+  (pochette 160 px), liste au reste — deux pistes visibles sur 59, c'est le défaut le plus visible de
+  l'écran ; lignes de pistes 56 dp avec vignette 44 px.
+- C3. **Jauge** : ne dessiner la lettre du mode dans un segment que si le texte + 8 px tiennent (sinon couleur
+  + bulle) ; « reste … » sur sa propre ligne complète ; libellés « Audio : 84:48 » / « Occupation : 63:42 /
+  80:00 » en attendant T-071 qui unifie la grandeur.
+- C4. **Pré-vol** : bilan sur des lignes courtes (pistes + audio / espace libre / clusters / TOC), « + 8 autres
+  pistes », alerte de dépassement en 2–3 lignes sans ellipse, « Ajouter à la suite » et « Effacer le
+  disque… » empilés pleine largeur, « Revenir au plan » aligné à gauche avec 12 px au-dessus, séparateur
+  16 px + 1 px avant le bloc « 202001 », partie informative défilante.
+- C5. **Compteurs de la barre de statut** (« 35 boxes pour 3 lignes visibles · 414 boxes dans la frame ») :
+  réservés au mode debug (`ui_debug_overlay`), le rendu normal ne montre que le bilan utilisateur.
+- C6. Bulles sur les trois icônes du plan (disque / coche / flèche) et sur les deux icônes de la barre
+  d'outils ; badges de mode 56 px min (MONO ne tient pas) ; colonne compteur 32 px + 8 px avant la barre
+  de défilement dans Artiste/Album ; « ARTISTE | ALBUM » → « Artistes et albums ».
+- C7. Barre d'outils : 8 px haut et bas (52 px), 8 px dans un groupe, 16 px entre groupes.
+
+**Refusé** : en-têtes de colonnes plus contrastés (#9CA2AA) et « (sans titre) » plus clair — on garde la
+hiérarchie du thème (les en-têtes sont volontairement en retrait ; « (sans titre) » est un état, pas un
+contenu) ; « 0 sélectionnées » reste à droite (c'est le compteur de la liste, pas une commande) ; pas de
+changement des tailles de police du détail.
+
 ## Livrables
 - **Grille d'espacement unique** (constantes de thème, pas de nombres dans les vues) :
   - `theme->control_h` = 28 dp (hauteur d'un bouton), `theme->row_control` = 36 dp (hauteur d'une rangée de
@@ -105,7 +132,7 @@ au bord droit (x = 1690), « Suivant » est invisible, « Effacer le disque » e
 - **Textes qui ne tiennent pas** : `app_device_line` gagne une variante multi-ligne (2 lignes, ellipse à la
   fin de la seconde) pour T1 ; D3, P1, S2 corrigés comme indiqué.
 - **Bulle** : bascule au-dessus de l'ancre quand elle ne tient pas en dessous (S1).
-- Tous les défauts D1–D6, T1–T4, P1–P5, B1, L1–L4, S1–S2 traités ou explicitement refusés dans la Livraison,
+- Tous les défauts D1–D6, T1–T4, P1–P5, B1, L1–L4, S1–S2 et C1–C7 traités ou explicitement refusés dans la Livraison,
   avec la raison.
 - Captures après : mêmes trois états, mêmes noms avec `-apres`, plus une capture à **1100 × 700** (fenêtre
   minimale) qui montre que rien ne déborde.
