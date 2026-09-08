@@ -777,6 +777,24 @@ static void ui_draw_box(UI_Box *box) {
         r_rect(params);
     }
 
+    // The hatch samples the R8 atlas, which is the texture the back end already
+    // has bound for every untextured quad: the tiles join the batch they land
+    // in instead of opening one of their own (r_core.c, T-009).
+    if (box->flags & UI_DrawHatch) {
+        R_AtlasRect pattern = r_hatch_rect();
+        R_HatchTile tiles[R_HATCH_MAX_TILES];
+        V2 origin = v2(box->rect.min.x - (f32)box->image_x, box->rect.min.y - (f32)box->image_y);
+        u32 count = r_hatch_tiles(box->rect, origin, tiles, R_HATCH_MAX_TILES);
+        V2 span = v2(pattern.uv1.x - pattern.uv0.x, pattern.uv1.y - pattern.uv0.y);
+        for (u32 i = 0; i < count; i += 1) {
+            V2 uv0 = v2(pattern.uv0.x + tiles[i].uv0.x * span.x,
+                        pattern.uv0.y + tiles[i].uv0.y * span.y);
+            V2 uv1 = v2(pattern.uv0.x + tiles[i].uv1.x * span.x,
+                        pattern.uv0.y + tiles[i].uv1.y * span.y);
+            r_rect_textured(tiles[i].dst, r_atlas_texture(), uv0, uv1, box->bg_color,
+                            R_VertFlag_R8);
+        }
+    }
     if (box->flags & UI_DrawImage) {
         Assert(box->image_size != 0);
         // Opaque colour, raw quad: the image replaces the colour, and the

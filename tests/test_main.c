@@ -53,6 +53,7 @@
 #include "../src/ui/ui_widgets.h"
 #include "../src/ui/ui_debug_overlay.h"
 #include "../src/app/prefs.h"
+#include "../src/app/device_panel.h"
 #include "../src/app/plan_view.h"
 #include "../src/app/transfer.h"
 

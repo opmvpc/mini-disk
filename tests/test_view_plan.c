@@ -405,6 +405,146 @@ TEST(view_plan_shorten_quota_shares_what_is_left) {
     test_report("");  // keeps the case name attached to the checks above
 }
 
+// --- T-071 --------------------------------------------------------------------
+
+// The Disc panel used to decide its header line and its body separately: on
+// 2026-09-07 that produced "pilote manquant" over "utilise par une autre
+// application". The table below is the whole contract now - one state in, one
+// header and one body out - and it is a table precisely because two sets of ifs
+// could not be compared against one another.
+TEST(view_plan_device_panel_says_one_thing) {
+    Unused(arena);
+    struct TestPanelCase {
+        u32 device_state;
+        b32 burning;
+        u32 panel;
+        Str header;
+        Str body;
+        Str hint;
+    };
+    static const struct TestPanelCase cases[] = {
+        {AppDeviceState_None, 0, NetmdPanel_NoDevice, Str_DeviceNone, Str_DeviceNone,
+         Str_DeviceNoneHint},
+        {AppDeviceState_NoDriver, 0, NetmdPanel_NoDriver, Str_DeviceNoDriver, Str_DeviceNoDriver,
+         Str_DeviceNoDriverBody},
+        {AppDeviceState_InUse, 0, NetmdPanel_InUse, Str_DeviceInUse, Str_DeviceInUse,
+         Str_DeviceInUseHint},
+        {AppDeviceState_Connected, 0, NetmdPanel_Connected, Str_DevicePanelName,
+         Str_DeviceConnected, Str_COUNT},
+        {AppDeviceState_Connected, 1, NetmdPanel_Burning, Str_DeviceBurning, Str_DeviceBurning,
+         Str_DeviceBurningHint},
+        {AppDeviceState_Error, 0, NetmdPanel_Unreachable, Str_DeviceUnreachable,
+         Str_DeviceUnreachable, Str_DeviceUnreachableHint},
+        // A burn that lost the cable is an unreachable device, not a burn: the
+        // flag only ever refines a connection that is still there.
+        {AppDeviceState_Error, 1, NetmdPanel_Unreachable, Str_DeviceUnreachable,
+         Str_DeviceUnreachable, Str_DeviceUnreachableHint},
+        {AppDeviceState_None, 1, NetmdPanel_NoDevice, Str_DeviceNone, Str_DeviceNone,
+         Str_DeviceNoneHint},
+    };
+    for (u32 i = 0; i < ArrayCount(cases); i += 1) {
+        u32 panel = netmd_panel_state(cases[i].device_state, cases[i].burning);
+        EXPECT(panel == cases[i].panel);
+        EXPECT(netmd_panel_header_string(panel) == cases[i].header);
+        EXPECT(netmd_panel_body_string(panel) == cases[i].body);
+        EXPECT(netmd_panel_hint_string(panel) == cases[i].hint);
+    }
+    // Every state of both enums is covered above, so a state added without a
+    // sentence to go with it fails here rather than on screen.
+    EXPECT(NetmdPanel_COUNT == 6);
+    EXPECT(AppDeviceState_COUNT == 5);
+}
+
+// The plan header and the gauge readout are the same number, on five plans that
+// mix the four billing modes. They were not: the header showed the per mode
+// billed sum ("84:08") and the gauge the disc equivalent ("63:02 / 80:00").
+TEST(view_plan_header_reads_what_the_gauge_reads) {
+    static const u32 modes[5][4] = {
+        {PlanMode_SP, PlanMode_SP, PlanMode_SP, PlanMode_SP},
+        {PlanMode_SP, PlanMode_LP2, PlanMode_SP, PlanMode_LP2},
+        {PlanMode_LP4, PlanMode_LP4, PlanMode_LP2, PlanMode_SP},
+        {PlanMode_LP2, PlanMode_LP4, PlanMode_LP4, PlanMode_LP4},
+        {PlanMode_SP, PlanMode_LP4, PlanMode_LP2, PlanMode_SP},
+    };
+    for (u32 p = 0; p < 5; p += 1) {
+        TestPlanFixture fixture;
+        test_view_plan_begin(&fixture, arena);
+        for (u32 i = 0; i < 16; i += 1) {
+            test_view_plan_add(&fixture, 137000 + i * 4099, modes[p][i & 3], 0);
+        }
+        test_view_plan_recompute(&fixture, 800.0f);
+        const PlanCapacity *capacity = fixture.capacity;
+        // What the header says, what the status bar says and what the pre-flight
+        // says all come out of this one function, so there is nothing to keep in
+        // step by hand.
+        u64 header_ms = plan_disc_used_ms(capacity);
+        EXPECT(header_ms == (u64)capacity->used_clusters * PLAN_CLUSTER_SP_MS);
+        EXPECT(plan_disc_total_ms(capacity) ==
+               (u64)capacity->capacity_clusters * PLAN_CLUSTER_SP_MS);
+        // And it is a different number from the billed sum as soon as anything
+        // is not SP - which is the whole reason showing both was confusing.
+        b32 all_sp = 1;
+        for (u32 i = 0; i < 4; i += 1) { all_sp = all_sp && (modes[p][i] == PlanMode_SP); }
+        if (!all_sp) { EXPECT(capacity->billed_ms != header_ms); }
+        test_view_plan_end(&fixture);
+    }
+}
+
+// The hatch is anchored on an origin, not on the area it fills: two areas that
+// share an origin show one continuous set of stripes, and moving an area over a
+// fixed origin slides the window instead of restarting the pattern. That is
+// what "stable under scroll" means, and it is arithmetic.
+TEST(view_plan_hatch_tiles_keep_their_phase) {
+    Unused(arena);
+    R_HatchTile tiles[R_HATCH_MAX_TILES];
+    R_HatchTile shifted[R_HATCH_MAX_TILES];
+    f32 tile = (f32)R_HATCH_TILE_PX;
+
+    // An area exactly on the grid: whole tiles, first uv at 0, last at 1.
+    u32 count = r_hatch_tiles(rect(0.0f, 0.0f, tile * 3.0f, tile), v2(0.0f, 0.0f), tiles,
+                              R_HATCH_MAX_TILES);
+    EXPECT(count == 3);
+    EXPECT(tiles[0].uv0.x == 0.0f && tiles[0].uv1.x == 1.0f);
+    EXPECT(tiles[2].dst.min.x == tile * 2.0f);
+
+    // A short, off grid area: one tile, cut on both sides, and its uv say which
+    // part of the pattern it is - not 0..1, which would stretch it.
+    count = r_hatch_tiles(rect(20.0f, 4.0f, 44.0f, 18.0f), v2(0.0f, 0.0f), tiles,
+                          R_HATCH_MAX_TILES);
+    EXPECT(count == 1);
+    EXPECT(tiles[0].uv0.x == 20.0f / tile);
+    EXPECT(tiles[0].uv1.x == 44.0f / tile);
+    EXPECT(tiles[0].uv0.y == 4.0f / tile);
+
+    // Moved by a whole tile: the same tiles, to the pixel. This is the case that
+    // shimmered - a pattern restarted at the left edge of whatever it fills
+    // travels with the thing it fills.
+    u32 count2 = r_hatch_tiles(rect(20.0f + tile, 4.0f, 44.0f + tile, 18.0f), v2(0.0f, 0.0f),
+                               shifted, R_HATCH_MAX_TILES);
+    EXPECT(count == count2);
+    for (u32 i = 0; i < count; i += 1) {
+        EXPECT(tiles[i].uv0.x == shifted[i].uv0.x);
+        EXPECT(tiles[i].uv1.x == shifted[i].uv1.x);
+        EXPECT(shifted[i].dst.min.x - tiles[i].dst.min.x == tile);
+    }
+
+    // Two neighbouring tails of one gauge: the right hand one carries on where
+    // the left hand one stopped, because both are cut on the same origin.
+    count = r_hatch_tiles(rect(0.0f, 0.0f, 30.0f, 14.0f), v2(0.0f, 0.0f), tiles,
+                          R_HATCH_MAX_TILES);
+    count2 = r_hatch_tiles(rect(30.0f, 0.0f, 90.0f, 14.0f), v2(0.0f, 0.0f), shifted,
+                           R_HATCH_MAX_TILES);
+    EXPECT(count == 1 && count2 == 2);
+    EXPECT(tiles[0].uv1.x == shifted[0].uv0.x);
+
+    // A degenerate area produces nothing rather than a quad of zero pixels, and
+    // a very wide one is bounded by `max` rather than by the caller's luck.
+    EXPECT(r_hatch_tiles(rect(10.0f, 10.0f, 10.0f, 20.0f), v2(0.0f, 0.0f), tiles,
+                         R_HATCH_MAX_TILES) == 0);
+    EXPECT(r_hatch_tiles(rect(0.0f, 0.0f, 100.0f, 10.0f), v2(0.0f, 0.0f), tiles, 0) == 0);
+    EXPECT(r_hatch_tiles(rect(0.0f, 0.0f, 100000.0f, 14.0f), v2(0.0f, 0.0f), tiles, 4) == 4);
+}
+
 static void test_view_plan_run_all(void) {
     test_report("view plan\n");
     test_view_plan_arena = arena_alloc(MB(16));
@@ -420,4 +560,7 @@ static void test_view_plan_run_all(void) {
     RUN(view_plan_fill_remaining_stops_where_it_must);
     RUN(view_plan_shorten_fits_the_toc_in_one_step);
     RUN(view_plan_shorten_quota_shares_what_is_left);
+    RUN(view_plan_device_panel_says_one_thing);
+    RUN(view_plan_header_reads_what_the_gauge_reads);
+    RUN(view_plan_hatch_tiles_keep_their_phase);
 }

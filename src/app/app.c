@@ -69,10 +69,8 @@ static void app_status_bar(void) {
             // numbers that go with it.
             ui_label_styled(UI_FontStyle_Caption, theme->fg_muted,
                             str8f(ui_frame_arena(), app_str_c(Str_StatusPlan), app_plan_count(),
-                                  app_duration((u32)(app.capacity.used_clusters *
-                                                     (PLAN_CLUSTER_SP_MS / 1000))),
-                                  app_duration((u32)(app.capacity.capacity_clusters *
-                                                     (PLAN_CLUSTER_SP_MS / 1000)))));
+                                  app_duration((u32)(plan_disc_used_ms(&app.capacity) / 1000)),
+                                  app_duration((u32)(plan_disc_total_ms(&app.capacity) / 1000))));
             app_plan_gauge_compact(ui_dp(120.0f));
             ui_spacer(ui_px(ui_dp(theme->space[UI_Space_12]), 1.0f));
             ui_label_styled(UI_FontStyle_Caption, theme->fg_muted, app_str(Str_StatusKeys));

@@ -74,6 +74,12 @@ typedef struct NetmdTrack {
     u8 mono;       // channels == 0x01
     u8 protect;    // track flags == 0x03: checked out, not erasable
     u8 group;      // NETMD_NO_GROUP when the track is in none
+    // P-014. Not read off the device: set by whoever wrote this track in this
+    // session, after the disc was read back. A track that carries it and
+    // `protect` at the same time is not checked out by SonicStage - it is a TOC
+    // the device has not flushed yet (s6.3), and the flag falls back to 0 after
+    // a power cycle. netmd_edit_simulate warns instead of refusing.
+    u8 written_here;
     u16 title_size;
     u16 title_full_size;
     u8 title[NETMD_TITLE_MAX];       // half-width, decoded to UTF-8

@@ -1,7 +1,9 @@
 # P-014 — Une piste qui vient d'être gravée se relit `protect` et refuse l'effacement
 
-Statut : **ouvert** (2026-09-07, T-043) — contournement en place dans le test appareil, correction à
-décider dans `netmd_edit.c` ou `netmd_disc.c`
+Statut : **fermé** (2026-09-08, T-071) — bit `written_here` sur `NetmdTrack`, réapparié après
+relecture ; la simulation avertit au lieu de refuser. Chaîne validée de bout en bout sur le MZ-N505
+(`--device-p014`, disque « 202001 ») ; réserve honnête ci-dessous : sur cette session d'une seule
+piste l'appareil a rendu `protect = 0`, donc le `0x03` lui-même n'a pas été réobservé.
 
 ## Symptôme
 Après une gravure, `netmd_read_disc` renvoie les pistes qui viennent d'être écrites avec
@@ -57,3 +59,59 @@ reprend son cours normal. Rien d'autre n'est contourné : la sauvegarde du TOC, 
 Une seule mesure : graver une piste, la relire (`protect` attendu à 1), débrancher/rebrancher
 l'appareil, relire (`protect` attendu à 0). La transcription `tests/netmd/real/t043_device_burn.trace`
 contient déjà la moitié « avant ».
+
+## Correction retenue (T-071, 2026-09-08) — piste 1 et piste 4 combinées
+
+Ni « ne pas croire le drapeau » seul, ni « le dire honnêtement » seul : les deux, mais **sans faire
+porter à la couche device une connaissance de l'historique** au sens où la fiche l'envisageait.
+
+1. **Bit `written_here` sur `NetmdTrack`.** Il n'est pas lu sur l'appareil : il est posé par nous.
+2. **`NetmdWrittenSet`** (`netmd_upload.{h,c}`). `netmd_written_add` est appelé au `commitTrack`
+   avec le numéro que l'appareil vient de rendre et le titre écrit. La durée n'y est pas connue à la
+   frame — l'appareil a arrondi au cluster — donc elle est laissée à 0.
+3. **`netmd_written_apply`** est appelé par `netmd_device.c` après **chaque** `netmd_read_disc`,
+   avant que le slot soit publié. Le réappariement se fait par **(durée à la frame, titre)**, la
+   position ne servant que d'indice de départ : un déplacement, un renommage ou un effacement
+   renumérotent le disque entre deux relectures, et un index qui a glissé marquerait la piste du
+   voisin. La première relecture est ce qui résout la durée réelle.
+4. **`netmd_edit_simulate` avertit au lieu de refuser** sur une piste `protect` **que nous avons
+   écrite** : elle la compte dans `DiscDiff.written_here`, l'effacement est tenté, et le panneau
+   affiche « Écrite à l'instant : drapeau levé jusqu'au prochain cycle d'alimentation. » Si
+   l'appareil refuse vraiment, il répond REJECTED, et ce chemin existait déjà. Une piste `protect`
+   qui n'est **pas** de nous refuse toujours, y compris mêlée aux nôtres.
+5. **Le set est vidé à l'éjection** : le rinçage du TOC (§6.3) est exactement l'événement qui rend
+   les drapeaux de l'appareil honnêtes à nouveau.
+6. Le contournement de `tests/test_transfer.c` (chemin `--device-burn`) est **laissé tel quel** :
+   il n'est plus le seul filet, mais il ne gêne pas et son retrait n'apporterait rien.
+
+## Ce que la mesure sur l'appareil a montré
+
+`build\tests.exe --device-p014`, MZ-N505, disque « 202001 », 2026-09-08 — une piste de 5 s gravée
+dans l'espace libre puis effacée dans la même session, transcription complète dans
+`tests/netmd/real/t071_device_p014.trace` (1 816 lignes) :
+
+```
+disc "202001": 8 track(s), 8 of them the user's, 3404 s free
+written track 8: protect 0, written_here 1, 2560 frames
+simulation: allowed 1, refusal 0, written_here 0, 9 -> 8 track(s)
+erase track 8: result 0, 1 write(s)
+after clean up: 8 track(s), 3404 s free, disc title "202001"
+```
+
+**`protect = 0`.** Sur cette session d'**une seule** piste, la piste fraîche est revenue sans le
+drapeau : le symptôme de cette fiche ne s'est pas reproduit. Il s'était produit en T-043 sur une
+session de **sept** pistes. Le `0x03` n'est donc pas systématique — ce qui est une raison de plus de
+ne pas fonder un refus dessus. La mesure demandée en fin de fiche (« graver, relire, débrancher,
+relire ») reste donc **à moitié faite** : la moitié « après » n'a rien à comparer tant qu'une session
+d'une piste ne lève pas le drapeau. Ce n'est plus bloquant : le produit ne dépend plus de la réponse.
+
+Ce que la passe valide de bout en bout : bit posé au commit, réappariement après relecture,
+avertissement au lieu du refus, effacement appliqué, relecture à 8 pistes, titre du disque intact.
+
+## Tests de non-régression
+
+- `netmd_written_rematch_survives_a_move` : trois relectures — résolution de la durée, piste déplacée
+  de 2 à 0, leurre de même titre et de durée différente, puis disque qui ne la contient plus.
+- `netmd_edit_warns_on_a_track_we_just_wrote` : refus conservé sur une piste qui n'est pas de nous,
+  avertissement et effacement autorisé sur les nôtres, refus quand les deux sont mélangées.
+- `transfer_device_p014` : la passe appareil ci-dessus, sautée sans `--device-p014`.

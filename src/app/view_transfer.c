@@ -623,7 +623,8 @@ static void app_transfer_preflight_panel(void) {
     app_device_line(UI_FontStyle_Emphasis, theme->fg_primary, app_str(Str_TransferPreflight));
     app_device_line(UI_FontStyle_Caption, theme->fg_secondary,
                     str8f(ui_frame_arena(), app_str_c(Str_TransferSummary), sim->write_count,
-                          app_ms_duration(sim->audio_ms), sim->clusters_needed));
+                          app_ms_duration(plan_disc_ms(sim->clusters_needed)),
+                          sim->clusters_needed));
     app_device_line(UI_FontStyle_Caption, theme->fg_secondary,
                     str8f(ui_frame_arena(), app_str_c(Str_TransferCapacity),
                           app_ms_duration(sim->free_ms_before),

@@ -38,6 +38,11 @@ enum {
     UI_Disabled       = 1u << 10,  // no signal, drawn dimmed by the widget
     UI_DrawIcon       = 1u << 11,  // `icon` (R_Icon + 1) is stamped from the atlas
     UI_DrawImage      = 1u << 12,  // `image_*` is stretched over the whole rect
+    // The 45 degree hatch of research/02 s9.3, repeated over the whole rect in
+    // `bg_color` (T-071). It reuses `image_x`/`image_y` as the pattern phase in
+    // pixels - the two are mutually exclusive, and a hatch is not worth two more
+    // bytes in a struct the layout walks twice per frame.
+    UI_DrawHatch      = 1u << 13,
 };
 
 // Horizontal alignment of the drawn text inside the box. Durations, sizes and

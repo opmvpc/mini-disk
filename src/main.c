@@ -54,6 +54,7 @@
 #include "ui/ui_debug_overlay.h"
 #include "app/strings.h"
 #include "app/prefs.h"
+#include "app/device_panel.h"
 #include "app/plan_view.h"
 #include "app/transfer.h"
 #include "app/app_state.h"

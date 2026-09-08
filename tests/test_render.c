@@ -212,6 +212,39 @@ TEST(render_rows_and_text_share_one_batch) {
     EXPECT(frame->batch_count == 1);
 }
 
+// T-071: the gauge's 45 degree hatch is an R8 pattern in the atlas, sampled as
+// a repeated texture. The atlas is the texture the back end already binds for
+// every untextured quad, so a hatched tail between two solid segments costs
+// quads and not a draw call - which is the measurement the ticket asks for.
+TEST(render_gauge_hatch_costs_no_draw_call) {
+    r_begin_frame(arena, 800.0f, 600.0f, 1.0f);
+    Rect bar = rect(12.0f, 40.0f, 612.0f, 54.0f);
+    r_rect(test_render_params(bar));  // the free zone under everything
+    u32 quads = 1;
+    R_HatchTile tiles[R_HATCH_MAX_TILES];
+    for (u32 segment = 0; segment < 20; segment += 1) {
+        f32 x = 12.0f + (f32)segment * 30.0f;
+        r_rect(test_render_params(rect(x, 40.0f, x + 30.0f, 54.0f)));
+        quads += 1;
+        // The hatched tail, cut on the bar's own origin.
+        Rect tail = rect(x + 24.0f, 40.0f, x + 30.0f, 54.0f);
+        r_rect(test_render_params(tail));  // the 40 % tint under the stripes
+        quads += 1;
+        u32 count = r_hatch_tiles(tail, v2(bar.min.x, bar.min.y), tiles, R_HATCH_MAX_TILES);
+        EXPECT(count >= 1);
+        for (u32 i = 0; i < count; i += 1) {
+            r_rect_textured(tiles[i].dst, r_atlas_texture(), tiles[i].uv0, tiles[i].uv1,
+                            r_rgb(0x4CAF50), 1);
+            quads += 1;
+        }
+    }
+    r_end_frame();
+
+    const R_Frame *frame = r_frame_state();
+    EXPECT(frame->quad_count == quads);
+    EXPECT(frame->batch_count == 1);
+}
+
 // The commands are never reordered, so a background emitted after the text of
 // the row above it still covers that text. This is the case the ticket calls
 // out: row n+1's background overlaps row n's descenders.
@@ -546,6 +579,7 @@ static void test_render_run_all(void) {
     RUN(render_batching_follows_clip);
     RUN(render_batching_follows_texture);
     RUN(render_rows_and_text_share_one_batch);
+    RUN(render_gauge_hatch_costs_no_draw_call);
     RUN(render_overlapping_rows_keep_their_order);
     RUN(render_clip_kept_when_it_really_clips);
     RUN(render_popup_stays_above_the_list);

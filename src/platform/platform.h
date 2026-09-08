@@ -354,7 +354,10 @@ b32  os_font_init(void);      // 0 when the system has no rasterizer at all
 void os_font_shutdown(void);
 
 // `size_px` is already scaled for the DPI and rounded by the caller.
-OsFont os_font_open(String8 family, f32 size_px, u32 weight);  // weight 100..900
+// weight 100..900. `italic` picks the family's italic face when it has one;
+// DirectWrite synthesizes an oblique when it does not, which is what a UI
+// needs and not what a typographer would want.
+OsFont os_font_open(String8 family, f32 size_px, u32 weight, b32 italic);
 // Drops every open font, fallbacks included. A DPI change rebuilds them all,
 // so closing them one by one would leave the fallback faces behind.
 void os_font_close_all(void);

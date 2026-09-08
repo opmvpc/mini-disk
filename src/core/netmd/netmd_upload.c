@@ -3,6 +3,70 @@
 
 #include "../codecs/codec.h"
 
+// --- P-014: the tracks this session wrote --------------------------------------
+// See netmd_upload.h for why this exists at all. The set is small (a burn of
+// more than sixty-four tracks does not fit on a disc) and is walked linearly:
+// the cost of the whole thing is one pass over it per disc read.
+
+void netmd_written_reset(NetmdWrittenSet *set) { set->count = 0; }
+
+void netmd_written_add(NetmdWrittenSet *set, u32 position, String8 title) {
+    if (set->count >= NETMD_WRITTEN_MAX) { return; }
+    NetmdWrittenTrack *entry = &set->tracks[set->count];
+    set->count += 1;
+    entry->position = position;
+    entry->frames = 0;
+    entry->title_size = (u32)Min(title.size, (u64)NETMD_TITLE_MAX);
+    if (entry->title_size != 0) { mem_copy(entry->title, title.str, entry->title_size); }
+}
+
+static b32 netmd_written_same_title(const NetmdWrittenTrack *entry, const NetmdTrack *track) {
+    return str8_eq(str8((u8 *)entry->title, entry->title_size),
+                   str8((u8 *)track->title, track->title_size));
+}
+
+// The one candidate this entry stands for, or `layout->track_count`. The hint
+// is tried first and then the whole disc, and `taken` keeps two entries with the
+// same title and the same length - two copies of one track, which is legal -
+// from both landing on the first of them.
+static u32 netmd_written_find(const NetmdWrittenTrack *entry, const DiscLayout *layout,
+                              const u8 *taken) {
+    u32 count = layout->track_count;
+    if (entry->position < count && !taken[entry->position] &&
+        netmd_written_same_title(entry, &layout->tracks[entry->position]) &&
+        (entry->frames == 0 || layout->tracks[entry->position].frames == entry->frames)) {
+        return entry->position;
+    }
+    // An entry with no length yet has only been seen once, at commit time: it
+    // is identified by its number and its title, and a disc that already moved
+    // between the commit and the first read is a disc we cannot claim.
+    if (entry->frames == 0) { return count; }
+    for (u32 i = 0; i < count; i += 1) {
+        if (taken[i] || layout->tracks[i].frames != entry->frames) { continue; }
+        if (netmd_written_same_title(entry, &layout->tracks[i])) { return i; }
+    }
+    return count;
+}
+
+u32 netmd_written_apply(NetmdWrittenSet *set, DiscLayout *layout) {
+    u8 taken[NETMD_TRACK_MAX];
+    mem_zero(taken, sizeof(taken));  // a zeroing loop becomes a memset under /GL
+    u32 matched = 0;
+    for (u32 e = 0; e < set->count; e += 1) {
+        NetmdWrittenTrack *entry = &set->tracks[e];
+        u32 index = netmd_written_find(entry, layout, taken);
+        if (index >= layout->track_count) { continue; }
+        taken[index] = 1;
+        entry->position = index;
+        // The device rounded the track up to a whole cluster when it wrote it,
+        // so this is the first time its real length is known.
+        entry->frames = layout->tracks[index].frames;
+        layout->tracks[index].written_here = 1;
+        matched += 1;
+    }
+    return matched;
+}
+
 // --- titles ------------------------------------------------------------------
 
 u64 netmd_sjis_from_utf8(String8 in, u8 *out, u64 capacity) {
@@ -301,6 +365,13 @@ static u32 netmd_upload_one(NetmdSecure *secure, NetmdUploadPlan *plan, NetmdUpl
                                                str8(entry->title, entry->title_size));
         }
         result = netmd_secure_commit_track(secure, send.track);
+        // P-014: the disc now holds a track we put there, and the next read
+        // back will report it protected. This is the only moment its number is
+        // known for certain, so it is the moment it is written down.
+        if (result == NetmdResult_Ok && plan->written) {
+            netmd_written_add(plan->written, send.track,
+                              str8(entry->title, entry->title_size));
+        }
     }
     if (render) { arena_release(render); }
     return result;

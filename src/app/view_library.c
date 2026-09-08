@@ -63,6 +63,11 @@ static void app_cell_number(f32 width, String8 text, u32 color) {
     app_cell(ui_px(width, 1.0f), text, color, UI_TextFlag_TabularNumbers, UI_TextAlign_Right);
 }
 
+// The subtitle box of the panel built last, so a caller can hang a tooltip on
+// it without app_panel_begin growing a parameter that three panels out of four
+// would pass 0 for (T-071).
+global UI_Box *app_panel_subtitle_box;
+
 // A panel: a titled column with its own background.
 static UI_Box *app_panel_begin(String8 id, UI_Size width, String8 title, String8 subtitle) {
     const UI_Theme *theme = ui_theme();
@@ -82,7 +87,17 @@ static UI_Box *app_panel_begin(String8 id, UI_Size width, String8 title, String8
         UI_Parent(header) UI_TextPadding(ui_dp(theme->space[UI_Space_12])) {
             ui_label_styled(UI_FontStyle_Emphasis, theme->fg_primary, title);
             ui_spacer(ui_pct(1.0f, 0.0f));
-            ui_label_styled(UI_FontStyle_Caption, theme->fg_muted, subtitle);
+            // Clickable only so that it takes part in the hit test: a tooltip
+            // has to know whether the pointer is on it.
+            UI_PrefWidth(ui_text_size(ui_top_text_padding(), 1.0f))
+            UI_PrefHeight(ui_pct(1.0f, 1.0f))
+            UI_Font(ui_font(UI_FontStyle_Caption))
+            UI_TextColor(theme->fg_muted) {
+                app_panel_subtitle_box =
+                    ui_build_box(UI_DrawText | UI_Clickable,
+                                 str8f(ui_frame_arena(), "%S_subtitle", id));
+                app_panel_subtitle_box->display_string = subtitle;
+            }
         }
     }
     ui_separator();

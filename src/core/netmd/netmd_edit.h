@@ -114,6 +114,12 @@ typedef struct DiscDiff {
     u32 cells_free_after;
     u32 chars_free_after;
     u32 writes;  // TOC rewrites the sequence will cost, s6.5
+    // P-014: how many tracks of the selection this session wrote itself. The
+    // device still reports them protected because it has not flushed its TOC
+    // (s6.3), which is not the same thing as "checked out by SonicStage". The
+    // edit is allowed and the panel warns instead of refusing; if the device
+    // really means it, it answers REJECTED, and that path already exists.
+    u32 written_here;
     u16 before_size, after_size;
     u8 before[NETMD_DISC_TITLE_MAX];
     u8 after[NETMD_DISC_TITLE_MAX];

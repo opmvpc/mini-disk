@@ -69,22 +69,25 @@ static UI_Box *app_gauge_rect(f32 x, f32 y, f32 width, f32 height, u32 color, f3
     return box;
 }
 
-// The 45 degree hatching of s9.3, drawn with the one primitive the renderer
-// has: an axis aligned rectangle. What survives of the intention is the reading
-// - "this part is paid for and carries no audio" - so the area is tinted at
-// 40 % and striped every four pixels. A real diagonal would need a second
-// shader path, which is not worth the kilobytes it would cost (see Livraison).
-#define APP_HATCH_STEP_PX 4.0f
-#define APP_HATCH_MAX 64
-
+// The 45 degree hatching of s9.3 (T-071). T-032 could only draw vertical
+// stripes - the renderer has one primitive and it is axis aligned - so the tail
+// of a segment was a tint plus a 1 px bar every four pixels. The diagonal is now
+// an 8 px pattern generated into the R8 atlas at start-up (r_icons.c) and
+// sampled as a repeated texture: the atlas is the texture the back end already
+// has bound for every untextured quad, so the hatch joins the batch the gauge is
+// already in and the gauge still costs one draw call.
+//
+// The pattern is anchored on the bar and not on the tail, so two tails of the
+// same gauge are two windows onto one continuous set of stripes rather than two
+// patterns that happen to start in different places.
 static void app_gauge_hatch(f32 x, f32 y, f32 width, f32 height, u32 color) {
-    if (width <= 0.0f) { return; }
+    if (width <= 0.0f || height <= 0.0f) { return; }
     app_gauge_rect(x, y, width, height, app_color_alpha(color, 0.40f), 0.0f, 0);
-    u32 stripes = (u32)(width / APP_HATCH_STEP_PX);
-    if (stripes > APP_HATCH_MAX) { stripes = APP_HATCH_MAX; }
-    for (u32 i = 0; i < stripes; i += 1) {
-        app_gauge_rect(x + (f32)i * APP_HATCH_STEP_PX, y, 1.0f, height, color, 0.0f, 0);
-    }
+    UI_Box *box = app_gauge_rect(x, y, width, height, color, 0.0f, UI_DrawHatch);
+    box->flags &= ~(UI_Flags)UI_DrawBackground;
+    // The phase: where this tail sits inside the bar, folded into one tile.
+    box->image_x = (u16)((i32)x % R_HATCH_TILE_PX + ((x < 0.0f) ? R_HATCH_TILE_PX : 0));
+    box->image_y = (u16)((i32)y % R_HATCH_TILE_PX + ((y < 0.0f) ? R_HATCH_TILE_PX : 0));
 }
 
 // --- the row model --------------------------------------------------------------
@@ -213,8 +216,8 @@ static String8 app_gauge_segment_tooltip(u32 index) {
 static void app_gauge_readout(f32 width) {
     const UI_Theme *theme = ui_theme();
     const PlanCapacity *capacity = &app.capacity;
-    u64 used_ms = (u64)capacity->used_clusters * PLAN_CLUSTER_SP_MS;
-    u64 total_ms = (u64)capacity->capacity_clusters * PLAN_CLUSTER_SP_MS;
+    u64 used_ms = plan_disc_used_ms(capacity);
+    u64 total_ms = plan_disc_total_ms(capacity);
     b32 over = capacity->overflow_clusters != 0;
     b32 full = !over && capacity->free_clusters == 0 && capacity->entry_count != 0;
     b32 nearly = !over && !full &&
@@ -571,10 +574,8 @@ void app_plan_gauge_compact(f32 width) {
             }
             ui_tooltip_box(bar, str8f(ui_frame_arena(), app_str_c(Str_StatusPlan),
                                       capacity->entry_count,
-                                      app_ms_duration((u64)capacity->used_clusters *
-                                                      PLAN_CLUSTER_SP_MS),
-                                      app_ms_duration((u64)capacity->capacity_clusters *
-                                                      PLAN_CLUSTER_SP_MS)));
+                                      app_ms_duration(plan_disc_used_ms(capacity)),
+                                      app_ms_duration(plan_disc_total_ms(capacity))));
         }
     }
 }
@@ -747,12 +748,20 @@ static void app_plan_group_row(u32 group, u32 row) {
         return;
     }
     String8 name = plan_string(&app.plan, info->name);
-    if (name.size == 0) { name = app_str(Str_PlanGroupUnnamed); }
-    app_cell(ui_pct(1.0f, 0.0f),
-             str8f(ui_frame_arena(), app_str_c(Str_PlanGroupHeader), name, info->count,
+    b32 unnamed = (name.size == 0);
+    if (unnamed) { name = app_str(Str_PlanGroupUnnamed); }
+    u32 color = ui_list_selected(&app.plan_list, row) ? theme->fg_primary : theme->fg_secondary;
+    // T-071: two cells, not one composed string. The name is what has to give
+    // way when the panel is narrow - it is the part the user can guess - and a
+    // count of tracks with its tail cut off says nothing at all.
+    UI_Font(ui_font(unnamed ? UI_FontStyle_Italic : UI_FontStyle_Ui)) {
+        app_cell(ui_pct(1.0f, 0.0f), name, unnamed ? theme->fg_disabled : color, 0,
+                 UI_TextAlign_Left);
+    }
+    app_cell(ui_text_size(app_cell_padding() * 2.0f, 1.0f),
+             str8f(ui_frame_arena(), app_str_c(Str_PlanGroupCount), info->count,
                    app_ms_duration(duration_ms)),
-             ui_list_selected(&app.plan_list, row) ? theme->fg_primary : theme->fg_secondary, 0,
-             UI_TextAlign_Left);
+             theme->fg_muted, UI_TextFlag_TabularNumbers, UI_TextAlign_Right);
 }
 
 // --- editing --------------------------------------------------------------------
@@ -1334,10 +1343,20 @@ void app_plan_panel(void) {
     app_plan_sync();
     app_plan_rows_build();
 
+    // T-071: the same grandeur as the gauge under it - clusters x 2 s, the link
+    // cluster included. It used to show the per mode billed sum ("84:08") over a
+    // gauge reading the disc equivalent ("63:02 / 80:00"), which is two numbers
+    // for one thing and a question the user should never have had to ask. The
+    // billed sum is still there, in the tooltip, where it answers "why".
     String8 subtitle = str8f(ui_frame_arena(), app_str_c(Str_PlanSubtitle), app_plan_count(),
-                             app_ms_duration(app.capacity.billed_ms));
+                             app_ms_duration(plan_disc_used_ms(&app.capacity)));
     UI_Box *panel = app_panel_begin(str8_lit("###plan"), ui_pct(1.0f, 0.0f),
                                     app_str(Str_PlanTitle), subtitle);
+    ui_tooltip_box(app_panel_subtitle_box,
+                   str8f(ui_frame_arena(), app_str_c(Str_PlanBilledTip),
+                         app_ms_duration(app.capacity.billed_ms),
+                         app_ms_duration(app.capacity.audio_ms),
+                         app_ms_duration(app.capacity.billed_ms - app.capacity.audio_ms)));
     app_plan_header();
     app_plan_gauge(rect_width(panel->rect));
     ui_separator();
