@@ -23,6 +23,43 @@ Dernière mise à jour : 2026-09-08
   s'arrête sur `r_core batch build` (1 290 µs pour un budget de 900) alors que `src/ui/r_core.c`
   n'est pas dans le diff et que le même banc rendait 705-769 µs le matin. **À relancer machine au
   repos avant le merge**, et à ce moment-là trancher le `/Os` du code tiers.
+- **T-072 livré : préférences, thème clair réel, i18n complète, raccourcis et aide clavier.**
+  `src/app/view_settings.c` est un panneau modal (`Ctrl+,` ou l'engrenage de la barre d'outils) posé sur
+  `UI_Layer_Popup` derrière un voile qui mange les clics, et qui **possède le clavier** tant qu'il est là
+  (`ui_popup_set_active`) : les trois listes en dessous cessent de lire les touches. Quatorze de ses seize
+  lignes sont une table (`app_setting_rows[]` : libellé, type, champ de `Prefs` par `OffsetOf`, pas,
+  bornes, unité) — langue, thème, mode MD par défaut, cible de loudness, plafond true-peak, rognage,
+  fondus, blanc entre les pistes, tailles des deux caches ; écrites à la main seulement celles qui lisent
+  le disque ou portent un verbe (occupation des caches + « Vider », dossiers surveillés, vignettes).
+  **Langue et thème s'appliquent à chaud** : aucune boîte ne met une couleur en cache d'une frame à
+  l'autre, donc c'est un appel et un redessin, sans redémarrage ni relayout manuel.
+  `ui_theme_light` vient de research/02 §10.4 et 02b **avec chaque paire fond/texte mesurée** : deux
+  échelles descendues d'un cran pour passer 4,5:1 partout, ombre à 18 % au lieu de 45 %. Le thème
+  **sombre** corrige au passage `fg_muted`, qui ne donnait que 3,9:1 (→ 5,5:1). Le choix « système » est
+  résolu par `os_system_theme()` (`AppsUseLightTheme` via `RegGetValueW` **chargé dynamiquement**, pour
+  que la table d'imports reste kernel32 + user32) et réévalué sur `WM_SETTINGCHANGE` ;
+  `DwmSetWindowAttribute` assortit la barre de titre.
+  i18n : 85 chaînes ajoutées **en fin** d'énumération et des deux tables (aucun identifiant déplacé),
+  319 au total, pluriels à deux formes (`app_plural`) et formats par langue (espace fine insécable U+202F
+  en FR, virgule en EN ; dates et durées). `tools/i18n_audit.py` est branché sur `build.bat check` et
+  refuse toute chaîne visible hors `strings.h` (sauté avec un message si Python manque, pour que le check
+  reste vert sur une machine MSVC nue).
+  `src/app/app_shortcuts.{h,c}` : **26 lignes** (touche, modificateurs, contexte, action, libellé) qui
+  sont research/02 §8.8 recopié, avec **trois lecteurs pour une seule table** : le dispatch de `app.c`,
+  l'aide clavier (`F1`) et les libellés de la barre de statut.
+  Onze clés de prefs nouvelles, lecture tolérante (ADR-012), bornées à l'analyse par les mêmes constantes
+  que le panneau ; `PREFS_VERSION` reste à 1, un fichier d'avant T-072 prend simplement les défauts.
+  Écarts : exe **+27 136 o** au lieu de ± 15 360 (le prix d'un panneau complet + une aide clavier, détail
+  dans la Livraison) ; `accent_fg` sur `accent` en thème sombre à 3,26:1, tenu au 3:1 de WCAG 1.4.11 avec
+  le raisonnement écrit dans le test ; le formatage localisé des nombres n'est appliqué que là où T-072 a
+  le droit d'écrire (`view_library.c` et `view_plan.c` sont tenus par d'autres agents, l'adoption est
+  mécanique). Captures : `captures/T-072-preferences.png`, `T-072-theme-clair.png`,
+  `T-072-aide-clavier.png`.
+- **Budget de taille** (lead, 2026-09-08, après le merge de T-072) : 622 080 o après T-070, **649 216 o**
+  après T-072 (+27 136 : panneau Préférences, aide clavier, 85 chaînes × 2 langues, table des raccourcis,
+  thème clair). Ce sont des fonctions, pas une régression de compacité. `SIZE_BUDGET_KB` 630 → **660** ; la
+  règle T-070 reste « tendance à la baisse à fonctions égales », et le levier `/Os` sur le code tiers
+  (−36 KB) est toujours à trancher sur un banc au repos avant le tag de phase 7.
 
 ### Fait (phase 0 terminée)
 - 4 rapports de recherche livrés (`research/01..04`, ~10 700 lignes) + tokens de design (`02b`).
@@ -62,40 +99,6 @@ Dernière mise à jour : 2026-09-08
   du DSP de T-041 qui deviennent atteignables depuis `app/` par le bouton « Graver », pas de DES.
   `SIZE_BUDGET_KB` reste à **600**, à resserrer en phase 7 (levier `/O1`, P-007).
 - Ordre de merge du 2026-09-07 : T-020 → T-041 → T-040 → T-021 (conflits d'includes résolus en gardant les deux côtés).
-
-### Fait en phase 7
-- **T-072 livré : préférences, thème clair réel, i18n complète, raccourcis et aide clavier.**
-  `src/app/view_settings.c` est un panneau modal (`Ctrl+,` ou l'engrenage de la barre d'outils) posé sur
-  `UI_Layer_Popup` derrière un voile qui mange les clics, et qui **possède le clavier** tant qu'il est là
-  (`ui_popup_set_active`) : les trois listes en dessous cessent de lire les touches. Quatorze de ses seize
-  lignes sont une table (`app_setting_rows[]` : libellé, type, champ de `Prefs` par `OffsetOf`, pas,
-  bornes, unité) — langue, thème, mode MD par défaut, cible de loudness, plafond true-peak, rognage,
-  fondus, blanc entre les pistes, tailles des deux caches ; écrites à la main seulement celles qui lisent
-  le disque ou portent un verbe (occupation des caches + « Vider », dossiers surveillés, vignettes).
-  **Langue et thème s'appliquent à chaud** : aucune boîte ne met une couleur en cache d'une frame à
-  l'autre, donc c'est un appel et un redessin, sans redémarrage ni relayout manuel.
-  `ui_theme_light` vient de research/02 §10.4 et 02b **avec chaque paire fond/texte mesurée** : deux
-  échelles descendues d'un cran pour passer 4,5:1 partout, ombre à 18 % au lieu de 45 %. Le thème
-  **sombre** corrige au passage `fg_muted`, qui ne donnait que 3,9:1 (→ 5,5:1). Le choix « système » est
-  résolu par `os_system_theme()` (`AppsUseLightTheme` via `RegGetValueW` **chargé dynamiquement**, pour
-  que la table d'imports reste kernel32 + user32) et réévalué sur `WM_SETTINGCHANGE` ;
-  `DwmSetWindowAttribute` assortit la barre de titre.
-  i18n : 85 chaînes ajoutées **en fin** d'énumération et des deux tables (aucun identifiant déplacé),
-  319 au total, pluriels à deux formes (`app_plural`) et formats par langue (espace fine insécable U+202F
-  en FR, virgule en EN ; dates et durées). `tools/i18n_audit.py` est branché sur `build.bat check` et
-  refuse toute chaîne visible hors `strings.h` (sauté avec un message si Python manque, pour que le check
-  reste vert sur une machine MSVC nue).
-  `src/app/app_shortcuts.{h,c}` : **26 lignes** (touche, modificateurs, contexte, action, libellé) qui
-  sont research/02 §8.8 recopié, avec **trois lecteurs pour une seule table** : le dispatch de `app.c`,
-  l'aide clavier (`F1`) et les libellés de la barre de statut.
-  Onze clés de prefs nouvelles, lecture tolérante (ADR-012), bornées à l'analyse par les mêmes constantes
-  que le panneau ; `PREFS_VERSION` reste à 1, un fichier d'avant T-072 prend simplement les défauts.
-  Écarts : exe **+27 136 o** au lieu de ± 15 360 (le prix d'un panneau complet + une aide clavier, détail
-  dans la Livraison) ; `accent_fg` sur `accent` en thème sombre à 3,26:1, tenu au 3:1 de WCAG 1.4.11 avec
-  le raisonnement écrit dans le test ; le formatage localisé des nombres n'est appliqué que là où T-072 a
-  le droit d'écrire (`view_library.c` et `view_plan.c` sont tenus par d'autres agents, l'adoption est
-  mécanique). Captures : `captures/T-072-preferences.png`, `T-072-theme-clair.png`,
-  `T-072-aide-clavier.png`.
 
 ## KPI — phase 7, T-072 (i7-8550U, 4 cœurs / 8 threads, Windows 11, machine au calme)
 | Métrique | Valeur | Cible | Date |
