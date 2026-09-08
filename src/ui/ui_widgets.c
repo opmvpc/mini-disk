@@ -16,6 +16,7 @@ global OsCursor ui_widgets_cursor;
 global b32 ui_widgets_popup_active;
 
 b32 ui_popup_active(void) { return ui_widgets_popup_active; }
+void ui_popup_set_active(b32 active) { ui_widgets_popup_active = active; }
 
 void ui_cursor_request(OsCursor cursor) { ui_widgets_cursor = cursor; }
 

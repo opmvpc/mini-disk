@@ -257,7 +257,7 @@ static void app_device_driver_help(void) {
     const UI_Theme *theme = ui_theme();
     app_device_line(UI_FontStyle_Emphasis, theme->fg_primary, app_str(Str_DeviceNoDriver));
     String8 name = app_device_name();
-    if (name.size == 0) { name = str8_lit("Net MD Walkman"); }
+    if (name.size == 0) { name = app_str(Str_DeviceUnknownModel); }
     app_device_line(UI_FontStyle_Caption, theme->fg_secondary,
                     str8f(ui_frame_arena(), app_str_c(Str_DeviceNoDriverBody), name));
     ui_spacer(ui_px(ui_dp(theme->space[UI_Space_4]), 1.0f));

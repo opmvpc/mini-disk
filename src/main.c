@@ -81,6 +81,7 @@
 #include "ui/ui_widgets.h"
 #include "ui/ui_debug_overlay.h"
 #include "app/strings.h"
+#include "app/app_shortcuts.h"
 #include "app/prefs.h"
 #include "app/plan_view.h"
 #include "app/transfer.h"
@@ -178,6 +179,7 @@ MdHot
 #include "ui/ui_debug_overlay.c"
 
 #include "app/prefs.c"
+#include "app/app_shortcuts.c"
 #include "app/plan_view.c"
 MdCold  // orchestration : une transition d'etat par piste, pas par frame
 #include "app/transfer.c"
@@ -187,5 +189,6 @@ MdHot
 #include "app/view_device.c"
 #include "app/view_plan.c"
 #include "app/view_transfer.c"
+#include "app/view_settings.c"
 #include "app/app.c"
 MdHot

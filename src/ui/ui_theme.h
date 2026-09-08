@@ -5,6 +5,7 @@
 #define UI_THEME_H
 
 #include "../base/base.h"
+#include "../platform/platform.h"
 #include "r_core.h"
 
 // The four MiniDisc recording modes carry a colour of their own, and only ever
@@ -92,12 +93,39 @@ typedef struct UI_Theme {
 // path of ui_core, never in a timer.
 #define UI_TOOLTIP_DELAY_S 0.5f
 
+// What the preferences store and what the settings panel offers (T-072). The
+// system entry is resolved against os_system_theme() every time it is applied,
+// which is what makes WM_SETTINGCHANGE a one line handler.
+typedef enum UI_ThemeChoice {
+    UI_ThemeChoice_Dark = 0,
+    UI_ThemeChoice_Light,
+    UI_ThemeChoice_System,
+    UI_ThemeChoice_COUNT
+} UI_ThemeChoice;
+
 // Out parameters and not a return value: a 200 byte struct returned by value
 // becomes a memcpy under /GL, which has no symbol to bind to without the CRT.
 void ui_theme_dark(UI_Theme *out);
-void ui_theme_light(UI_Theme *out);  // stub, phase 7
+void ui_theme_light(UI_Theme *out);
 
 void            ui_theme_set(const UI_Theme *theme);
 const UI_Theme *ui_theme(void);
+
+// Resolves the choice, installs the theme, and answers whether the result is
+// the dark one - which is exactly what the title bar wants to know. Nothing is
+// cached anywhere else: a box takes its colours during the frame it is built,
+// so switching a theme is one call and one redraw (T-072).
+b32 ui_theme_apply(UI_ThemeChoice choice);
+// The choice in force and the theme it resolved to, for the settings panel.
+UI_ThemeChoice ui_theme_choice(void);
+
+// --- contrast ---------------------------------------------------------------
+// The straight (non premultiplied) components of a theme colour. Every token is
+// opaque, so this is a shift; it exists so a test can measure a token without
+// knowing how r_rgba packs one (research/02 s10.9).
+md_inline u8 ui_color_red(u32 color) { return (u8)(color & 0xFFu); }
+md_inline u8 ui_color_green(u32 color) { return (u8)((color >> 8) & 0xFFu); }
+md_inline u8 ui_color_blue(u32 color) { return (u8)((color >> 16) & 0xFFu); }
+md_inline u8 ui_color_alpha(u32 color) { return (u8)((color >> 24) & 0xFFu); }
 
 #endif // UI_THEME_H

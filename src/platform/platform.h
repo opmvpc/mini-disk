@@ -254,6 +254,9 @@ typedef enum OsEventKind {
     OsEvent_DragEnter,
     OsEvent_DragOver,
     OsEvent_DragLeave,
+    // WM_SETTINGCHANGE: the system theme, the wheel lines, the locale. The app
+    // re-reads os_system_theme() and rebuilds nothing else (T-072).
+    OsEvent_SettingChange,
     OsEvent_COUNT
 } OsEventKind;
 
@@ -306,6 +309,18 @@ void os_window_set_placement(OsWindow window, const OsWindowPlacement *placement
 V2       os_window_get_size(OsWindow window);      // client size, physical pixels
 f32      os_window_dpi_scale(OsWindow window);
 void     os_window_set_title(OsWindow window, String8 title);
+
+// The theme Windows says its applications should wear, read from
+// HKCU\...\Themes\Personalize\AppsUseLightTheme (T-072). Dark when the value
+// is missing: that is what the window has worn since T-005.
+typedef enum OsSystemTheme {
+    OsSystemTheme_Dark = 0,
+    OsSystemTheme_Light,
+} OsSystemTheme;
+OsSystemTheme os_system_theme(void);
+// DWMWA_USE_IMMERSIVE_DARK_MODE and the matching border, so the system title
+// bar follows the theme the app just switched to. A no-op on older Windows.
+void os_window_set_dark_frame(OsWindow window, b32 dark);
 
 // --- opengl ----------------------------------------------------------------
 // opengl32.dll and gdi32.dll are loaded by hand so the import table stays

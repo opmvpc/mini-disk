@@ -46,6 +46,14 @@ static void app_toolbar(void) {
                                 str8f(ui_frame_arena(), app_str_c(Str_ToolbarSelected),
                                       ui_list_selected_count(&app.list)));
             }
+            // The way into the preferences that does not need Ctrl+, (T-072).
+            UI_PrefHeight(ui_px(ui_dp(theme->row_standard), 1.0f)) {
+                if (ui_button(str8_lit("⚙###settings")).clicked) {
+                    app_settings_toggle();
+                }
+                ui_tooltip(app_str(Str_SettingsHint));
+                ui_spacer(ui_px(ui_dp(theme->space[UI_Space_8]), 1.0f));
+            }
         }
     }
 }
@@ -68,14 +76,19 @@ static void app_status_bar(void) {
             // The plan, always in sight: the 12 px gauge of s9.10 and the two
             // numbers that go with it.
             ui_label_styled(UI_FontStyle_Caption, theme->fg_muted,
-                            str8f(ui_frame_arena(), app_str_c(Str_StatusPlan), app_plan_count(),
+                            str8f(ui_frame_arena(),
+                                  app_plural_c(Str_StatusPlanOne, Str_StatusPlan,
+                                               app_plan_count()),
+                                  app_plan_count(),
                                   app_duration((u32)(app.capacity.used_clusters *
                                                      (PLAN_CLUSTER_SP_MS / 1000))),
                                   app_duration((u32)(app.capacity.capacity_clusters *
                                                      (PLAN_CLUSTER_SP_MS / 1000)))));
             app_plan_gauge_compact(ui_dp(120.0f));
             ui_spacer(ui_px(ui_dp(theme->space[UI_Space_12]), 1.0f));
-            ui_label_styled(UI_FontStyle_Caption, theme->fg_muted, app_str(Str_StatusKeys));
+            // The same table the dispatch and the help overlay read (s8.8).
+            ui_label_styled(UI_FontStyle_Caption, theme->fg_muted,
+                            app_shortcut_status_hint(ui_frame_arena()));
         }
     }
 }
@@ -147,6 +160,7 @@ static void app_build_ui(void) {
     }
     app_library_context_menu();
     app_plan_context_menu();
+    app_settings_ui();
 }
 
 // A dropped folder is a library folder; a dropped file means the folder it is
@@ -225,11 +239,13 @@ static void app_run(void) {
         os_debug_print(str8_lit("minidisk: no usable system font, aborting\n"));
         os_exit(2);
     }
-    UI_Theme theme;
-    ui_theme_dark(&theme);
-    ui_theme_set(&theme);
     ui_text_init(permanent);
     ui_init(permanent);
+    // The language and the theme the preferences remember, before the first
+    // frame and before the window is ever shown (T-072). After ui_init and not
+    // before it: ui_init installs the dark theme as its own default, so a call
+    // placed above it would be the one that gets overwritten.
+    app_settings_init(window);
     app_init(permanent, scale);
     // The device thread starts once the UI exists: its first answer is already
     // an event the first frame can draw (T-020).
@@ -289,9 +305,19 @@ static void app_run(void) {
                     app_device_close_blocked();
                 }
             }
-            if (event.kind == OsEvent_KeyDown && event.key == OsKey_F11) {
-                ui_debug_overlay_toggle();
+            // The global rows of app_shortcuts[]. A panel row is dispatched by
+            // its panel, out of ui_key_event, against the same table (T-072).
+            if (event.kind == OsEvent_KeyDown) {
+                switch (app_shortcut_action(event.key, event.modifiers,
+                                            AppShortcutContext_Global)) {
+                    case AppAction_Settings: app_settings_toggle(); break;
+                    case AppAction_KeyboardHelp: app_settings_keys_toggle(); break;
+                    case AppAction_DebugOverlay: ui_debug_overlay_toggle(); break;
+                    default: break;
+                }
             }
+            // The system theme moved under us: only the "system" choice cares.
+            if (event.kind == OsEvent_SettingChange) { app_settings_system_theme_changed(); }
             if (event.kind == OsEvent_DropFiles) { app_drop(&event); }
             // The device thread debounces the burst and re-enumerates alone.
             if (event.kind == OsEvent_DeviceChange) { app_device_changed(); }
