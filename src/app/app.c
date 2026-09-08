@@ -80,10 +80,8 @@ static void app_status_bar(void) {
                                   app_plural_c(Str_StatusPlanOne, Str_StatusPlan,
                                                app_plan_count()),
                                   app_plan_count(),
-                                  app_duration((u32)(app.capacity.used_clusters *
-                                                     (PLAN_CLUSTER_SP_MS / 1000))),
-                                  app_duration((u32)(app.capacity.capacity_clusters *
-                                                     (PLAN_CLUSTER_SP_MS / 1000)))));
+                                  app_duration((u32)(plan_disc_used_ms(&app.capacity) / 1000)),
+                                  app_duration((u32)(plan_disc_total_ms(&app.capacity) / 1000))));
             app_plan_gauge_compact(ui_dp(120.0f));
             ui_spacer(ui_px(ui_dp(theme->space[UI_Space_12]), 1.0f));
             // The same table the dispatch and the help overlay read (s8.8).

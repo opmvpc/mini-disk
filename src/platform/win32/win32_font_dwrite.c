@@ -65,6 +65,7 @@ typedef struct DWRITE_GLYPH_RUN {
 #define DWRITE_TEXTURE_ALIASED_1x1 0
 #define DWRITE_TEXTURE_CLEARTYPE_3x1 1
 #define DWRITE_FONT_STYLE_NORMAL 0
+#define DWRITE_FONT_STYLE_ITALIC 2
 #define DWRITE_FONT_STRETCH_NORMAL 5
 #define DWRITE_READING_DIRECTION_LEFT_TO_RIGHT 0
 
@@ -441,7 +442,7 @@ static OsFont win32_font_add(IDWriteFontFace *face, f32 size_px, u32 weight, con
     return result;
 }
 
-OsFont os_font_open(String8 family, f32 size_px, u32 weight) {
+OsFont os_font_open(String8 family, f32 size_px, u32 weight, b32 italic) {
     OsFont result;
     result.v = 0;
     if (!win32_font.factory) { return result; }
@@ -464,7 +465,9 @@ OsFont os_font_open(String8 family, f32 size_px, u32 weight) {
     if (SUCCEEDED(DW(collection, GetFontFamily)(collection, index, &font_family)) &&
         SUCCEEDED(DW(font_family, GetFirstMatchingFont)(font_family, weight,
                                                         DWRITE_FONT_STRETCH_NORMAL,
-                                                        DWRITE_FONT_STYLE_NORMAL, &font)) &&
+                                                        italic ? DWRITE_FONT_STYLE_ITALIC
+                                                               : DWRITE_FONT_STYLE_NORMAL,
+                                                        &font)) &&
         SUCCEEDED(DW(font, CreateFontFace)(font, &face))) {
         result = win32_font_add(face, size_px, weight, (const WCHAR *)name.str);
     }

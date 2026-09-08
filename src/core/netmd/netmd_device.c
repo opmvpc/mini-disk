@@ -311,6 +311,11 @@ static void netmd_device_read_disc(NetmdDevice *device, const NetmdCmd *cmd) {
         netmd_event_push(device, &event);
         return;
     }
+    // P-014: the tracks this session wrote are found again in the layout the
+    // device just handed us - by length and title, not by index, so a move or
+    // an erase between two reads does not move the mark onto a neighbour. Done
+    // before the slot is published: the UI never sees a layout half marked.
+    netmd_written_apply(&device->written, layout);
     os_atomic_store_u32(&device->disc_slot, slot);
     os_atomic_store_u32(&device->disc_valid, 1);
     event.disc_flags = layout->flags;
@@ -439,6 +444,9 @@ static void netmd_device_transport_cmd(NetmdDevice *device, const NetmdCmd *cmd)
         os_atomic_store_u32(&device->disc_valid, 0);
         os_atomic_store_u32(&device->toc_dirty, 0);
         event.toc_dirty = 0;
+        // P-014: the flush is what makes the device's own flags honest again,
+        // so our substitute for them stops here.
+        netmd_written_reset(&device->written);
     }
     netmd_event_push(device, &event);
 }
@@ -473,6 +481,10 @@ static void netmd_device_upload_run(NetmdDevice *device, const NetmdCmd *cmd) {
         netmd_event_push(device, &event);
         return;
     }
+    // P-014: the run records every track it commits here, on the device
+    // thread's own set - the plan belongs to the caller and does not outlive the
+    // burn, whereas the disc keeps those tracks until it is ejected.
+    device->upload_plan->written = &device->written;
     ArenaTemp scratch = arena_temp_begin(device->arena);
     (void)netmd_upload_run(&device->session, device->arena, device->upload_plan, &device->upload,
                            netmd_device_upload_event, device);

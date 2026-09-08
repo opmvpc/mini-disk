@@ -90,6 +90,21 @@ u32 plan_gauge_segment_at(const PlanGaugeLayout *layout, f32 x);
 // The disc position `x` stands for, in milliseconds of the reference mode.
 u64 plan_gauge_time_at(const PlanCapacity *capacity, const PlanGaugeLayout *layout, f32 x);
 
+// --- the one duration the plan is said in (T-071) ----------------------------
+// Clusters x 2 s, the link cluster of T-045 included: what the *disc* is spent,
+// which is what the gauge reads. The per mode billed sum (`PlanCapacity.billed_ms`)
+// answers a different question - what the tracks cost in their own modes - and
+// two different numbers for "how long is this plan", side by side, are two
+// numbers the user has to reconcile. So it goes in a tooltip and this one goes
+// everywhere else: header, status bar, pre-flight.
+md_inline u64 plan_disc_ms(u32 clusters) { return (u64)clusters * PLAN_CLUSTER_SP_MS; }
+md_inline u64 plan_disc_used_ms(const PlanCapacity *capacity) {
+    return plan_disc_ms(capacity->used_clusters);
+}
+md_inline u64 plan_disc_total_ms(const PlanCapacity *capacity) {
+    return plan_disc_ms(capacity->capacity_clusters);
+}
+
 // The mode of the plan, in the sense of s9.4: the one most of it is written in,
 // which is what the scale is graduated in. SP when the disc is empty.
 u32 plan_gauge_reference_mode(const PlanCapacity *capacity);

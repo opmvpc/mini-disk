@@ -114,7 +114,6 @@ typedef enum Str {
     Str_PlanShortenBrackets,
     Str_PlanShortenArtist,
     Str_PlanShortenTitle,
-    Str_PlanGroupHeader,       // "%S - %u pistes - %S"
     Str_PlanGroupUnnamed,
     Str_MenuPlanRename,
     Str_MenuPlanRemove,
@@ -355,6 +354,20 @@ typedef enum Str {
     Str_FolderCountMany,
     Str_StatusPlanOne,
     Str_DeviceUnknownModel,
+    // T-071. Appended at the end of the enum and of both tables on purpose:
+    // phase 7 has four tickets adding strings at once, and the end is the one
+    // place where two of them do not collide.
+    Str_DevicePanelName,        // "%S" - the header line when it is connected
+    Str_DeviceInUseHint,
+    Str_DeviceUnreachable,
+    Str_DeviceUnreachableHint,
+    Str_DeviceBurning,
+    Str_DeviceBurningHint,
+    Str_DiscModeTip,            // "%s . %S disque . %S audio"
+    Str_DiscTrackWrittenHere,
+    Str_DiscWarnWrittenHere,
+    Str_PlanBilledTip,          // "facture par mode %S . audio %S . perdu %S"
+    Str_PlanGroupCount,         // "%u pistes . %S"
     Str_COUNT
 } Str;
 
@@ -468,7 +481,6 @@ static const char *app_strings_fr[Str_COUNT] = {
     " parenthèses",
     " artiste",
     " coupé",
-    "%S · %u pistes · %S",
     "Groupe sans nom",
     "Renommer (F2)",
     "Retirer du plan (Suppr)",
@@ -702,6 +714,18 @@ static const char *app_strings_fr[Str_COUNT] = {
     "%S dossiers",
     "%u piste · %S / %S",
     "Baladeur NetMD",
+    // T-071
+    "%S",
+    "Fermez l'autre application, puis rebranchez l'appareil.",
+    "Appareil injoignable",
+    "Il a répondu puis s'est tu. Débranchez-le et rebranchez-le.",
+    "Gravure en cours",
+    "N'éjectez pas le disque, ne débranchez pas l'appareil.",
+    "%s · %S disque · %S audio",
+    "Écrite à l'instant : drapeau levé jusqu'au prochain cycle d'alimentation.",
+    "Écrite à l'instant, encore dite réservée : l'effacement est tenté.",
+    "Facturé par mode %S · audio %S · perdu %S",
+    "%u pistes · %S",
 };
 
 static const char *app_strings_en[Str_COUNT] = {
@@ -804,7 +828,6 @@ static const char *app_strings_en[Str_COUNT] = {
     " brackets",
     " artist",
     " cut",
-    "%S · %u tracks · %S",
     "Unnamed group",
     "Rename (F2)",
     "Remove from the plan (Del)",
@@ -1038,6 +1061,18 @@ static const char *app_strings_en[Str_COUNT] = {
     "%S folders",
     "%u track · %S / %S",
     "NetMD Walkman",
+    // T-071
+    "%S",
+    "Close the other application, then plug the device back in.",
+    "Device unreachable",
+    "It answered and then went quiet. Unplug it and plug it back in.",
+    "Burn in progress",
+    "Do not eject the disc, do not unplug the device.",
+    "%s · %S disc · %S audio",
+    "Written just now: the flag clears after a power cycle.",
+    "Written just now, still called reserved: the erase is attempted.",
+    "Billed per mode %S · audio %S · wasted %S",
+    "%u tracks · %S",
 };
 
 global StrLang app_lang = APP_LANG_DEFAULT;

@@ -293,11 +293,19 @@ void netmd_edit_simulate(const DiscLayout *before, const NetmdEditRequest *reque
                 return;
             }
             for (u32 i = 0; i < before->track_count; i += 1) {
-                // s7.5: a track checked out by SonicStage refuses eraseTrack.
-                if (netmd_mask_get(request->mask, i) && before->tracks[i].protect) {
-                    netmd_edit_refuse(out, NetmdEditRefusal_TrackProtected);
-                    return;
+                if (!netmd_mask_get(request->mask, i) || !before->tracks[i].protect) { continue; }
+                // P-014: the same 0x03 means two different things. On a track
+                // this session wrote it means "the TOC is still in my RAM"
+                // (s6.3), and refusing there is telling the user their own
+                // track belongs to SonicStage. Warn, and let the erase be
+                // tried: the device answers REJECTED if it really refuses.
+                if (before->tracks[i].written_here) {
+                    out->written_here += 1;
+                    continue;
                 }
+                // s7.5: a track checked out by SonicStage refuses eraseTrack.
+                netmd_edit_refuse(out, NetmdEditRefusal_TrackProtected);
+                return;
             }
             u32 kept = 0;
             for (u32 i = 0; i < before->track_count; i += 1) {

@@ -83,6 +83,7 @@
 #include "app/strings.h"
 #include "app/app_shortcuts.h"
 #include "app/prefs.h"
+#include "app/device_panel.h"
 #include "app/plan_view.h"
 #include "app/transfer.h"
 #include "app/app_state.h"

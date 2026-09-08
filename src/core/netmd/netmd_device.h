@@ -180,6 +180,11 @@ typedef struct NetmdDevice {
     // alive until UploadDone or UploadError comes back.
     NetmdUploadPlan *upload_plan;
     NetmdUploadState upload;
+    // P-014: what this session put on the disc, re-matched after every read
+    // back. It belongs to the device thread like everything else here, and it
+    // is emptied when the bay is opened: an ejection flushes the TOC, which is
+    // the very event that makes the device's own flags honest again.
+    NetmdWrittenSet written;
 
     // --- tests --------------------------------------------------------------
     // A transport set before the thread starts replaces WinUSB entirely: the

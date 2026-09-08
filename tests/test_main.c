@@ -55,6 +55,7 @@
 #include "../src/app/strings.h"
 #include "../src/app/app_shortcuts.h"
 #include "../src/app/prefs.h"
+#include "../src/app/device_panel.h"
 #include "../src/app/plan_view.h"
 #include "../src/app/transfer.h"
 

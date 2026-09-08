@@ -60,6 +60,46 @@ Dernière mise à jour : 2026-09-08
   thème clair). Ce sont des fonctions, pas une régression de compacité. `SIZE_BUDGET_KB` 630 → **660** ; la
   règle T-070 reste « tendance à la baisse à fonctions égales », et le levier `/Os` sur le code tiers
   (−36 KB) est toujours à trancher sur un banc au repos avant le tag de phase 7.
+- **T-071 — cohérence UI et défauts des phases 3-5** (worktree `t071`, 2026-09-08) :
+  - **Un seul état pour le panneau Disque** (`src/app/device_panel.h`) : `NetmdPanelState` calculé une
+    fois, lu par le sous-titre d'en-tête **et** par le corps. L'incohérence du 2026-09-07 (« pilote
+    manquant » en en-tête sur un corps « utilisé par une autre application ») ne peut plus se produire :
+    il n'y a plus deux jeux de `if`, il y a une table, et la table est testée.
+  - **Durée du plan en équivalent disque partout** (`plan_disc_used_ms`) : en-tête, barre de statut,
+    bulles et pré-vol disent tous ce que dit la jauge — clusters × 2 s, lien compris. La somme facturée
+    par mode est passée dans la bulle. Le plan de démonstration passe de « 84:48 » à « 63:42 »
+    au-dessus d'une jauge qui a toujours dit « 63:42 / 80:00 ».
+  - **Hachures à 45°** : motif de 8 px généré au démarrage dans l'atlas R8 (pas de PNG), appliqué en
+    texture répétée aux queues de padding et à la zone de dépassement. **0 draw call de plus** : les
+    tuiles échantillonnent la texture que le back end lie déjà pour les quads non texturés. La variante
+    à rayures verticales, écart accepté en T-032, disparaît.
+  - **Liste du panneau Disque défilable** (`UI_List`) : molette, clavier, virtualisation, autoscroll en
+    DnD — les conventions de la liste du plan. L'écart T-021/T-022 est fermé.
+  - **P-014 fermé** : bit `written_here` posé au `commitTrack`, réapparié après relecture par (durée à
+    la frame, titre) et non par index ; la simulation avertit au lieu de refuser et laisse l'effacement
+    se tenter. Validé sur le MZ-N505 : une piste de test de 5 s gravée puis effacée dans la même
+    session, les 8 pistes de l'utilisateur intactes, le titre du disque inchangé
+    (`tests/netmd/real/t071_device_p014.trace`, 1 816 lignes).
+  - Petits défauts : bulle du badge de mode, ellipse sur le nom des groupes (nom et compteur en deux
+    cellules), anneau de focus des boutons de transport (l'écart de 4 dp le faisait repeindre par le
+    bouton suivant), « (sans titre) » en italique atténué (cinquième style de police).
+  - Captures `docs/captures/T-071-{avant,apres,hachures}.png`.
+
+## KPI — phase 7, T-071 (i7-8550U, 4 cœurs / 8 threads, Windows 11 ; MZ-N505 sous WinUSB, disque « 202001 »)
+| Métrique | Valeur | Cible | Date |
+|----------|--------|-------|------|
+| Taille exe release | **643 072 o**, soit **+6 144 o** sur les 636 928 o de la **base de la branche** (`73e366b`, avant la fusion de T-070 qui ramène `main` à 622 080 o) | ± 6 Ko — tenue à la limite exacte ; **à revérifier après fusion avec T-070** | 2026-09-08 |
+| Imports | kernel32 + user32 (`dumpbin /imports`) | ces deux-là | 2026-09-08 |
+| Tests | **256 cas, 6 956 checks**, 0 échec (ASan) ; 6 985 checks avec `--device-p014` | verts | 2026-09-08 |
+| Cibles `build.bat` | **les six vertes** : debug, release, test, check, analyze, bench — bench au deuxième essai, machine libérée (P-010 rencontré à deux points d'arrêt différents pendant que trois agents compilaient) | six vertes | 2026-09-08 |
+| Draw calls des hachures | **+0** — 20 segments et leurs queues hachurées tiennent en **1 batch** | 0 de plus | 2026-09-08 |
+| Boxes de la frame | 622 → 642 (plan de 20 pistes, disque de 8 pistes) | — | 2026-09-08 |
+| CPU au repos, 12 s après 4 s de chauffe | **46,9 ms**, soit 0,39 % d'un cœur — résidu de thread pilote GL (P-005), inchangé | 0 % sur nos threads | 2026-09-08 |
+| En-tête du plan == jauge | vérifié sur 5 plans de 16 pistes mêlant SP / mono / LP2 / LP4 | égalité exacte | 2026-09-08 |
+| État du panneau Disque | table de 8 entrées → 1 état + 3 identifiants de chaîne, gardes sur le cardinal des deux énumérations | une seule source | 2026-09-08 |
+| P-014 sur l'appareil | piste de test 5 s gravée (piste 8, 2 560 frames), réappariée (`written_here = 1`), simulation **autorisée** (refus 0), effacée en 1 écriture TOC, relecture à **8 pistes**, titre « 202001 » intact | l'effacement passe | 2026-09-08 |
+| Transcription appareil | `tests/netmd/real/t071_device_p014.trace`, **1 816 lignes** | 1 capture | 2026-09-08 |
+| Chaînes i18n | **11 FR + 11 EN** ajoutées en fin de table, 1 supprimée (`Str_PlanGroupHeader`, sans appelant) — solde net +10 | ADR-011 D10 | 2026-09-08 |
 
 ### Fait (phase 0 terminée)
 - 4 rapports de recherche livrés (`research/01..04`, ~10 700 lignes) + tokens de design (`02b`).
@@ -87,8 +127,9 @@ Dernière mise à jour : 2026-09-08
 - **Budget de taille** : exe à **636 928 o** après T-043 (601 600 avant, **+35 328** pour le cache, la
   machine d'états, la vue Transfert et 45 chaînes FR/EN) ; cible du ticket 660 Ko tenue, `SIZE_BUDGET_KB`
   à 700 ; ticket de régime en phase 7 (backlog), objectif < 500 KB.
-- **P-014 ouvert** : une piste qui vient d'être gravée se relit `protect` et notre simulation refuse alors
-  de l'effacer. Le drapeau retombe après un cycle d'alimentation ; contournement dans le test appareil.
+- **P-014 fermé (T-071)** : une piste que nous venons d'écrire porte `written_here`, réapparié après relecture
+  par (durée à la frame, titre) ; la simulation avertit au lieu de refuser et laisse l'effacement se tenter.
+  Validé sur le MZ-N505 : une piste de test gravée puis effacée dans la même session.
 - UI : splitters verticaux ajoutés (navigateur artistes/albums, panneau Détail), hauteurs persistées.
 - **Phase 3** : T-020 et T-021 mergés. Tout ce qui touche le vrai MZ-N505 (ouverture WinUSB, ping, captures
   `--netmd-trace`, chronométrage) attend le pilote : procédure dans `tools/zadig/README.md` (P-001, P-012).

@@ -12,6 +12,10 @@ typedef enum UI_FontStyle {
     UI_FontStyle_Caption,  // 12 dp, regular
     UI_FontStyle_Emphasis, // 14 dp, semibold
     UI_FontStyle_Heading,  // 16 dp, semibold
+    // 13 dp, regular, italic. One thing only (research/02 s11.3): the words the
+    // app supplies where the data has none - "(sans titre)", "(sans nom)" - so
+    // that a glance tells them apart from a track somebody really called that.
+    UI_FontStyle_Italic,
     UI_FontStyle_COUNT
 } UI_FontStyle;
 

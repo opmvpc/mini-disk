@@ -127,6 +127,71 @@ static void icon_build_shape(R_IconShape *shape, R_Icon icon) {
     }
 }
 
+// --- the hatch (research/02 s9.3, T-071) ------------------------------------
+// A 45 degree stripe every eight pixels. The shape is (x + y) mod 8, which is
+// why this one is not a polygon: r_raster would need a contour per stripe and
+// the pattern would still have to tile exactly, whereas the modulo tiles by
+// construction. Coverage is a 4 x 4 box sample, which is exact for an edge at
+// 45 degrees to within a sixteenth and costs 65 536 comparisons, once.
+#define R_HATCH_STRIPE_PX  3  // of the eight, how many carry ink
+#define R_HATCH_SUBSAMPLES 4
+
+global R_AtlasRect r_hatch_atlas_rect;
+
+R_AtlasRect r_hatch_rect(void) { return r_hatch_atlas_rect; }
+
+static void r_hatch_build(Arena *scratch) {
+    ArenaTemp temp = arena_temp_begin(scratch);
+    u32 size = R_HATCH_TILE_PX;
+    u8 *coverage = push_array(scratch, u8, (u64)size * size);
+    for (u32 y = 0; y < size; y += 1) {
+        for (u32 x = 0; x < size; x += 1) {
+            // All of it in quarter pixels, so there is not a float in sight:
+            // the sample sits in the middle of its sub-cell (two halves of an
+            // eighth make the extra quarter), the period is 32 quarters and the
+            // stripe is the first 12 of them.
+            u32 hits = 0;
+            for (u32 sy = 0; sy < R_HATCH_SUBSAMPLES; sy += 1) {
+                for (u32 sx = 0; sx < R_HATCH_SUBSAMPLES; sx += 1) {
+                    u32 d = (4u * x + sx) + (4u * y + sy) + 1u;
+                    if ((d & 31u) < 12u) { hits += 1; }
+                }
+            }
+            u32 total = R_HATCH_SUBSAMPLES * R_HATCH_SUBSAMPLES;
+            coverage[(u64)y * size + x] = (u8)((hits * 255u + total / 2u) / total);
+        }
+    }
+    r_hatch_atlas_rect = r_atlas_add(size, size, coverage);
+    arena_temp_end(temp);
+}
+
+u32 r_hatch_tiles(Rect area, V2 origin, R_HatchTile *out, u32 max) {
+    f32 tile = (f32)R_HATCH_TILE_PX;
+    f32 width = area.max.x - area.min.x;
+    f32 height = area.max.y - area.min.y;
+    if (width <= 0.0f || height <= 0.0f || max == 0) { return 0; }
+    // The grid the area is cut on is the origin's, not the area's: that is the
+    // whole point. An area that moves over a fixed origin shows a different
+    // part of the same pattern instead of restarting it.
+    f32 first_x = origin.x + floor_f32((area.min.x - origin.x) / tile) * tile;
+    f32 first_y = origin.y + floor_f32((area.min.y - origin.y) / tile) * tile;
+    u32 count = 0;
+    for (f32 ty = first_y; ty < area.max.y && count < max; ty += tile) {
+        f32 y0 = max_f32(ty, area.min.y);
+        f32 y1 = min_f32(ty + tile, area.max.y);
+        for (f32 tx = first_x; tx < area.max.x && count < max; tx += tile) {
+            f32 x0 = max_f32(tx, area.min.x);
+            f32 x1 = min_f32(tx + tile, area.max.x);
+            R_HatchTile *entry = &out[count];
+            entry->dst = rect(x0, y0, x1, y1);
+            entry->uv0 = v2((x0 - tx) / tile, (y0 - ty) / tile);
+            entry->uv1 = v2((x1 - tx) / tile, (y1 - ty) / tile);
+            count += 1;
+        }
+    }
+    return count;
+}
+
 void r_icons_build(Arena *scratch, u32 size) {
     ArenaTemp temp = arena_temp_begin(scratch);
     u8 *coverage = push_array(scratch, u8, (u64)size * size);
@@ -143,4 +208,7 @@ void r_icons_build(Arena *scratch, u32 size) {
         r_icon_rects[i] = r_atlas_add(size, size, coverage);
     }
     arena_temp_end(temp);
+    // After the icons, so a DPI change rebuilds it too: the atlas was reset and
+    // the tile went with it.
+    r_hatch_build(scratch);
 }

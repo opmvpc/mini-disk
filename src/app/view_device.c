@@ -5,14 +5,33 @@
 // It owns the device thread and is the only place that speaks to it: the panel
 // drains its queue once per frame and never blocks (ADR-008).
 
-typedef enum AppDeviceState {
-    AppDeviceState_None = 0,   // nothing on the bus
-    AppDeviceState_NoDriver,   // present, code 28: the guided screen
-    AppDeviceState_InUse,      // another application holds it
-    AppDeviceState_Connected,  // open, and it answered a ping
-    AppDeviceState_Error,
-    AppDeviceState_COUNT
-} AppDeviceState;
+// AppDeviceState and the panel state it feeds are in device_panel.h: they are
+// the same two enums the tests walk, and they have no pixel in them (T-071).
+
+// The rows the disc list shows, flattened: ungrouped tracks first, then each
+// group's header and - unless it is folded - its tracks. The selection and the
+// cursor are indices into *this*, exactly as in the plan panel, and the mask an
+// edit request carries is derived from it when the edit is prepared.
+#define APP_DISC_ROW_MAX    (NETMD_TRACK_MAX + NETMD_GROUP_MAX)
+#define APP_DISC_ROW_HEADER U16_MAX
+#define APP_DISC_ROW_WORDS  ((APP_DISC_ROW_MAX + 63) / 64)
+#define APP_DISC_DRAG_THRESHOLD_PX 4.0f
+#define APP_DISC_AUTOSCROLL_EDGE_PX 24.0f
+#define APP_DISC_AUTOSCROLL_SPEED 600.0f
+// research/02 s10.6: the focus ring is drawn *outside* the button, and the
+// halo two more pixels outside that. Four dp between two buttons is less than
+// the ring needs, so the neighbour's background - drawn after it - painted over
+// the right half of it and the ring looked like a bracket. Eight dp is the
+// first gap that clears both.
+#define APP_FOCUS_GAP_DP 6.0f
+
+typedef struct AppDiscRow {
+    u16 track;  // APP_DISC_ROW_HEADER when the row is a group header
+    u16 group;
+} AppDiscRow;
+
+global AppDiscRow app_disc_rows_buffer[APP_DISC_ROW_MAX];
+global u32 app_disc_row_count;
 
 typedef struct AppDevice {
     NetmdDevice thread;
@@ -31,10 +50,16 @@ typedef struct AppDevice {
     u32 rename_track;  // the track being renamed, + 1
     UI_TextInput rename;
     b32 focus_editor;
-    UI_Key rows_key;  // the box the disc keys are routed to
+    // T-071: the list itself, with the plan list's conventions - wheel,
+    // keyboard, virtualized rows, autoscroll while dragging. Before it, the
+    // disc's tracks were laid out one box per track with no viewport at all,
+    // and a disc of 200 tracks simply ran off the bottom of the panel.
+    UI_List track_list;
+    u64 rows_selection[APP_DISC_ROW_WORDS];
     b32 drag;
-    u32 drag_from;
-    u32 drag_to;
+    u32 drag_row;
+    u32 drag_target;
+    V2 drag_pos;
     // The edit waiting for the user to confirm it, and the simulation behind
     // the panel that asks (ADR-011 D4). Nothing is posted before Apply.
     NetmdEditRequest pending;
@@ -71,23 +96,81 @@ global DiscDiff app_disc_diff;
 
 static void app_device_clear_selection(void) {
     for (u32 i = 0; i < NETMD_MASK_WORDS; i += 1) { app_device.selection[i] = 0; }
+    ui_list_select_clear(&app_device.track_list);
 }
 
-static b32 app_device_selected(u32 track) { return netmd_mask_get(app_device.selection, track); }
+// --- the row model (T-071) ----------------------------------------------------
+// Rebuilt at the top of every frame from the layout, like the plan's.
+
+static void app_disc_rows_build(const DiscLayout *disc) {
+    app_disc_row_count = 0;
+    // s3.10: tracks in no group come first, then each group in TOC order.
+    for (u32 i = 0; i < disc->track_count && app_disc_row_count < APP_DISC_ROW_MAX; i += 1) {
+        if (disc->tracks[i].group != NETMD_NO_GROUP) { continue; }
+        AppDiscRow *row = &app_disc_rows_buffer[app_disc_row_count];
+        row->track = (u16)i;
+        row->group = NETMD_NO_GROUP;
+        app_disc_row_count += 1;
+    }
+    for (u32 g = 0; g < disc->group_count && app_disc_row_count < APP_DISC_ROW_MAX; g += 1) {
+        AppDiscRow *header = &app_disc_rows_buffer[app_disc_row_count];
+        header->track = APP_DISC_ROW_HEADER;
+        header->group = (u16)g;
+        app_disc_row_count += 1;
+        if (app_device.group_collapsed & (1u << g)) { continue; }
+        const NetmdGroup *info = &disc->groups[g];
+        for (u32 i = 0; i < info->count && app_disc_row_count < APP_DISC_ROW_MAX; i += 1) {
+            u32 track = (u32)info->first + i;
+            if (track >= disc->track_count) { break; }
+            AppDiscRow *row = &app_disc_rows_buffer[app_disc_row_count];
+            row->track = (u16)track;
+            row->group = (u16)g;
+            app_disc_row_count += 1;
+        }
+    }
+}
+
+md_inline u32 app_disc_row_track(u64 row) {
+    if (row >= app_disc_row_count) { return NETMD_TRACK_MAX; }
+    u32 track = app_disc_rows_buffer[row].track;
+    return (track == APP_DISC_ROW_HEADER) ? NETMD_TRACK_MAX : track;
+}
+
+// The selection, in the shape an edit request carries it. Derived and not
+// stored: the list owns "which rows are selected", the mask is what that means
+// in track numbers, and there is one function between the two rather than two
+// copies of the same truth kept in step by hand.
+static u32 app_device_sync_selection(void) {
+    for (u32 i = 0; i < NETMD_MASK_WORDS; i += 1) { app_device.selection[i] = 0; }
+    u32 count = 0;
+    for (u32 row = 0; row < app_disc_row_count; row += 1) {
+        if (!ui_list_selected(&app_device.track_list, row)) { continue; }
+        u32 track = app_disc_row_track(row);
+        if (track == NETMD_TRACK_MAX) { continue; }
+        netmd_mask_set(app_device.selection, track);
+        count += 1;
+    }
+    // A group header stands for the tracks under it, folded or not: selecting
+    // the header and pressing Delete erases the group's tracks.
+    for (u32 row = 0; row < app_disc_row_count && count == 0; row += 1) {
+        if (!ui_list_selected(&app_device.track_list, row)) { continue; }
+        if (app_disc_rows_buffer[row].track != APP_DISC_ROW_HEADER) { continue; }
+        const DiscLayout *disc = netmd_device_disc(&app_device.thread);
+        if (!disc) { break; }
+        const NetmdGroup *group = &disc->groups[app_disc_rows_buffer[row].group];
+        for (u32 i = 0; i < group->count; i += 1) {
+            u32 track = (u32)group->first + i;
+            if (track >= disc->track_count) { break; }
+            netmd_mask_set(app_device.selection, track);
+            count += 1;
+        }
+    }
+    app_device.cursor = app_disc_row_track(app_device.track_list.cursor);
+    return count;
+}
 
 static u32 app_device_selected_count(void) {
     return netmd_mask_count(app_device.selection, NETMD_TRACK_MAX);
-}
-
-static void app_device_select_only(u32 track) {
-    app_device_clear_selection();
-    netmd_mask_set(app_device.selection, track);
-    app_device.cursor = track;
-}
-
-static void app_device_select_toggle(u32 track) {
-    app_device.selection[track >> 5] ^= 1u << (track & 31u);
-    app_device.cursor = track;
 }
 
 static String8 app_device_name(void) {
@@ -95,6 +178,7 @@ static String8 app_device_name(void) {
 }
 
 void app_device_init(void) {
+    ui_list_init(&app_device.track_list, app_device.rows_selection, APP_DISC_ROW_WORDS);
     // "--netmd-trace <file>": every control and bulk exchange of the session,
     // written in the format netmd_replay.c reads back. It is how the fixtures
     // under tests/netmd are meant to be captured, so it has to be reachable
@@ -226,11 +310,27 @@ void app_device_tick(void) {
 }
 
 
+// --- one state, two readers (T-071) -------------------------------------------
+// The header line and the body used to decide separately, out of the same enum
+// but with two different sets of ifs: on 2026-09-07 the header said "pilote
+// manquant" over a body saying "utilise par une autre application". Now they
+// both call this, and there is no second opinion to have.
+b32 app_burn_running(void);
+
+u32 app_device_panel_state(void) {
+    return netmd_panel_state(app_device.state, app_burn_running());
+}
+
 // The panel header line, right of the title.
 String8 app_device_subtitle(void) {
-    if (app_device.state == AppDeviceState_Connected) { return app_device_name(); }
-    if (app_device.state == AppDeviceState_None) { return app_str(Str_DeviceNone); }
-    return app_str(Str_DeviceNoDriver);
+    u32 panel = app_device_panel_state();
+    Str id = netmd_panel_header_string(panel);
+    if (id != Str_DevicePanelName) { return app_str(id); }
+    // The only header with a value in it: the device's own name, which is the
+    // shortest true thing that line can say once it is connected.
+    String8 name = app_device_name();
+    if (name.size == 0) { name = app_str(Str_DeviceUnknownModel); }
+    return str8f(ui_frame_arena(), app_str_c(id), name);
 }
 
 md_inline b32 app_device_connected(void) {
@@ -255,11 +355,6 @@ static void app_device_line(UI_FontStyle style, u32 color, String8 text) {
 // behind a dialog.
 static void app_device_driver_help(void) {
     const UI_Theme *theme = ui_theme();
-    app_device_line(UI_FontStyle_Emphasis, theme->fg_primary, app_str(Str_DeviceNoDriver));
-    String8 name = app_device_name();
-    if (name.size == 0) { name = app_str(Str_DeviceUnknownModel); }
-    app_device_line(UI_FontStyle_Caption, theme->fg_secondary,
-                    str8f(ui_frame_arena(), app_str_c(Str_DeviceNoDriverBody), name));
     ui_spacer(ui_px(ui_dp(theme->space[UI_Space_4]), 1.0f));
     app_device_line(UI_FontStyle_Caption, theme->fg_secondary, app_str(Str_DeviceStep1));
     app_device_line(UI_FontStyle_Caption, theme->fg_secondary, app_str(Str_DeviceStep2));
@@ -284,27 +379,29 @@ static void app_device_driver_help(void) {
 // What the Disc panel shows above the capacity readout.
 void app_device_status(void) {
     const UI_Theme *theme = ui_theme();
-    switch (app_device.state) {
-        case AppDeviceState_None: {
-            app_device_line(UI_FontStyle_Ui, theme->fg_muted, app_str(Str_DeviceNone));
-            app_device_line(UI_FontStyle_Caption, theme->fg_disabled,
-                            app_str(Str_DeviceNoneHint));
-        } break;
-        case AppDeviceState_NoDriver: app_device_driver_help(); break;
-        case AppDeviceState_InUse: {
-            app_device_line(UI_FontStyle_Ui, theme->fg_secondary, app_str(Str_DeviceInUse));
-        } break;
-        case AppDeviceState_Connected: {
-            app_device_line(UI_FontStyle_Emphasis, theme->fg_primary,
-                            str8f(ui_frame_arena(), app_str_c(Str_DeviceConnected),
-                                  app_device_name()));
-        } break;
-        default: {
-            app_device_line(UI_FontStyle_Ui, theme->fg_secondary,
-                            str8f(ui_frame_arena(), app_str_c(Str_DeviceError),
-                                  app_device.error));
-        } break;
+    u32 panel = app_device_panel_state();
+    Str body = netmd_panel_body_string(panel);
+    Str hint = netmd_panel_hint_string(panel);
+    b32 connected = (panel == NetmdPanel_Connected) || (panel == NetmdPanel_Burning);
+    u32 color = connected ? theme->fg_primary
+                          : ((panel == NetmdPanel_NoDevice) ? theme->fg_muted
+                                                            : theme->warning);
+    String8 name = app_device_name();
+    if (name.size == 0) { name = app_str(Str_DeviceUnknownModel); }
+    // Both lines take the device name if their format asks for one: the two
+    // strings that do (Str_DeviceConnected, Str_DeviceNoDriverBody) are the two
+    // that name the hardware, and neither of the others has a specifier.
+    app_device_line(connected ? UI_FontStyle_Emphasis : UI_FontStyle_Ui, color,
+                    str8f(ui_frame_arena(), app_str_c(body), name));
+    if (hint != Str_COUNT) {
+        app_device_line(UI_FontStyle_Caption, theme->fg_secondary,
+                        str8f(ui_frame_arena(), app_str_c(hint), name));
     }
+    if (panel == NetmdPanel_Unreachable) {
+        app_device_line(UI_FontStyle_Caption, theme->fg_disabled,
+                        str8f(ui_frame_arena(), app_str_c(Str_DeviceError), app_device.error));
+    }
+    if (panel == NetmdPanel_NoDriver) { app_device_driver_help(); }
     ui_spacer(ui_px(ui_dp(theme->space[UI_Space_8]), 1.0f));
     ui_separator();
 }
@@ -406,12 +503,12 @@ static void app_disc_transport_bar(void) {
             if (ui_button(str8f(ui_frame_arena(), "%S###dplay", app_str(Str_DiscPlay))).clicked) {
                 netmd_device_post(&app_device.thread, NetmdCmd_Play, 0);
             }
-            ui_spacer(ui_px(ui_dp(theme->space[UI_Space_4]), 1.0f));
+            ui_spacer(ui_px(ui_dp(APP_FOCUS_GAP_DP), 1.0f));
             if (ui_button(str8f(ui_frame_arena(), "%S###dpause", app_str(Str_DiscPause)))
                         .clicked) {
                 netmd_device_post(&app_device.thread, NetmdCmd_Pause, 0);
             }
-            ui_spacer(ui_px(ui_dp(theme->space[UI_Space_4]), 1.0f));
+            ui_spacer(ui_px(ui_dp(APP_FOCUS_GAP_DP), 1.0f));
             if (ui_button(str8f(ui_frame_arena(), "%S###dstop", app_str(Str_DiscStop))).clicked) {
                 netmd_device_post(&app_device.thread, NetmdCmd_Stop, 0);
             }
@@ -419,7 +516,7 @@ static void app_disc_transport_bar(void) {
             if (ui_button(str8f(ui_frame_arena(), "%S###dprev", app_str(Str_DiscPrev))).clicked) {
                 netmd_device_post(&app_device.thread, NetmdCmd_Prev, 0);
             }
-            ui_spacer(ui_px(ui_dp(theme->space[UI_Space_4]), 1.0f));
+            ui_spacer(ui_px(ui_dp(APP_FOCUS_GAP_DP), 1.0f));
             if (ui_button(str8f(ui_frame_arena(), "%S###dnext", app_str(Str_DiscNext))).clicked) {
                 netmd_device_post(&app_device.thread, NetmdCmd_Next, 0);
             }
@@ -437,7 +534,7 @@ static void app_disc_transport_bar(void) {
                 netmd_device_post(&app_device.thread, NetmdCmd_ReadDisc, 0);
             }
             ui_tooltip(app_str(Str_DiscRefreshHint));
-            ui_spacer(ui_px(ui_dp(theme->space[UI_Space_4]), 1.0f));
+            ui_spacer(ui_px(ui_dp(APP_FOCUS_GAP_DP), 1.0f));
             if (ui_button(str8f(ui_frame_arena(), "%S###deject", app_str(Str_DiscEject)))
                         .clicked) {
                 netmd_device_post(&app_device.thread, NetmdCmd_Eject, 0);
@@ -540,7 +637,7 @@ static String8 app_device_edit_verb(void) {
 }
 
 static void app_device_edit_keys(const DiscLayout *disc) {
-    if (ui_focus_key() != app_device.rows_key || ui_popup_active()) { return; }
+    if (!app_device.track_list.focused || ui_popup_active()) { return; }
     for (u32 i = 0; i < ui_key_event_count(); i += 1) {
         UI_KeyEvent event = ui_key_event(i);
         b32 ctrl = (event.modifiers & OsMod_Ctrl) != 0;
@@ -583,14 +680,14 @@ static void app_device_edit_bar(const DiscLayout *disc) {
                 app_device_rename_open(app_device.cursor);
             }
             ui_tooltip(app_str(Str_DiscEditRenameHint));
-            ui_spacer(ui_px(ui_dp(theme->space[UI_Space_4]), 1.0f));
+            ui_spacer(ui_px(ui_dp(APP_FOCUS_GAP_DP), 1.0f));
             if (ui_button(str8f(ui_frame_arena(), "%S###dgroupmake", app_str(Str_DiscEditGroup)))
                         .clicked) {
                 app_device_edit_prepare(NetmdEditKind_CreateGroup, 0, 0,
                                         app_str(Str_DiscEditNewGroup), app_device.selection);
             }
             ui_tooltip(app_str(Str_DiscEditGroupHint));
-            ui_spacer(ui_px(ui_dp(theme->space[UI_Space_4]), 1.0f));
+            ui_spacer(ui_px(ui_dp(APP_FOCUS_GAP_DP), 1.0f));
             if (ui_button(str8f(ui_frame_arena(), "%S###dungroup", app_str(Str_DiscEditUngroup)))
                         .clicked &&
                 app_device.cursor < disc->track_count &&
@@ -599,7 +696,7 @@ static void app_device_edit_bar(const DiscLayout *disc) {
                                         disc->tracks[app_device.cursor].group, 0, str8(0, 0), 0);
             }
             ui_tooltip(app_str(Str_DiscEditUngroupHint));
-            ui_spacer(ui_px(ui_dp(theme->space[UI_Space_4]), 1.0f));
+            ui_spacer(ui_px(ui_dp(APP_FOCUS_GAP_DP), 1.0f));
             if (ui_button(str8f(ui_frame_arena(), "%S###derase", app_str(Str_DiscEditErase)))
                         .clicked) {
                 app_device_edit_prepare(NetmdEditKind_EraseTracks, 0, 0, str8(0, 0),
@@ -633,6 +730,12 @@ static void app_device_confirm_panel(void) {
     app_device_line(UI_FontStyle_Caption, theme->fg_muted,
                     str8f(ui_frame_arena(), app_str_c(Str_DiscDiffWrites), app_disc_diff.writes));
     app_device_line(UI_FontStyle_Caption, theme->fg_muted, app_str(Str_DiscDiffBackup));
+    // P-014: not a refusal any more, but not silence either. The user is told
+    // exactly what the device is doing and that it may still say no.
+    if (app_disc_diff.written_here != 0) {
+        app_device_line(UI_FontStyle_Caption, theme->warning,
+                        app_str(Str_DiscWarnWrittenHere));
+    }
 
     UI_PrefWidth(ui_pct(1.0f, 0.0f))
     UI_PrefHeight(ui_px(ui_dp(theme->row_standard), 1.0f))
@@ -646,7 +749,7 @@ static void app_device_confirm_panel(void) {
                 netmd_device_post_edit(&app_device.thread, &app_device.pending);
                 app_device.confirm = 0;
             }
-            ui_spacer(ui_px(ui_dp(theme->space[UI_Space_4]), 1.0f));
+            ui_spacer(ui_px(ui_dp(APP_FOCUS_GAP_DP), 1.0f));
             if (ui_button(str8f(ui_frame_arena(), "%S###dcancel",
                                 app_str(Str_DiscConfirmCancel)))
                         .clicked) {
@@ -657,121 +760,153 @@ static void app_device_confirm_panel(void) {
     ui_separator();
 }
 
+// The mode badge of a disc track. It cannot be clicked - the mode of a track
+// already on the disc is a fact, not a setting - but it can be asked what it
+// means, which is the one thing it could not do before (T-071).
+static void app_disc_mode_badge(const NetmdTrack *track, u32 mode) {
+    const UI_Theme *theme = ui_theme();
+    UI_Box *badge = 0;
+    UI_PrefWidth(ui_px(ui_dp(34.0f), 1.0f))
+    UI_PrefHeight(ui_pct(1.0f, 1.0f)) {
+        UI_Box *cell = ui_build_box_from_key(0, 0);
+        UI_Parent(cell)
+        UI_Font(ui_font(UI_FontStyle_Caption))
+        UI_FixedX(ui_dp(2.0f))
+        UI_FixedY(round_f32((ui_dp(theme->row_compact) - ui_dp(15.0f)) * 0.5f))
+        UI_PrefWidth(ui_px(ui_dp(30.0f), 1.0f))
+        UI_PrefHeight(ui_px(ui_dp(15.0f), 1.0f))
+        UI_BgColor(theme->mode[mode])
+        UI_TextColor(theme->canvas)
+        UI_TextAlign(UI_TextAlign_Center)
+        UI_TextPadding(0.0f)
+        UI_CornerRadius(ui_dp(3.0f)) {
+            badge = ui_build_box(UI_FloatingX | UI_FloatingY | UI_DrawBackground | UI_DrawText |
+                                     UI_Clickable,
+                                 str8_lit("###dmode"));
+            badge->display_string = str8_cstr(app_mode_names[mode]);
+        }
+    }
+    // What the colour is worth in minutes: the clusters this track spends and
+    // the audio it carries, which is the difference the padding stands for.
+    u32 clusters = plan_clusters_for((u32)track->duration_ms, mode);
+    ui_tooltip_box(badge, str8f(ui_frame_arena(), app_str_c(Str_DiscModeTip),
+                                app_mode_names[mode],
+                                app_duration((u32)(plan_disc_ms(clusters) / 1000u)),
+                                app_duration((u32)(track->duration_ms / 1000u))));
+}
+
 static void app_disc_track_row(const DiscLayout *disc, u32 index, f32 indent) {
     const UI_Theme *theme = ui_theme();
     const NetmdTrack *track = &disc->tracks[index];
-    b32 selected = app_device_selected(index);
-    UI_Box *row = 0;
-    UI_PrefWidth(ui_pct(1.0f, 0.0f))
-    UI_PrefHeight(ui_px(ui_dp(theme->row_compact), 1.0f))
-    UI_BgColor(selected ? theme->row_selected : theme->surface)
-    UI_ChildLayoutAxis(Axis2_X) {
-        row = ui_build_box(UI_Clickable | (selected ? UI_DrawBackground : 0),
-                           str8f(ui_frame_arena(), "###dtrack%u", index));
-        UI_Parent(row) {
-            ui_spacer(ui_px(indent, 1.0f));
-            app_cell_number(ui_dp(24.0f), str8f(ui_frame_arena(), "%u", index + 1),
-                            theme->fg_muted);
-            // The mode badge, in the plan's own colours: SP here and SP there
-            // have to be the same green or the two panels cannot be compared.
-            u32 mode = app_disc_cap_mode(track);
-            UI_PrefWidth(ui_px(ui_dp(34.0f), 1.0f))
-            UI_PrefHeight(ui_pct(1.0f, 1.0f)) {
-                UI_Box *cell = ui_build_box_from_key(0, 0);
-                UI_Parent(cell)
-                UI_Font(ui_font(UI_FontStyle_Caption))
-                UI_FixedX(ui_dp(2.0f))
-                UI_FixedY(round_f32((ui_dp(theme->row_compact) - ui_dp(15.0f)) * 0.5f))
-                UI_PrefWidth(ui_px(ui_dp(30.0f), 1.0f))
-                UI_PrefHeight(ui_px(ui_dp(15.0f), 1.0f))
-                UI_BgColor(theme->mode[mode])
-                UI_TextColor(theme->canvas)
-                UI_TextAlign(UI_TextAlign_Center)
-                UI_TextPadding(0.0f)
-                UI_CornerRadius(ui_dp(3.0f)) {
-                    UI_Box *badge = ui_build_box_from_key(
-                            UI_FloatingX | UI_FloatingY | UI_DrawBackground | UI_DrawText, 0);
-                    badge->display_string = str8_cstr(app_mode_names[mode]);
+    ui_spacer(ui_px(indent, 1.0f));
+    app_cell_number(ui_dp(24.0f), str8f(ui_frame_arena(), "%u", index + 1), theme->fg_muted);
+    // The mode badge, in the plan's own colours: SP here and SP there have to
+    // be the same green or the two panels cannot be compared.
+    app_disc_mode_badge(track, app_disc_cap_mode(track));
+    if (app_device.rename_track == index + 1) {
+        // The inline editor takes the title cell whole; Enter commits, Escape
+        // puts back what was there - the plan panel's gesture, because a disc
+        // track and a plan entry are renamed the same way (T-032).
+        UI_PrefWidth(ui_pct(1.0f, 0.0f))
+        UI_PrefHeight(ui_pct(1.0f, 1.0f)) {
+            UI_Box *slot = ui_build_box_from_key(0, 0);
+            UI_Parent(slot) {
+                UI_Signal field = ui_text_input(&app_device.rename, str8_lit(""));
+                if (app_device.focus_editor) {
+                    ui_set_focus(field.box->key, 1);
+                    app_device.focus_editor = 0;
                 }
             }
-            if (app_device.rename_track == index + 1) {
-                // The inline editor takes the title cell whole; Enter commits,
-                // Escape puts back what was there - the plan panel's gesture,
-                // because a disc track and a plan entry are renamed the same
-                // way (T-032).
-                UI_PrefWidth(ui_pct(1.0f, 0.0f))
-                UI_PrefHeight(ui_pct(1.0f, 1.0f)) {
-                    UI_Box *slot = ui_build_box_from_key(0, 0);
-                    UI_Parent(slot) {
-                        UI_Signal field = ui_text_input(&app_device.rename, str8_lit(""));
-                        if (app_device.focus_editor) {
-                            ui_set_focus(field.box->key, 1);
-                            app_device.focus_editor = 0;
-                        }
-                    }
-                }
-            } else {
-                String8 title = str8((u8 *)track->title, track->title_size);
-                if (title.size == 0) { title = app_str(Str_DiscTrackUntitled); }
-                app_cell(ui_pct(1.0f, 0.0f), title,
-                         track->title_size ? theme->fg_primary : theme->fg_disabled, 0,
-                         UI_TextAlign_Left);
-            }
-            if (track->protect) {
-                app_cell(ui_px(ui_dp(theme->space[UI_Space_12]), 1.0f), str8_lit("\xE2\x9C\xB1"),
-                         theme->warning, 0, UI_TextAlign_Center);
-                ui_tooltip(app_str(Str_DiscTrackProtected));
-            }
-            app_cell_number(ui_dp(48.0f), app_duration((u32)(track->duration_ms / 1000u)),
-                            theme->fg_secondary);
+        }
+    } else {
+        String8 title = str8((u8 *)track->title, track->title_size);
+        // "(sans titre)" is not a title: it is the absence of one, said in
+        // words. Muted italic, so a glance tells it apart from a track someone
+        // actually called that (research/02 s11.3).
+        b32 untitled = (title.size == 0);
+        if (untitled) { title = app_str(Str_DiscTrackUntitled); }
+        UI_Font(ui_font(untitled ? UI_FontStyle_Italic : UI_FontStyle_Ui)) {
+            app_cell(ui_pct(1.0f, 0.0f), title,
+                     untitled ? theme->fg_disabled : theme->fg_primary, 0, UI_TextAlign_Left);
         }
     }
-    if (app_device.rename_track != 0) { return; }
-    UI_Signal signal = ui_signal(row);
-    if (signal.hovering) { app_device.drag_to = index; }
-    if (signal.clicked) {
-        if (signal.press_modifiers & OsMod_Ctrl) {
-            app_device_select_toggle(index);
-        } else {
-            app_device_select_only(index);
-        }
-        ui_set_focus(app_device.rows_key, 0);
+    if (track->protect) {
+        // P-014: the same 0x03, two meanings. A track this session wrote gets
+        // the sentence that is true of it, not the one about SonicStage.
+        app_cell(ui_px(ui_dp(theme->space[UI_Space_12]), 1.0f), str8_lit("\xE2\x9C\xB1"),
+                 theme->warning, 0, UI_TextAlign_Center);
+        ui_tooltip(app_str(track->written_here ? Str_DiscTrackWrittenHere
+                                               : Str_DiscTrackProtected));
     }
-    if (signal.double_clicked) { app_device_rename_open(index); }
-    // A press that travels four pixels is a reorder, not a click (T-032).
-    if (signal.dragging && !app_device.drag && abs_f32(signal.drag_delta.y) > 4.0f) {
-        app_device.drag = 1;
-        app_device.drag_from = index;
-        app_device.drag_to = index;
-    }
+    app_cell_number(ui_dp(48.0f), app_duration((u32)(track->duration_ms / 1000u)),
+                    theme->fg_secondary);
 }
 
+// The group header, as a row of the list. The name and the count are two cells
+// and not one composed string: a long group name has to be the thing that gets
+// the ellipsis, and a count of tracks that is cut off tells the user nothing at
+// all (T-071).
 static void app_disc_group_row(const DiscLayout *disc, u32 group) {
     const UI_Theme *theme = ui_theme();
     const NetmdGroup *info = &disc->groups[group];
     b32 collapsed = (app_device.group_collapsed & (1u << group)) != 0;
-    UI_Box *header = 0;
-    UI_PrefWidth(ui_pct(1.0f, 0.0f))
-    UI_PrefHeight(ui_px(ui_dp(theme->row_compact), 1.0f))
-    UI_ChildLayoutAxis(Axis2_X) {
-        header = ui_build_box(UI_Clickable,
-                              str8f(ui_frame_arena(), "###dgroup%u", group));
-        UI_Parent(header) {
-            ui_spacer(ui_px(ui_dp(theme->space[UI_Space_8]), 1.0f));
-            app_cell(ui_px(ui_dp(theme->space[UI_Space_12]), 1.0f),
-                     collapsed ? str8_lit("\xE2\x80\xBA") : str8_lit("\xE2\x8C\x84"),
-                     theme->fg_muted, 0, UI_TextAlign_Center);
-            String8 name = str8((u8 *)info->name, info->name_size);
-            app_cell(ui_pct(1.0f, 0.0f), name, theme->fg_primary, 0, UI_TextAlign_Left);
-            app_cell_number(ui_dp(32.0f), str8f(ui_frame_arena(), "%u", info->count),
-                            theme->fg_muted);
-        }
+    ui_spacer(ui_px(ui_dp(theme->space[UI_Space_8]), 1.0f));
+    UI_Box *chevron = 0;
+    UI_PrefWidth(ui_px(ui_dp(theme->space[UI_Space_16]), 1.0f))
+    UI_PrefHeight(ui_pct(1.0f, 1.0f))
+    UI_TextColor(theme->fg_muted)
+    UI_TextAlign(UI_TextAlign_Center)
+    UI_TextPadding(0.0f) {
+        chevron = ui_build_box(UI_Clickable | UI_DrawText,
+                               str8f(ui_frame_arena(), "###dfold%u", group));
+        chevron->display_string = collapsed ? str8_lit("\xE2\x80\xBA") : str8_lit("\xE2\x8C\x84");
     }
-    if (ui_signal(header).clicked) { app_device.group_collapsed ^= (1u << group); }
-    if (collapsed) { return; }
-    for (u32 i = 0; i < info->count; i += 1) {
-        app_disc_track_row(disc, (u32)info->first + i, ui_dp(theme->space[UI_Space_12]));
+    if (ui_signal(chevron).clicked) {
+        app_device.group_collapsed ^= (1u << group);
+        // The rows below shift: a selection over them would no longer mean the
+        // same tracks.
+        app_device_clear_selection();
     }
+    String8 name = str8((u8 *)info->name, info->name_size);
+    b32 unnamed = (name.size == 0);
+    if (unnamed) { name = app_str(Str_DiscUntitled); }
+    UI_Font(ui_font(unnamed ? UI_FontStyle_Italic : UI_FontStyle_Ui)) {
+        app_cell(ui_pct(1.0f, 0.0f), name, unnamed ? theme->fg_disabled : theme->fg_primary, 0,
+                 UI_TextAlign_Left);
+    }
+    app_cell_number(ui_dp(48.0f), str8f(ui_frame_arena(), "%u", info->count), theme->fg_muted);
+}
+
+// --- the drag that reorders, with the plan list's conventions (T-071) ---------
+
+static u32 app_disc_drop_gap(f32 mouse_y) {
+    UI_List *list = &app_device.track_list;
+    if (!list->viewport || list->row_height <= 0.0f) { return 0; }
+    f32 local = mouse_y - list->viewport->rect.min.y + list->scroll;
+    i64 gap = (i64)round_f32(local / list->row_height);
+    if (gap < 0) { gap = 0; }
+    if (gap > (i64)app_disc_row_count) { gap = (i64)app_disc_row_count; }
+    return (u32)gap;
+}
+
+static void app_disc_autoscroll(f32 mouse_y) {
+    UI_List *list = &app_device.track_list;
+    if (!list->viewport) { return; }
+    f32 top = list->viewport->rect.min.y;
+    f32 bottom = list->viewport->rect.max.y;
+    f32 delta = 0.0f;
+    if (mouse_y < top + APP_DISC_AUTOSCROLL_EDGE_PX) {
+        delta = -(APP_DISC_AUTOSCROLL_EDGE_PX - (mouse_y - top));
+    } else if (mouse_y > bottom - APP_DISC_AUTOSCROLL_EDGE_PX) {
+        delta = APP_DISC_AUTOSCROLL_EDGE_PX - (bottom - mouse_y);
+    }
+    if (delta == 0.0f) { return; }
+    f32 speed = clamp_f32(delta / APP_DISC_AUTOSCROLL_EDGE_PX, -1.0f, 1.0f);
+    f32 content = (f32)list->row_count * list->row_height;
+    f32 max_scroll = max_f32(content - list->view_height, 0.0f);
+    list->scroll = clamp_f32(list->scroll + speed * APP_DISC_AUTOSCROLL_SPEED * ui_dt(), 0.0f,
+                             max_scroll);
+    ui_request_animation();
 }
 
 // --- the burn ---------------------------------------------------------------
@@ -859,6 +994,12 @@ void app_device_disc_panel(void) {
                         app_str(Str_DiscTocDirtyHint));
     }
 
+    // The rows the list will show, and what the selection over them means in
+    // track numbers: both are derived from the layout, once, at the top of the
+    // frame (T-071).
+    app_disc_rows_build(disc);
+    app_device_sync_selection();
+
     app_disc_build_capacity(disc, &app_disc_capacity);
     ui_spacer(ui_px(ui_dp(theme->space[UI_Space_4]), 1.0f));
     app_disc_gauge(&app_disc_capacity);
@@ -886,36 +1027,69 @@ void app_device_disc_panel(void) {
                               app_device.last_writes));
     }
 
-    // One keyed box around the rows: it is what the keyboard is routed to, so
-    // F2, Delete and Ctrl+G only fire when the disc list is the thing in hand.
-    UI_PrefWidth(ui_pct(1.0f, 0.0f))
-    UI_PrefHeight(ui_children_sum(1.0f))
-    UI_ChildLayoutAxis(Axis2_Y) {
-        UI_Box *rows = ui_build_box(UI_Clickable, str8_lit("###discrows"));
-        app_device.rows_key = rows->key;
-        UI_Parent(rows) {
-            // s3.10: tracks in no group come first, then each group in TOC order.
-            if (disc->ungrouped_count != 0 && disc->group_count != 0) {
-                app_device_line(UI_FontStyle_Caption, theme->fg_muted,
-                                app_str(Str_DiscUngrouped));
-            }
-            for (u32 i = 0; i < disc->track_count; i += 1) {
-                if (disc->tracks[i].group == NETMD_NO_GROUP) {
-                    app_disc_track_row(disc, i, 0.0f);
-                }
-            }
-            for (u32 group = 0; group < disc->group_count; group += 1) {
-                app_disc_group_row(disc, group);
+    // s3.10: tracks in no group come first, then each group in TOC order. The
+    // label sits above the list and not in it, so every row of the list is one
+    // row high and the virtualization arithmetic stays a division.
+    if (disc->ungrouped_count != 0 && disc->group_count != 0) {
+        app_device_line(UI_FontStyle_Caption, theme->fg_muted, app_str(Str_DiscUngrouped));
+    }
+
+    // The list (T-071). Same conventions as the plan's: the wheel scrolls it,
+    // the arrows move a cursor, only the visible rows become boxes, and a drag
+    // near an edge scrolls under the pointer.
+    UI_List *list = &app_device.track_list;
+    ui_list_begin(list, app_disc_row_count, ui_dp(theme->row_compact));
+    UI_ListEachRow(list, row) {
+        UI_Signal signal = ui_list_row_begin(list, row);
+        u32 track = app_disc_row_track(row);
+        if (track == NETMD_TRACK_MAX) {
+            app_disc_group_row(disc, app_disc_rows_buffer[row].group);
+        } else {
+            f32 indent = (app_disc_rows_buffer[row].group != NETMD_NO_GROUP)
+                             ? ui_dp(theme->space[UI_Space_12])
+                             : 0.0f;
+            app_disc_track_row(disc, track, indent);
+        }
+        ui_list_row_end(list);
+        if (signal.dragging && !app_device.drag && app_device.rename_track == 0 &&
+            abs_f32(signal.drag_delta.y) > APP_DISC_DRAG_THRESHOLD_PX) {
+            app_device.drag = 1;
+            app_device.drag_row = (u32)row;
+        }
+    }
+    if (app_device.drag) {
+        app_device.drag_pos = ui_mouse();
+        app_device.drag_target = app_disc_drop_gap(app_device.drag_pos.y);
+        app_disc_autoscroll(app_device.drag_pos.y);
+        UI_Parent(list->viewport) {
+            f32 y = (f32)app_device.drag_target * list->row_height - list->scroll;
+            UI_FixedX(0.0f)
+            UI_FixedY(y - 1.0f)
+            UI_PrefWidth(ui_px(rect_width(list->viewport->rect), 1.0f))
+            UI_PrefHeight(ui_px(ui_dp(2.0f), 1.0f))
+            UI_BgColor(theme->accent) {
+                ui_build_box_from_key(UI_FloatingX | UI_FloatingY | UI_DrawBackground, 0);
             }
         }
     }
+    ui_list_end(list);
+    // Enter on a row renames it, and a double click does the same (s8.8).
+    if (list->activated) {
+        u32 track = app_disc_row_track(list->activated_row);
+        if (track < disc->track_count) { app_device_rename_open(track); }
+    }
+
+    // The keyboard, after the list has had its own: the list owns the arrows
+    // and the selection, this owns the four gestures.
+    app_device_sync_selection();
     app_device_edit_keys(disc);
 
-    // The drop: the row the pointer was last over is the destination, and the
-    // move is proposed like every other edit - simulated, then confirmed.
+    // The drop: the gap the pointer is in is the destination, and the move is
+    // proposed like every other edit - simulated, then confirmed.
     if (app_device.drag && ui_active_key() == 0) {
-        u32 from = app_device.drag_from;
-        u32 to = app_device.drag_to;
+        u32 from = app_disc_row_track(app_device.drag_row);
+        u32 to = app_disc_row_track(plan_drop_index(app_device.drag_row,
+                                                    app_device.drag_target));
         app_device.drag = 0;
         if (from != to && from < disc->track_count && to < disc->track_count) {
             app_device_edit_prepare(NetmdEditKind_MoveTrack, from, to, str8(0, 0), 0);
@@ -931,7 +1105,7 @@ void app_device_disc_panel(void) {
         }
         if (enter || escape) {
             app_device_rename_commit(enter);
-            ui_set_focus(app_device.rows_key, 1);
+            if (list->viewport) { ui_set_focus(list->viewport->key, 1); }
         }
     }
 }

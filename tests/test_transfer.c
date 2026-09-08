@@ -756,6 +756,9 @@ static b32 test_burn_render(PipelineCache *cache, TestBurnTrack *track) {
 // belt and braces: str8_find of a needle in an empty haystack answers 0, so
 // without it every untitled track on the user's disc would look like ours - and
 // the erase below would take the eight tracks it exists to protect.
+// P-014 (T-071): set by the P-014 test so the run writes down what it commits.
+global NetmdWrittenSet *test_burn_written;
+
 static b32 test_burn_is_ours(const NetmdTrack *track) {
     String8 prefix = str8_lit(TEST_BURN_TITLE_PREFIX);
     String8 title = str8((u8 *)track->title, track->title_size);
@@ -790,6 +793,9 @@ static u32 test_burn_run(NetmdSession *session, Arena *arena, PipelineCache *cac
     plan->entries = entries;
     plan->count = count;
     plan->write_disc_title = 0;
+    // P-014: the set the run records every commit into. 0 for the T-043 test,
+    // which predates it and must keep behaving exactly as it did.
+    plan->written = test_burn_written;
     NetmdUploadState *state = push_struct_zero(arena, NetmdUploadState);
     u32 result = netmd_upload_run(session, arena, plan, state, 0, 0);
     for (u32 i = 0; i < count; i += 1) { pipeline_cache_read_end(&readers[i]); }
@@ -1053,6 +1059,177 @@ clean_up:
     arena_temp_end(scratch);
 }
 
+// --- P-014, on the device (T-071) ---------------------------------------------
+// `build\tests.exe --device-p014` burns ONE five second track titled
+// "MINIDISK TEST P014" in the free space of the disc, reads the disc back,
+// checks that the device reports it protected while our own bit says we wrote
+// it, and then erases it through the normal path: back up the TOC, simulate,
+// apply, read back. The eight tracks of the user are never in any mask, the
+// disc is never renamed and never erased.
+//
+// What it settles is exactly P-014's question: the 0x03 the device reports on a
+// freshly committed track is a TOC that has not left its RAM (s6.3) and not a
+// SonicStage checkout - and the erase the simulation used to refuse goes
+// through.
+TEST(transfer_device_p014) {
+    ArenaTemp scratch = arena_temp_begin(arena);
+    String8 command_line = os_command_line(arena);
+    if (str8_find(command_line, str8_lit("--device-p014"), 0) >= command_line.size) {
+        test_report("    skipped (pass --device-p014 to run it on the real device)\n");
+        arena_temp_end(scratch);
+        return;
+    }
+
+    OsUsbDeviceList list = os_usb_enumerate(arena);
+    OsUsbDeviceInfo *found = 0;
+    for (u64 i = 0; i < list.count; i += 1) {
+        if (netmd_model_lookup(list.items[i].vid, list.items[i].pid) &&
+            list.items[i].state == OsUsbState_Ready) {
+            found = &list.items[i];
+            break;
+        }
+    }
+    EXPECT(found != 0);
+    if (!found) {
+        test_report("    no NetMD with a WinUSB driver bound\n");
+        arena_temp_end(scratch);
+        return;
+    }
+    OsUsb usb = os_usb_open(found->path);
+    EXPECT(os_usb_is_open(usb));
+    if (!os_usb_is_open(usb)) {
+        arena_temp_end(scratch);
+        return;
+    }
+    UsbTransport raw;
+    os_usb_transport(usb, &raw);
+    Arena *trace_arena = arena_alloc(GB(2));
+    NetmdTrace *trace = push_struct_zero(trace_arena, NetmdTrace);
+    netmd_trace_init(trace, trace_arena, &raw);
+    UsbTransport transport;
+    netmd_trace_transport(trace, &transport);
+    NetmdSession session;
+    netmd_session_init(&session, &transport, found->vid, found->pid);
+
+    DiscLayout *before = push_struct_zero(arena, DiscLayout);
+    EXPECT(netmd_read_disc(&session, arena, before) == NetmdResult_Ok);
+    u32 original_count = 0;
+    for (u32 i = 0; i < before->track_count; i += 1) {
+        if (!test_burn_is_ours(&before->tracks[i])) { original_count += 1; }
+    }
+    b32 writable = (before->flags & NetmdDiscFlag_Present) != 0 &&
+                   (before->flags & NetmdDiscFlag_Writable) != 0 &&
+                   (before->flags & NetmdDiscFlag_WriteProtected) == 0;
+    test_report("    disc \"%S\": %u track(s), %u of them the user's, %u s free\n",
+                str8((u8 *)before->title, before->title_size), before->track_count,
+                original_count, (u32)(before->capacity.available.ms / 1000u));
+    EXPECT(writable);
+    // The free space has to be free space: this test writes one 5 s track and
+    // nothing else, and a disc with no room is a disc it must not touch.
+    EXPECT(before->capacity.available.ms > 60000ull);
+    if (!writable || before->capacity.available.ms <= 60000ull) {
+        os_usb_close(usb);
+        arena_temp_end(scratch);
+        return;
+    }
+
+    String8 root = test_transfer_cache_dir(arena, "minidisk-t071-p014");
+    PipelineCache *cache = push_struct(arena, PipelineCache);
+    pipeline_cache_init(cache, arena, root, MB(64));
+    TestBurnTrack track;
+    StructZero(&track);
+    track.seconds = 5;
+    track.path = str8f(arena, "%S\\minidisk-p014.wav", root);
+    track.title = str8_lit(TEST_BURN_TITLE_PREFIX " P014");
+    EXPECT(test_burn_write_wav(arena, track.path, track.seconds));
+    PipelineConfig config;
+    pipeline_config_defaults(&config);
+    config.format = PIPELINE_FORMAT_SP_BE;
+    track.key = pipeline_cache_key_of(track.path, &config);
+    EXPECT(test_burn_render(cache, &track));
+
+    NetmdWrittenSet *written = push_struct_zero(arena, NetmdWrittenSet);
+    netmd_written_reset(written);
+    test_burn_written = written;
+    DiscLayout *after_burn = push_struct_zero(arena, DiscLayout);
+    u32 result = test_burn_run(&session, arena, cache, &track, 1, after_burn);
+    test_burn_written = 0;
+    EXPECT(result == NetmdResult_Ok);
+    EXPECT(written->count == 1);
+    if (result != NetmdResult_Ok) {
+        os_usb_close(usb);
+        arena_temp_end(scratch);
+        return;
+    }
+
+    // The re-match, on the layout the device just handed back. This is what
+    // netmd_device.c does after every read.
+    u32 matched = netmd_written_apply(written, after_burn);
+    u32 ours = NETMD_TRACK_MAX;
+    for (u32 i = 0; i < after_burn->track_count; i += 1) {
+        if (test_burn_is_ours(&after_burn->tracks[i])) { ours = i; }
+    }
+    EXPECT(matched == 1);
+    EXPECT(ours != NETMD_TRACK_MAX);
+    EXPECT(after_burn->track_count == original_count + 1);
+    if (ours == NETMD_TRACK_MAX) {
+        os_usb_close(usb);
+        arena_temp_end(scratch);
+        return;
+    }
+    test_report("    written track %u: protect %u, written_here %u, %u frames\n", ours,
+                after_burn->tracks[ours].protect, after_burn->tracks[ours].written_here,
+                after_burn->tracks[ours].frames);
+    EXPECT(after_burn->tracks[ours].written_here == 1);
+    // The user's tracks carry neither bit: the re-match claimed one track only.
+    for (u32 i = 0; i < after_burn->track_count; i += 1) {
+        if (i != ours) { EXPECT(after_burn->tracks[i].written_here == 0); }
+    }
+
+    // The erase, through T-022's path and nothing else.
+    String8 backup_path = str8(0, 0);
+    EXPECT(netmd_backup_write(arena, netmd_backup_dir(arena), after_burn, &backup_path));
+    test_report("    TOC backed up to %S\n", backup_path);
+    NetmdEditRequest *request = push_struct_zero(arena, NetmdEditRequest);
+    request->kind = NetmdEditKind_EraseTracks;
+    netmd_mask_set(request->mask, ours);
+    DiscLayout *after_edit = push_struct_zero(arena, DiscLayout);
+    DiscDiff *diff = push_struct_zero(arena, DiscDiff);
+    netmd_edit_simulate(after_burn, request, after_edit, diff);
+    test_report("    simulation: allowed %u, refusal %u, written_here %u, %u -> %u track(s)\n",
+                (u32)diff->allowed, diff->refusal, diff->written_here, diff->tracks_before,
+                diff->tracks_after);
+    // The whole point: allowed, with a warning, where T-043 got refusal 3.
+    EXPECT(diff->allowed);
+    EXPECT(diff->written_here == (u32)(after_burn->tracks[ours].protect ? 1u : 0u));
+    if (diff->allowed) {
+        u32 writes = 0;
+        u32 applied = netmd_edit_apply(&session, arena, after_edit, request, &writes);
+        test_report("    erase track %u: result %u, %u write(s)\n", ours, applied, writes);
+        os_sleep_us(2000000u);
+    }
+
+    DiscLayout *final_disc = push_struct_zero(arena, DiscLayout);
+    EXPECT(netmd_read_disc(&session, arena, final_disc) == NetmdResult_Ok);
+    u32 left = 0;
+    for (u32 i = 0; i < final_disc->track_count; i += 1) {
+        if (test_burn_is_ours(&final_disc->tracks[i])) { left += 1; }
+    }
+    test_report("    after clean up: %u track(s), %u s free, disc title \"%S\"\n",
+                final_disc->track_count, (u32)(final_disc->capacity.available.ms / 1000u),
+                str8((u8 *)final_disc->title, final_disc->title_size));
+    EXPECT(left == 0);
+    EXPECT(final_disc->track_count == original_count);
+    EXPECT(str8_eq(str8((u8 *)final_disc->title, final_disc->title_size),
+                   str8((u8 *)before->title, before->title_size)));
+
+    os_dir_create(str8_lit("tests/netmd/real"));
+    EXPECT(netmd_trace_write(trace, str8_lit("tests/netmd/real/t071_device_p014.trace")));
+    arena_release(trace_arena);
+    os_usb_close(usb);
+    arena_temp_end(scratch);
+}
+
 // Non regression, and the reason it exists: the first run of the device test
 // reported "9 tracks, 0 of them the user's" on a disc of eight untitled tracks,
 // because str8_find of a needle in an empty haystack answers 0. The erase mask
@@ -1096,4 +1273,5 @@ static void test_transfer_run_all(void) {
     RUN(transfer_log_is_bounded);
     RUN(transfer_burn_title_guard);
     RUN(transfer_device_burn);
+    RUN(transfer_device_p014);
 }

@@ -65,9 +65,45 @@ typedef struct NetmdUploadEntry {
 // A plan whose entries already carry their audio leaves this null.
 typedef b32 NetmdUploadPrepareFn(void *user, NetmdUploadEntry *entry, u32 index);
 
+// --- P-014: the tracks this session wrote -------------------------------------
+// A track committed a moment ago reads back with `protect` set, because the TOC
+// is still in the device's RAM (s6.3) - the same 0x03 SonicStage uses for a
+// checked out track. The device cannot tell the two apart for us, so we
+// remember what we wrote and say so ourselves.
+//
+// The re-match is not by index. A rename, a move or an erase renumbers the disc
+// between two reads, and an index that has drifted would mark somebody else's
+// track. What identifies a track across a re-read is what a re-read reports
+// about it: its length to the frame and its title. The position is kept as a
+// hint, so the common case - nothing moved - matches on the first candidate.
+#define NETMD_WRITTEN_MAX 64
+
+typedef struct NetmdWrittenTrack {
+    u32 position;    // where it was last seen, a hint and nothing more
+    u32 frames;      // 0 until the first read back resolves it
+    u32 title_size;
+    u8 title[NETMD_TITLE_MAX];
+} NetmdWrittenTrack;
+
+typedef struct NetmdWrittenSet {
+    u32 count;
+    NetmdWrittenTrack tracks[NETMD_WRITTEN_MAX];
+} NetmdWrittenSet;
+
+void netmd_written_reset(NetmdWrittenSet *set);
+// Called at commitTrack, with the number the device assigned. The length is not
+// known here to the frame - the device rounds it up to a whole cluster - so it
+// is left at 0 and taken from the first read back.
+void netmd_written_add(NetmdWrittenSet *set, u32 position, String8 title);
+// Marks `written_here` on every track of `layout` the set recognizes, and
+// updates the set with where each one is now. Returns how many were matched.
+u32 netmd_written_apply(NetmdWrittenSet *set, DiscLayout *layout);
+
 typedef struct NetmdUploadPlan {
     NetmdUploadEntry *entries;
     u32 count;
+    // P-014. 0 when the caller does not care: the replay tests do not.
+    NetmdWrittenSet *written;
     NetmdUploadPrepareFn *prepare;
     void *prepare_user;
     // The compiled disc title, group syntax included - plan_toc_compile_disc_title

@@ -619,6 +619,109 @@ TEST(netmd_edit_real_capture) {
     EXPECT(diff->cells_after <= PLAN_TOC_CELLS);
 }
 
+// --- P-014 (T-071) ------------------------------------------------------------
+
+// A track this session wrote is found again after a re-read by what a re-read
+// reports about it - its length to the frame and its title - and not by its
+// index, which a move or an erase renumbers. The disc below is read three
+// times: once to resolve the length, once with the track moved, once with a
+// decoy carrying the same title at another length.
+TEST(netmd_written_rematch_survives_a_move) {
+    DiscLayout *disc = test_edit_disc(arena, 4);
+    for (u32 i = 0; i < 4; i += 1) {
+        test_edit_set_text(disc->tracks[i].title, &disc->tracks[i].title_size, NETMD_TITLE_MAX,
+                           str8_lit("Autre"));
+    }
+    test_edit_set_text(disc->tracks[2].title, &disc->tracks[2].title_size, NETMD_TITLE_MAX,
+                       str8_lit("MINIDISK TEST P014"));
+    disc->tracks[2].frames = 137 * NETMD_FRAMES_PER_SECOND;
+
+    NetmdWrittenSet *set = push_struct_zero(arena, NetmdWrittenSet);
+    netmd_written_reset(set);
+    // What netmd_upload does at commitTrack: the number the device gave back
+    // and the title it wrote. The length is not known there - the device
+    // rounded it up to a whole cluster - so it stays 0.
+    netmd_written_add(set, 2, str8_lit("MINIDISK TEST P014"));
+    EXPECT(set->count == 1 && set->tracks[0].frames == 0);
+
+    EXPECT(netmd_written_apply(set, disc) == 1);
+    EXPECT(disc->tracks[2].written_here == 1);
+    EXPECT(disc->tracks[0].written_here == 0 && disc->tracks[3].written_here == 0);
+    // The first read back is where the real length comes from.
+    EXPECT(set->tracks[0].frames == 137 * NETMD_FRAMES_PER_SECOND);
+
+    // Second read: the same disc with our track moved from 2 to 0. An index
+    // would now point at somebody else's track.
+    NetmdTrack carried = disc->tracks[2];
+    DiscLayout *moved = push_struct_zero(arena, DiscLayout);
+    mem_copy(moved, disc, sizeof(DiscLayout));
+    mem_copy(&moved->tracks[1], &disc->tracks[0], sizeof(NetmdTrack));
+    mem_copy(&moved->tracks[2], &disc->tracks[1], sizeof(NetmdTrack));
+    mem_copy(&moved->tracks[0], &carried, sizeof(NetmdTrack));
+    for (u32 i = 0; i < 4; i += 1) { moved->tracks[i].written_here = 0; }
+    EXPECT(netmd_written_apply(set, moved) == 1);
+    EXPECT(moved->tracks[0].written_here == 1);
+    EXPECT(moved->tracks[1].written_here == 0 && moved->tracks[2].written_here == 0);
+    EXPECT(set->tracks[0].position == 0);
+
+    // Third read: a decoy with the very same title at another length. Title
+    // alone would claim it; title *and* length do not.
+    DiscLayout *decoy = push_struct_zero(arena, DiscLayout);
+    mem_copy(decoy, moved, sizeof(DiscLayout));
+    decoy->tracks[0].frames = 90 * NETMD_FRAMES_PER_SECOND;
+    mem_copy(&decoy->tracks[3], &carried, sizeof(NetmdTrack));
+    for (u32 i = 0; i < 4; i += 1) { decoy->tracks[i].written_here = 0; }
+    EXPECT(netmd_written_apply(set, decoy) == 1);
+    EXPECT(decoy->tracks[0].written_here == 0);
+    EXPECT(decoy->tracks[3].written_here == 1);
+
+    // A disc that no longer holds it matches nothing, and says so rather than
+    // marking whatever happens to sit at the old index.
+    DiscLayout *erased = test_edit_disc(arena, 2);
+    EXPECT(netmd_written_apply(set, erased) == 0);
+    EXPECT(erased->tracks[0].written_here == 0 && erased->tracks[1].written_here == 0);
+}
+
+// The refusal of s7.5 becomes a warning for a track we wrote ourselves, and
+// stays a refusal for one we did not. That is the whole of P-014's fix in the
+// simulation: the erase is attempted, and the device is left to answer.
+TEST(netmd_edit_warns_on_a_track_we_just_wrote) {
+    DiscLayout *disc = test_edit_disc(arena, 4);
+    DiscLayout *after = push_struct_zero(arena, DiscLayout);
+    DiscDiff *diff = push_struct(arena, DiscDiff);
+
+    // A track SonicStage really did check out: refused, with no USB at all.
+    disc->tracks[1].protect = 1;
+    NetmdEditRequest *erase = test_edit_request(arena, NetmdEditKind_EraseTracks, 0, str8(0, 0));
+    netmd_mask_set(erase->mask, 1);
+    netmd_edit_simulate(disc, erase, after, diff);
+    EXPECT(!diff->allowed && diff->refusal == NetmdEditRefusal_TrackProtected);
+    EXPECT(diff->written_here == 0);
+
+    // The same 0x03 on a track this session wrote: allowed, counted, warned.
+    disc->tracks[1].written_here = 1;
+    netmd_edit_simulate(disc, erase, after, diff);
+    EXPECT(diff->allowed && diff->refusal == NetmdEditRefusal_None);
+    EXPECT(diff->written_here == 1);
+    EXPECT(diff->changed == 1 && diff->tracks_after == 3);
+
+    // Two of ours and one of SonicStage's: the one that is not ours still
+    // refuses the whole edit, because erasing it would fail halfway through.
+    disc->tracks[2].protect = 1;
+    disc->tracks[2].written_here = 1;
+    disc->tracks[3].protect = 1;
+    netmd_mask_set(erase->mask, 2);
+    netmd_mask_set(erase->mask, 3);
+    netmd_edit_simulate(disc, erase, after, diff);
+    EXPECT(!diff->allowed && diff->refusal == NetmdEditRefusal_TrackProtected);
+
+    // Without it, three of ours go through in one gesture.
+    disc->tracks[3].written_here = 1;
+    netmd_edit_simulate(disc, erase, after, diff);
+    EXPECT(diff->allowed && diff->written_here == 3);
+    EXPECT(diff->changed == 3 && diff->tracks_after == 1);
+}
+
 static void test_netmd_edit_run_all(void) {
     RUN(netmd_edit_sjis);
     RUN(netmd_edit_simulate_rename);
@@ -636,4 +739,6 @@ static void test_netmd_edit_run_all(void) {
     RUN(netmd_edit_replay_erase_disc);
     RUN(netmd_edit_device_session);
     RUN(netmd_edit_real_capture);
+    RUN(netmd_written_rematch_survives_a_move);
+    RUN(netmd_edit_warns_on_a_track_we_just_wrote);
 }
