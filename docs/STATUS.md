@@ -73,6 +73,10 @@ Dernière mise à jour : 2026-09-08
   Après T-071 et T-073 : **662 016 o** en local, mais **677 376 o sur le runner CI** (MSVC plus récent, +15 KB
   sur le même source : à mesurer par module avec `build.bat map` sur le runner) → `SIZE_BUDGET_KB` **690**
   pour que la CI mesure la version du runner, pas la nôtre. Le budget se lit désormais « taille CI ».
+  **Levier `/Os` sur le code tiers tranché** (banc machine au repos, budgets armés, après le merge de T-075) :
+  décodeurs à `/O2 /Os` contre `/O2` — wav 2 191× vs 2 179×, flac 1 047× vs 1 004×, mp3 920× vs 904×,
+  ogg 517× vs 502× temps réel (bruit, aucune perte) pour **−36 352 o** : exe local **662 016 → 625 664 o**.
+  `MD_TP_OPT` vaut `/O2 /Os` par défaut dans `build.bat` ; le budget CI reste 690 (marge pour T-074).
 - **T-071 — cohérence UI et défauts des phases 3-5** (worktree `t071`, 2026-09-08) :
   - **Un seul état pour le panneau Disque** (`src/app/device_panel.h`) : `NetmdPanelState` calculé une
     fois, lu par le sous-titre d'en-tête **et** par le corps. L'incohérence du 2026-09-07 (« pilote

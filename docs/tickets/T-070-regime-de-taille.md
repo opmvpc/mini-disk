@@ -303,3 +303,8 @@ pour trancher les 36 864 octets du code tiers.
   `DR_FLAC_NO_CRC` (détection de corruption) refusés ; objectif de taille révisé à « < 630 KB, tendance à la baisse »,
   budget CI 630. Les 36 KB du code tiers en `/Os` restent à trancher sur un banc machine au repos (à faire avant le
   tag de phase 7). `tools/size_report.py` et `build.bat map` gardés comme outillage permanent.
+
+### Arbitrage `/Os` sur le tiers (lead, 2026-09-08, machine au repos)
+Banc avec budgets armés (dispersion 1,03) : `/O2 /Os` sur `third_party.c` + `third_party_vorbis.c` ne coûte
+rien de mesurable aux quatre décodeurs (écarts de +0,5 à +4 % en faveur de `/Os`, dans le bruit) et rend
+**36 352 o**. Levier **gardé** : `MD_TP_OPT=/O2 /Os` par défaut.

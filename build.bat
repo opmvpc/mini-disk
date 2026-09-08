@@ -38,7 +38,7 @@ REM  MD_REL_OPT / MD_TP_OPT : leviers de taille mesurables un par un (T-070).
 REM  Valeur par defaut = ce qui est livre ; on les surcharge dans l'environnement
 REM  le temps d'une mesure, jamais en CI.
 if not defined MD_REL_OPT set MD_REL_OPT=/O2
-if not defined MD_TP_OPT  set MD_TP_OPT=/O2
+if not defined MD_TP_OPT  set MD_TP_OPT=/O2 /Os
 set REL_CL=/DBUILD_DEBUG=0 /DBUILD_NO_CRT=1 %MD_REL_OPT% /Oi /Gy /Gw /GS- /Gs9999999 /GR- /EHa- /GL
 set DBG_CL=/DBUILD_DEBUG=1 /DBUILD_NO_CRT=0 /Od /MTd /fsanitize=address
 REM  /INCLUDE:codec_open a disparu (T-070) : il ancrait les decodeurs de T-040,

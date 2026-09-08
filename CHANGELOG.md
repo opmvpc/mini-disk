@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-### Phase 7 — Polish
+### Phase 7 — Polish (T-070..T-073, T-075), terminée — tag `v0.7.0-phase7`
 - **Polish visuel (T-075)** : les boutons ne sont plus collés les uns aux autres et ne sortent plus
   de leur panneau. Un bouton fait `control_h` (28 dp) et sa rangée `row_control` (36 dp), les
   rangées se replient sur une seconde ligne quand la place manque (`UI_Flow` dans `ui_core`, mesuré
