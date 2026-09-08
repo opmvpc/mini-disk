@@ -2,7 +2,7 @@
 
 Dernière mise à jour : 2026-09-07
 
-## Phase actuelle : phases 3 et 5 terminées (tags v0.3.0-phase3, v0.5.0-phase5) — prochaine : phase 6 (ATRAC3 / LP) ou 7 (polish), au choix de l'utilisateur
+## Phase actuelle : 7 · Polish — T-070 (taille), T-071 (cohérence UI), T-072 (prefs/thème clair/i18n), T-073 (robustesse) en parallèle
 ## Phase actuelle (historique) : 3 + 5 en parallèle — T-020, T-021, T-040, T-041 mergés dans main ; T-042 fait et **validé sur le vrai MZ-N505** (le pilote WinUSB est lié, P-001 levé), T-022 en cours
 
 ### Fait (phase 0 terminée)

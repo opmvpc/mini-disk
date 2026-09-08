@@ -58,13 +58,15 @@ ont un fichier `T-NNN-*.md` ; les suivants sont des lignes à détailler au mome
 T-050 QMF + MDCT + bitstream writer · T-051 frame silencieuse valide (ffmpeg décode) · T-052 quantif + Huffman ·
 T-053 bit allocation · T-054 psy + gain control · T-055 LP4 joint stereo · T-056 upload LP2/LP4 · T-057 bancs perf.
 
-## Phase 7 — Polish
-T-060 raccourcis complets · T-061 i18n FR/EN · T-062 thème clair · T-063 toasts/confirmations/simulation TOC ·
-T-064 prefs · T-065 barre de titre custom · T-066 IDropTarget.
-| T-07x | Durée du plan en équivalent disque partout (en-tête = jauge, revue T-032) ; hachures diagonales de la jauge via motif d'atlas ; sauvegarde durable du plan hors du thread de frame (P-009) | todo |
-| T-07x | Panneau Disque : le sous-titre d'en-tête reste « pilote manquant » quand le corps dit « utilisé par une autre application » (état InUse) — un seul état source pour les deux (vu le 2026-09-07) | todo |
-| T-07x | Régime de taille : l'exe est passé de 308 à 602 KB en phase 3+5 (décodeurs 111 KB, DSP+pipeline 106 KB, NetMD ~90 KB). Mesurer par module (`/MAP`), `/O1` sur les unités froides (−17 KB mesuré en P-007), tables DES/sinc au runtime (déjà), retirer `/INCLUDE:codec_open`, viser < 500 KB | todo |
-| T-07x | P-014 : une piste fraîchement gravée se relit `protect` jusqu'au cycle d'alimentation ; ne pas la présenter comme « réservée par SonicStage » (bit « écrite par nous » réapparié après relecture) | todo |
+## Phase 7 — Polish (en cours depuis le 2026-09-07)
+
+| Ticket | Titre | Statut |
+|--------|-------|--------|
+| [T-070](T-070-regime-de-taille.md) | Régime de taille : mesure par module (`/MAP`), `/O1` sur le froid, retrait de `/INCLUDE`, chaînes dédupliquées, objectif < 500 KB | doing |
+| [T-071](T-071-coherence-ui-et-defauts.md) | Cohérence UI : état unique du panneau Disque, durée du plan en équivalent disque, hachures diagonales, liste Disque défilable, P-014, petits défauts | doing |
+| [T-072](T-072-preferences-theme-clair-i18n-raccourcis.md) | Vue Préférences, thème clair réel (contrastes testés), i18n complète avec audit, table de raccourcis + aide clavier | doing |
+| [T-073](T-073-robustesse-base-et-io.md) | Robustesse : P-010 (arènes/banc/pool), P-009 (sauvegarde hors frame), journal d'erreurs, P-005 re-mesuré, fermeture propre | doing |
+| T-074 | Barre de titre custom (ex T-065) et IDropTarget vérifié (ex T-066) — après T-072 | todo |
 
 ## Phase 8 — Portabilité
 T-070 `platform/linux` · T-071 `platform/macos`.
