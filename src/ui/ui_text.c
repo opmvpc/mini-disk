@@ -266,3 +266,17 @@ f32 ui_text_draw_ellipsized(OsFont font, String8 text, V2 baseline, f32 max_widt
     }
     return width;
 }
+
+// One pass over the spaces, widest prefix first: a message of three lines costs
+// three measurements of a prefix, not one per glyph.
+u64 ui_text_wrap_point(OsFont font, String8 text, f32 max_width, u32 flags) {
+    if (max_width <= 0.0f) { return text.size; }
+    if (ui_text_width(font, text, flags) <= max_width) { return text.size; }
+    u64 best = 0;
+    for (u64 i = 0; i < text.size; i += 1) {
+        if (text.str[i] != ' ') { continue; }
+        if (ui_text_width(font, str8_prefix(text, i), flags) > max_width) { break; }
+        best = i;
+    }
+    return (best != 0) ? best : text.size;
+}

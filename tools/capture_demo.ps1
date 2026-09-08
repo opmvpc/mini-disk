@@ -12,7 +12,11 @@ param(
     [string]$Extra = "",
     # Capture par handle de fenetre (PrintWindow) plutot que par region d ecran :
     # indispensable quand une autre fenetre recouvre la notre (T-043).
-    [switch]$ByHandle
+    [switch]$ByHandle,
+    # Taille de fenetre imposee avant la capture, en pixels physiques (T-075) :
+    # 0 laisse la fenetre a la taille que les preferences ont retenue.
+    [int]$Width = 0,
+    [int]$Height = 0
 )
 
 $ErrorActionPreference = "Stop"
@@ -32,6 +36,9 @@ public class Win32Cap {
     // premier plan de force le temps de la capture, ce qui garantit qu aucune
     // fenetre de l utilisateur ne se retrouve dans l image (T-043).
     [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr hWnd, IntPtr after, int x, int y, int cx, int cy, uint flags);
+    // Le pointeur laisse par la session precedente survolait un splitter, dont
+    // le retour visuel se retrouvait dans l image (T-075, revue). On le gare.
+    [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
     public struct RECT { public int Left, Top, Right, Bottom; }
 }
 "@
@@ -55,8 +62,25 @@ $hwnd = $proc.MainWindowHandle
 if ($hwnd -eq [IntPtr]::Zero) { $proc.Kill(); throw "pas de fenetre" }
 # HWND_TOPMOST (-1), SWP_NOMOVE|SWP_NOSIZE (0x0003) : la fenetre passe devant
 # tout le reste avant la capture, puis redevient normale (HWND_NOTOPMOST, -2).
+# SWP_NOMOVE|SWP_NOZORDER (0x0006) : on ne change que la taille, avant de
+# passer la fenetre au premier plan (T-075, capture a 1100 x 700).
+if ($Width -gt 0 -and $Height -gt 0) {
+    [void][Win32Cap]::SetWindowPos($hwnd, [IntPtr]::Zero, 0, 0, $Width, $Height, 0x0006)
+    Start-Sleep -Milliseconds 1500
+}
 [void][Win32Cap]::SetWindowPos($hwnd, [IntPtr](-1), 0, 0, 0, 0, 0x0003)
 [void][Win32Cap]::SetForegroundWindow($hwnd)
+# Un passage du pointeur dans la fenetre : l application ne redessine que sur
+# evenement, et c est ce qui lui fait reprendre la taille posee ci dessus.
+# Puis on gare le pointeur sur la barre de titre, ou aucun widget ne le voit :
+# sans cela le splitter survole affiche son retour visuel dans l image
+# (T-075, revue).
+$parked = New-Object Win32Cap+RECT
+[void][Win32Cap]::GetWindowRect($hwnd, [ref]$parked)
+[void][Win32Cap]::SetCursorPos($parked.Left + ($parked.Right - $parked.Left) / 2,
+                               $parked.Top + ($parked.Bottom - $parked.Top) / 2)
+Start-Sleep -Milliseconds 500
+[void][Win32Cap]::SetCursorPos($parked.Left + 200, $parked.Top + 8)
 Start-Sleep -Milliseconds 900
 
 $rect = New-Object Win32Cap+RECT

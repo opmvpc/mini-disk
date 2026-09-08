@@ -506,6 +506,139 @@ TEST(ui_debug_overlay_stays_inside_the_viewport) {
     test_ui_set_dpi(1.0f);
 }
 
+// --- the wrapped row of T-075 -----------------------------------------------
+// A flow box laid out like app_button_row(): space_12 on each side, space_4
+// above and below, space_4 between two children. The application builds it out
+// of the same stacks, so what is checked here is what the disc panel gets.
+static UI_Box *test_ui_flow_row(f32 parent_width, f32 gap, f32 pad_x, f32 pad_y) {
+    ui_push_pref_width(ui_px(parent_width, 1.0f));
+    ui_push_pref_height(ui_children_sum(1.0f));
+    ui_push_child_layout_axis(Axis2_X);
+    ui_push_flow_gap_x(gap);
+    ui_push_flow_gap_y(8.0f);
+    ui_push_flow_pad_x(pad_x);
+    ui_push_flow_pad_y(pad_y);
+    UI_Box *row = ui_build_box_from_key(UI_Flow, 0);
+    ui_pop_flow_pad_y();
+    ui_pop_flow_pad_x();
+    ui_pop_flow_gap_y();
+    ui_pop_flow_gap_x();
+    ui_pop_child_layout_axis();
+    ui_pop_pref_height();
+    ui_pop_pref_width();
+    return row;
+}
+
+TEST(ui_flow_wraps_onto_a_second_line) {
+    Unused(arena);
+    test_ui_frame_begin(0, 0);
+    UI_Box *root = test_ui_row(1000.0f, 400.0f);
+    UI_Box *row = 0;
+    UI_Box *button[4] = {0, 0, 0, 0};
+    UI_Parent(root) {
+        // 300 - 2 x 12 = 276 of usable width: three buttons of 80 with two gaps
+        // of 4 make 248 and fit, the fourth would make 332 and does not.
+        row = test_ui_flow_row(300.0f, 4.0f, 12.0f, 4.0f);
+        UI_Parent(row) {
+            for (u32 i = 0; i < 4; i += 1) {
+                button[i] = test_ui_child(ui_px(80.0f, 1.0f), ui_px(28.0f, 1.0f));
+            }
+        }
+    }
+    test_ui_frame_end();
+
+    // Two lines: three children on the first, the fourth alone on the second.
+    EXPECT(test_ui_near(button[0]->rect.min.x, row->rect.min.x + 12.0f));
+    EXPECT(test_ui_near(button[1]->rect.min.x, row->rect.min.x + 96.0f));
+    EXPECT(test_ui_near(button[2]->rect.min.x, row->rect.min.x + 180.0f));
+    EXPECT(test_ui_near(button[3]->rect.min.x, row->rect.min.x + 12.0f));
+    // The order is the order they were built in, never the order they fit in.
+    EXPECT(button[0]->rect.min.y < button[3]->rect.min.y);
+    EXPECT(test_ui_near(button[0]->rect.min.y, button[1]->rect.min.y));
+    EXPECT(test_ui_near(button[1]->rect.min.y, button[2]->rect.min.y));
+    // First line at pad_y, second one a gap of 8 below it.
+    EXPECT(test_ui_near(button[0]->rect.min.y, row->rect.min.y + 4.0f));
+    EXPECT(test_ui_near(button[3]->rect.min.y, row->rect.min.y + 40.0f));
+    // The row is as tall as the two lines it needed: 4 + 28 + 8 + 28 + 4.
+    EXPECT(test_ui_near(row->computed_size[Axis2_Y], 72.0f));
+    // Nothing draws outside the row.
+    EXPECT(button[2]->rect.max.x <= row->rect.max.x - 12.0f + 0.01f);
+}
+
+// The row of buttons of app_button_row(): equal margins, control_h buttons
+// centred in a row of row_control, and one line as long as they fit on one.
+TEST(ui_flow_button_row_metrics) {
+    Unused(arena);
+    const UI_Theme *theme = ui_theme();
+    f32 pad_x = theme->space[UI_Space_12];
+    f32 pad_y = theme->space[UI_Space_4];
+    test_ui_frame_begin(0, 0);
+    UI_Box *root = test_ui_row(1000.0f, 400.0f);
+    UI_Box *row = 0;
+    UI_Box *first = 0, *last = 0, *small = 0;
+    UI_Parent(root) {
+        row = test_ui_flow_row(400.0f, theme->space[UI_Space_4], pad_x, pad_y);
+        UI_Parent(row) {
+            first = test_ui_child(ui_px(120.0f, 1.0f), ui_px(theme->control_h, 1.0f));
+            small = test_ui_child(ui_px(20.0f, 1.0f), ui_px(16.0f, 1.0f));
+            last = test_ui_child(ui_px(200.0f, 1.0f), ui_px(theme->control_h, 1.0f));
+        }
+    }
+    test_ui_frame_end();
+
+    EXPECT(test_ui_near(row->computed_size[Axis2_Y], theme->row_control));
+    // The left margin is the pad; the right one is the pad *at least* - what
+    // is promised is that nothing ever comes closer to the edge than that.
+    EXPECT(test_ui_near(first->rect.min.x - row->rect.min.x, pad_x));
+    EXPECT(last->rect.max.x <= row->rect.max.x - pad_x + 0.01f);
+    // A child shorter than the line is centred across it, not stuck to the top.
+    EXPECT(test_ui_near(small->rect.min.y - row->rect.min.y, pad_y + 6.0f));
+}
+
+// S1: a tooltip that would land on the status bar flips above its anchor.
+TEST(ui_tooltip_flips_above_near_the_bottom) {
+    Unused(arena);
+    f32 reserved = 22.0f;
+    ui_tooltip_reserve_bottom(reserved);
+    UI_Box *anchor = 0;
+    Rect low = rect(0.0f, 0.0f, 0.0f, 0.0f);
+    Rect high = rect(0.0f, 0.0f, 0.0f, 0.0f);
+    // The bubble only exists after UI_TOOLTIP_DELAY_S of hover, so the pointer
+    // stays on the anchor for as many frames as that takes.
+    for (u32 pass = 0; pass < 2; pass += 1) {
+        f32 y = (pass == 0) ? (TEST_UI_VIEWPORT.y - 60.0f) : 100.0f;
+        UI_Key tip_key = 0;
+        for (u32 frame = 0; frame < 64; frame += 1) {
+            OsEvent move = test_ui_mouse_event(OsEvent_MouseMove, v2(50.0f, y + 10.0f), 0, 0);
+            test_ui_frame_begin(&move, 1);
+            UI_Box *root = ui_root(UI_Layer_Content);
+            UI_Parent(root) {
+                ui_push_fixed_y(y);
+                ui_push_pref_width(ui_px(100.0f, 1.0f));
+                ui_push_pref_height(ui_px(28.0f, 1.0f));
+                anchor = ui_build_box(UI_Clickable | UI_FloatingY, str8_lit("###tipanchor"));
+                ui_pop_pref_height();
+                ui_pop_pref_width();
+                ui_pop_fixed_y();
+                ui_tooltip_box(anchor, str8_lit("bulle"));
+            }
+            tip_key = hash64_combine(0x700171Bull, anchor->key);
+            test_ui_frame_end();
+        }
+        UI_Box *tip = ui_box_from_key(tip_key);
+        EXPECT(tip != 0);
+        if (tip) {
+            if (pass == 0) { low = tip->rect; } else { high = tip->rect; }
+        }
+    }
+    // Near the bottom the bubble is entirely above the anchor and clear of the
+    // reserved strip; higher up it stays below it, where it belongs.
+    EXPECT(low.max.y <= TEST_UI_VIEWPORT.y - reserved);
+    EXPECT(low.max.y <= TEST_UI_VIEWPORT.y - 60.0f);
+    EXPECT(high.min.y >= 100.0f + 28.0f);
+    ui_tooltip_reserve_bottom(0.0f);
+}
+
 static void test_ui_run_all(void) {
     test_report("ui\n");
     test_ui_arena = arena_alloc(MB(256));
@@ -519,6 +652,9 @@ static void test_ui_run_all(void) {
 
     RUN(ui_layout_size_kinds);
     RUN(ui_layout_violations);
+    RUN(ui_flow_wraps_onto_a_second_line);
+    RUN(ui_flow_button_row_metrics);
+    RUN(ui_tooltip_flips_above_near_the_bottom);
     RUN(ui_keys_are_stable_and_scoped);
     RUN(ui_orphan_boxes_are_released);
     RUN(ui_signals_from_events);

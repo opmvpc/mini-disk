@@ -9,7 +9,12 @@
 //
 // The geometry of the gauge and the mapping from a gesture to a command are in
 // plan_view.c, which has no UI in it and is therefore what the tests drive.
+
 #include "app_state.h"
+
+// P3: under 400 dp the source column is the first thing to go. It is a hint -
+// where the entry came from - and the title, the mode and the duration are not.
+global b32 app_plan_show_source = 1;
 
 // The mode colours are indexed by PlanCapMode, and UI_Mode is the same order:
 // nothing translates between them (plan_capacity.h says so on purpose).
@@ -249,21 +254,29 @@ static void app_gauge_readout(f32 width) {
                      app_ms_duration(total_ms));
     }
 
-    f32 height = ui_dp(PLAN_GAUGE_READOUT_DP);
+    // P1: the two readings share a band no more. The occupancy is the big
+    // number, the residuals get a whole line of their own - "reste 16:18 SP .
+    // 32:36 LP2 . 65:12 LP4" is the line a mode is chosen on, and it was the
+    // line that was cut.
     UI_PrefWidth(ui_px(width, 1.0f))
-    UI_PrefHeight(ui_px(height, 1.0f))
+    UI_PrefHeight(ui_px(ui_dp(PLAN_GAUGE_READOUT_DP), 1.0f))
+    UI_ChildLayoutAxis(Axis2_X)
+    UI_TextPadding(0.0f) {
+        UI_Box *row = ui_build_box_from_key(0, 0);
+        UI_Parent(row) UI_Font(ui_font(UI_FontStyle_Emphasis)) {
+            // The size kind measures the text; the cell then draws it with a
+            // padding of its own on each side, so the box has to allow for
+            // both or the counter comes back ellipsised.
+            app_cell(ui_text_size(app_cell_padding() * 2.0f, 1.0f), total, color,
+                     UI_TextFlag_TabularNumbers, UI_TextAlign_Left);
+        }
+    }
+    UI_PrefWidth(ui_px(width, 1.0f))
+    UI_PrefHeight(ui_px(ui_dp(PLAN_GAUGE_REST_DP), 1.0f))
     UI_ChildLayoutAxis(Axis2_X)
     UI_TextPadding(0.0f) {
         UI_Box *row = ui_build_box_from_key(0, 0);
         UI_Parent(row) {
-            UI_Font(ui_font(UI_FontStyle_Emphasis)) {
-                // The size kind measures the text; the cell then draws it with a
-                // padding of its own on each side, so the box has to allow for
-                // both or the counter comes back ellipsised.
-                app_cell(ui_text_size(app_cell_padding() * 2.0f, 1.0f), total, color,
-                         UI_TextFlag_TabularNumbers, UI_TextAlign_Left);
-            }
-            ui_spacer(ui_px(ui_dp(theme->space[UI_Space_8]), 1.0f));
             app_cell(ui_pct(1.0f, 0.0f), rest, theme->fg_secondary, UI_TextFlag_TabularNumbers,
                      UI_TextAlign_Left);
         }
@@ -443,8 +456,16 @@ static void app_plan_gauge(f32 panel_width) {
                             app_gauge_rect(x, 0.0f, segment_width, bar_height, color, 0.0f, 0);
                             app_gauge_hatch(hatch_x, 0.0f, x + segment_width - hatch_x,
                                             bar_height, color);
-                            // s9.9: wide enough to carry its mode in a letter.
-                            if (segment_width >= PLAN_GAUGE_INITIAL_MIN_PX) {
+                            // s9.9 / C3: the letter is drawn only when the text
+                            // and space_8 around it fit in the segment. Below
+                            // that it was a column of clipped "S" that read as
+                            // cut text; the colour and the tooltip say the same
+                            // thing without lying about it.
+                            String8 initial_text = str8_cstr(app_mode_initials[segment->mode]);
+                            f32 initial_width =
+                                    ui_text_width(ui_font(UI_FontStyle_Caption), initial_text, 0) +
+                                    ui_dp(theme->space[UI_Space_8]);
+                            if (segment_width >= initial_width) {
                                 UI_Box *initial = 0;
                                 UI_Font(ui_font(UI_FontStyle_Caption))
                                 UI_TextColor(theme->canvas)
@@ -454,8 +475,7 @@ static void app_plan_gauge(f32 panel_width) {
                                                              0, 0.0f, UI_DrawText);
                                 }
                                 initial->flags &= ~(UI_Flags)UI_DrawBackground;
-                                initial->display_string =
-                                    str8_cstr(app_mode_initials[segment->mode]);
+                                initial->display_string = initial_text;
                             }
                         }
                         // The overflow zone: the bar keeps its width and says
@@ -704,8 +724,10 @@ static void app_plan_entry_row(u32 entry, u32 row, b32 selected) {
         AppTrack track = app_track(disc->track_id[entry]);
         source = str8f(ui_frame_arena(), "%S \xC2\xB7 %S", track.artist, track.album);
     }
-    app_cell(ui_px(ui_dp(110.0f), 0.0f), source, missing ? theme->danger : secondary, 0,
-             UI_TextAlign_Left);
+    if (app_plan_show_source) {
+        app_cell(ui_px(ui_dp(90.0f), 0.0f), source, missing ? theme->danger : secondary, 0,
+                 UI_TextAlign_Left);
+    }
     app_cell_number(ui_dp(52.0f), app_ms_duration(disc->duration_ms[entry]), secondary);
     app_cell_number(ui_dp(48.0f), str8f(ui_frame_arena(), "%u", app.capacity.clusters[entry]),
                     theme->fg_muted);
@@ -1249,8 +1271,8 @@ static void app_plan_header(void) {
     UI_PrefHeight(ui_px(ui_dp(theme->row_standard), 1.0f))
     UI_ChildLayoutAxis(Axis2_X) {
         UI_Box *row = ui_build_box_from_key(0, 0);
-        UI_Parent(row) UI_PrefHeight(ui_px(ui_dp(theme->row_compact), 1.0f)) {
-            ui_spacer(ui_px(ui_dp(theme->space[UI_Space_8]), 1.0f));
+        UI_Parent(row) {
+            ui_spacer(ui_px(ui_dp(theme->space[UI_Space_12]), 1.0f));
             for (u32 i = 0; i < ArrayCount(lengths); i += 1) {
                 String8 label = str8f(ui_frame_arena(), "%u###len%u", lengths[i], i);
                 UI_Signal signal = (disc->length_min == lengths[i]) ? ui_button_primary(label)
@@ -1258,7 +1280,9 @@ static void app_plan_header(void) {
                 if (signal.clicked) {
                     plan_set_disc_length(plan, app.plan_disc, lengths[i]);
                 }
-                ui_spacer(ui_px(ui_dp(theme->space[UI_Space_2]), 1.0f));
+                // P5: space_4 inside the capacity group, space_12 before the
+                // mode - the same two gaps as everywhere else.
+                ui_spacer(ui_px(ui_dp(theme->space[UI_Space_4]), 1.0f));
             }
             ui_spacer(ui_px(ui_dp(theme->space[UI_Space_8]), 1.0f));
             {
@@ -1278,55 +1302,55 @@ static void app_plan_header(void) {
                 app_plan_open_file();
             }
             ui_tooltip(app_str(Str_PlanOpen));
-            ui_spacer(ui_px(ui_dp(theme->space[UI_Space_2]), 1.0f));
+            ui_spacer(ui_px(ui_dp(theme->space[UI_Space_4]), 1.0f));
             if (ui_button_icon(R_Icon_Check, str8_lit("###plansave")).clicked) {
                 app_plan_save_file(0);
             }
             ui_tooltip(app_str(Str_PlanSave));
-            ui_spacer(ui_px(ui_dp(theme->space[UI_Space_2]), 1.0f));
+            ui_spacer(ui_px(ui_dp(theme->space[UI_Space_4]), 1.0f));
             if (ui_button_icon(R_Icon_ChevronRight, str8_lit("###plansaveas")).clicked) {
                 app_plan_save_file(1);
             }
             ui_tooltip(app_str(Str_PlanSaveAs));
-            ui_spacer(ui_px(ui_dp(theme->space[UI_Space_8]), 1.0f));
+            ui_spacer(ui_px(ui_dp(theme->space[UI_Space_12]), 1.0f));
         }
     }
 }
 
 static void app_plan_footer(void) {
     const UI_Theme *theme = ui_theme();
+    // P4: the list used to touch the buttons. A 1 px line, then the row, with
+    // space_4 above and below it - the footer of a panel is a zone, not a strip
+    // squeezed against the last row of a list.
+    ui_separator();
     UI_PrefWidth(ui_pct(1.0f, 0.0f))
-    UI_PrefHeight(ui_px(ui_dp(theme->row_comfortable), 1.0f))
-    UI_ChildLayoutAxis(Axis2_X)
+    UI_PrefHeight(ui_children_sum(1.0f))
+    UI_ChildLayoutAxis(Axis2_Y)
     UI_BgColor(theme->panel) {
-        UI_Box *row = ui_build_box_from_key(UI_DrawBackground | UI_Clip, 0);
-        UI_Parent(row) UI_PrefHeight(ui_px(ui_dp(theme->row_standard), 1.0f)) {
-            ui_spacer(ui_px(ui_dp(theme->space[UI_Space_8]), 1.0f));
+        UI_Box *zone = ui_build_box_from_key(UI_DrawBackground | UI_Clip, 0);
+        UI_Parent(zone) UI_Parent(app_button_row()) {
             if (ui_button(str8f(ui_frame_arena(), "%S###planadd", app_str(Str_ToolbarAddToPlan)))
                     .clicked) {
                 app_plan_add_selection();
             }
-            ui_spacer(ui_px(ui_dp(theme->space[UI_Space_4]), 1.0f));
             if (ui_button(str8f(ui_frame_arena(), "%S###planfill", app_str(Str_PlanFill)))
                     .clicked) {
                 app_plan_fill_remaining();
             }
             ui_tooltip(app_str(Str_PlanFillHint));
-            ui_spacer(ui_px(ui_dp(theme->space[UI_Space_4]), 1.0f));
             if (app.capacity.overflow_clusters != 0 && app.plan.disc_count < PLAN_DISC_MAX) {
+                ui_spacer(ui_px(ui_dp(theme->space[UI_Space_4]), 1.0f));
                 if (ui_button(str8f(ui_frame_arena(), "%S###newdisc",
                                     app_str(Str_PlanNewDisc)))
                         .clicked) {
                     app_plan_new_disc();
                 }
                 ui_tooltip(app_str(Str_PlanNewDiscHint));
-                ui_spacer(ui_px(ui_dp(theme->space[UI_Space_4]), 1.0f));
                 if (ui_button(str8f(ui_frame_arena(), "%S###splitff",
                                     app_str(Str_PlanSplitFirstFit)))
                         .clicked) {
                     app_plan_split_auto(PlanSplit_FirstFit);
                 }
-                ui_spacer(ui_px(ui_dp(theme->space[UI_Space_4]), 1.0f));
                 if (ui_button(str8f(ui_frame_arena(), "%S###splitka",
                                     app_str(Str_PlanSplitKeepAlbums)))
                         .clicked) {
@@ -1357,6 +1381,7 @@ void app_plan_panel(void) {
                          app_ms_duration(app.capacity.billed_ms),
                          app_ms_duration(app.capacity.audio_ms),
                          app_ms_duration(app.capacity.billed_ms - app.capacity.audio_ms)));
+    app_plan_show_source = (rect_width(panel->rect) >= ui_dp(400.0f));
     app_plan_header();
     app_plan_gauge(rect_width(panel->rect));
     ui_separator();
@@ -1371,12 +1396,18 @@ void app_plan_panel(void) {
         UI_Box *header = ui_build_box_from_key(UI_DrawBackground, 0);
         UI_Parent(header) {
             app_cell_number(ui_dp(30.0f), app_str(Str_ColumnIndex), theme->fg_disabled);
-            app_cell(ui_px(ui_dp(48.0f), 1.0f), app_str(Str_PlanColumnMode), theme->fg_disabled,
+            app_cell(ui_px(ui_dp(56.0f), 1.0f), app_str(Str_PlanColumnMode), theme->fg_disabled,
                      0, UI_TextAlign_Left);
             app_cell(ui_pct(1.0f, 0.0f), app_str(Str_PlanColumnTitle), theme->fg_disabled, 0,
                      UI_TextAlign_Left);
-            app_cell(ui_px(ui_dp(110.0f), 0.0f), app_str(Str_PlanColumnSource),
-                     theme->fg_disabled, 0, UI_TextAlign_Left);
+            // P3: "MO...", "SO..." and "CL." were three headers cut to two
+            // letters. The mode column takes the 56 dp its badges need (C6) and
+            // the source column keeps 90 - it is the one that may still give
+            // way, because a source is a hint and a duration is a fact.
+            if (app_plan_show_source) {
+                app_cell(ui_px(ui_dp(90.0f), 0.0f), app_str(Str_PlanColumnSource),
+                         theme->fg_disabled, 0, UI_TextAlign_Left);
+            }
             app_cell_number(ui_dp(52.0f), app_str(Str_ColumnDuration), theme->fg_disabled);
             app_cell_number(ui_dp(48.0f), app_str(Str_PlanColumnClusters), theme->fg_disabled);
         }
@@ -1513,11 +1544,25 @@ void app_disc_panel(f32 width) {
     app_panel_begin(str8_lit("###disc"), ui_px(width, 1.0f), app_str(Str_DiscTitle),
                     app_device_subtitle());
 
+    // C4: the panel is taller than the window whenever a pre-flight is up, so it
+    // scrolls. The clip is on the frame, the column inside it is as tall as what
+    // it holds, and the wheel moves the one inside the other - no widget, no
+    // second tree, the offset the layout already subtracts.
+    UI_Box *frame = 0;
     UI_PrefWidth(ui_pct(1.0f, 0.0f))
     UI_PrefHeight(ui_pct(1.0f, 0.0f))
     UI_ChildLayoutAxis(Axis2_Y)
     UI_BgColor(theme->surface) {
-        UI_Box *body = ui_build_box_from_key(UI_DrawBackground | UI_Clip, 0);
+        frame = ui_build_box(UI_DrawBackground | UI_Clip | UI_Scrollable, str8_lit("###discbody"));
+    }
+    UI_Box *body = 0;
+    UI_Parent(frame)
+    UI_PrefWidth(ui_pct(1.0f, 0.0f))
+    UI_PrefHeight(ui_children_sum(1.0f))
+    UI_ChildLayoutAxis(Axis2_Y) {
+        body = ui_build_box(0, str8_lit("###disccontent"));
+    }
+    {
         UI_Parent(body) UI_TextPadding(ui_dp(theme->space[UI_Space_12])) {
             ui_spacer(ui_px(ui_dp(theme->space[UI_Space_8]), 1.0f));
             // The device state comes first: with no driver bound, the guided
@@ -1526,12 +1571,19 @@ void app_disc_panel(f32 width) {
             // T-043: a pre-flight or a transfer in flight is the thing the user
             // is doing, so it comes before the disc's own contents.
             b32 transfer_up = app_transfer_takes_over();
-            if (transfer_up) { app_transfer_bar(width); }
+            if (transfer_up) {
+                app_transfer_bar(width);
+                // C4: the disc's own state used to start right under the burn
+                // actions. space_16, a line, and it reads as another subject.
+                ui_spacer(ui_px(ui_dp(theme->space[UI_Space_16]), 1.0f));
+                ui_separator();
+                ui_spacer(ui_px(ui_dp(theme->space[UI_Space_12]), 1.0f));
+            }
             // The disc that is actually in the bay, when there is one (T-021):
             // its title, its groups, its tracks and its own capacity. Below it,
             // what the *plan* would still fit, which is a different question.
             app_device_disc_panel();
-            ui_spacer(ui_px(ui_dp(theme->space[UI_Space_8]), 1.0f));
+            ui_spacer(ui_px(ui_dp(theme->space[UI_Space_12]), 1.0f));
             for (u32 mode = 0; mode < PlanCapMode_COUNT; mode += 1) {
                 UI_PrefWidth(ui_pct(1.0f, 0.0f))
                 UI_PrefHeight(ui_px(ui_dp(theme->row_compact), 1.0f))
@@ -1569,5 +1621,14 @@ void app_disc_panel(f32 width) {
             if (!transfer_up) { app_transfer_bar(width); }
         }
     }
+    // The wheel, and the clamp that keeps the last line reachable and the first
+    // one from sliding away.
+    f32 overflow = max_f32(body->computed_size[Axis2_Y] - rect_height(frame->rect), 0.0f);
+    UI_Signal scroll = ui_signal(frame);
+    if (scroll.scrolled) {
+        frame->view_off_target.y = clamp_f32(frame->view_off_target.y - scroll.scroll_pixels.y,
+                                             0.0f, overflow);
+    }
+    frame->view_off_target.y = clamp_f32(frame->view_off_target.y, 0.0f, overflow);
     app_panel_end();
 }

@@ -12,6 +12,9 @@ static const AppShortcut app_shortcut_table[] = {
        Str_ActionSettings),
     SC(OsKey_F1, 0, AppShortcutContext_Global, AppAction_KeyboardHelp,
        Str_ActionKeyboardHelp),
+    // "?" is where a hand looks for help before it looks for F1 (T-075).
+    SC(OsKey_Slash, OsMod_Shift, AppShortcutContext_Global, AppAction_KeyboardHelp,
+       Str_ActionKeyboardHelp),
     SC(OsKey_F11, 0, AppShortcutContext_Global, AppAction_DebugOverlay,
        Str_ActionDebugOverlay),
     SC(OsKey_Escape, 0, AppShortcutContext_Global, AppAction_Cancel, Str_ActionCancel),

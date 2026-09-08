@@ -6,6 +6,16 @@ Dernière mise à jour : 2026-09-08
 ## Phase actuelle (historique) : 3 + 5 en parallèle — T-020, T-021, T-040, T-041 mergés dans main ; T-042 fait et **validé sur le vrai MZ-N505** (le pilote WinUSB est lié, P-001 levé), T-022 en cours
 
 ### Fait en phase 7
+- **T-075 — polish visuel : espacements, repli des rangées, textes qui tiennent.** Deux jetons de
+  thème (`control_h` 28 dp, `row_control` 36 dp) et un bouton qui ne fait plus la hauteur de sa
+  rangée : les deux causes racines des boutons collés. Nouveau `UI_Flow` dans `ui_core` — un axe X
+  qui passe à la ligne, mesuré dans les deux mêmes passes que le reste du layout, quatre `u8` dans
+  le padding de queue de `UI_Box` (256 octets inchangés) — et `app_button_row()` par lequel passent
+  les 14 rangées de boutons des vues Disque, Plan, Transfert et Préférences. Transport du disque en
+  cinq icônes (`Pause`, `Stop`, `Prev`, `Next` ajoutées à `r_icons`, toujours en polygones), panneau
+  Disque rogné **et défilant**, messages du pré-vol en multi-ligne, bulle qui bascule au-dessus de
+  son ancre, compteurs de boxes déplacés dans l'overlay F11, panneaux Disque 360 dp et Plan 400 dp
+  minimum. Jauge en trois bandes : la ligne « reste 16:18 SP · 32:36 LP2 · 65:12 LP4 » est entière.
 - **T-070 — régime de taille.** `build.bat map` (nouvelle cible) + `tools/size_report.py` : la carte
   du linker agrégée par module, top 40 des symboles, `--diff` entre deux mesures. Exe release
   **636 928 → 622 080 o** (−14 848, −2,3 %) : `#pragma optimize("s") + inline_depth(1)` (`MdCold`)
@@ -116,6 +126,24 @@ Dernière mise à jour : 2026-09-08
   - **Fermeture propre** — l'ordre d'arrêt est documenté étape par étape dans `app_run` et exécuté par un
     `--selftest` étendu qui démarre et arrête tout sans fenêtre (pool, thread device joint, plan sauvé par
     le job et relu, journal vidé). Aucun octet n'atteint un appareil réel.
+
+## KPI — phase 7, T-075 (i7-8550U, 4 cœurs / 8 threads, Windows 11 ; **machine partagée avec l'agent T-073 pendant toutes les mesures**, meilleur de trois passes)
+| Métrique | Valeur | Cible | Date |
+|----------|--------|-------|------|
+| Taille exe release | **655 872 o**, soit **+512 o** sur les 655 360 o de `main` (654 336 avant la revue, **+1 536 o** pour les trois correctifs) | ± 10 240 o | 2026-09-08 |
+| Imports | kernel32 + user32 (`dumpbin /imports`) | ces deux-là | 2026-09-08 |
+| Tests | **273 cas, 8 335 checks**, 0 échec (ASan) — +5 cas (`ui_flow` ×2, bulle, puis le partage des hauteurs et le retour à la ligne) | verts | 2026-09-08 |
+| Cibles `build.bat` | **les six vertes** : debug, release, test, check, analyze, bench | six vertes | 2026-09-08 |
+| Layout de la vue Plan | **305 µs** par frame (254 entrées, meilleur de 3 × 300) contre **317 µs** sur `main` : **−3,8 %** | ≤ +5 % | 2026-09-08 |
+| Boxes de la frame du plan | 913 → **903** (le repli n'ajoute pas de boîte : il replace celles qui existent) | pas plus | 2026-09-08 |
+| `ui_layout` 10 000 boxes | 431 µs (435 µs sur `main`) | ≤ +5 % | 2026-09-08 |
+| Taille de `UI_Box` | **256 o**, inchangée (les 4 paramètres du repli tiennent dans le padding de queue) | ≤ 256 o | 2026-09-08 |
+| Écart entre deux rangées de boutons | **0 px → 8 px** ; rangée 28 dp → **36 dp**, bouton centré | ≥ 8 px | 2026-09-08 |
+| Largeur minimale des panneaux | Disque **200 → 360 dp**, Plan **280 → 400 dp** | tout tient à 1100 × 700 dp | 2026-09-08 |
+| Débordement à 1100 × 700 dp (1375 × 875 px à 125 %) | **aucun** : aucun bouton coupé, aucun texte important tronqué (capture relue) | 0 | 2026-09-08 |
+| Hauteur de la liste de pistes à 1100 × 700 dp | **194 dp** (détail ramené à son minimum de 96 dp, navigateur à 183) | ≥ 160 dp | 2026-09-08 |
+| CPU au repos, 12 s après 4 s de chauffe | **15,6 ms**, soit 0,13 % d'un cœur — résidu de thread pilote GL (P-005), machine partagée | 0 % sur nos threads | 2026-09-08 |
+| Chaînes i18n | **5 FR + 5 EN** ajoutées en fin de table (TOC en deux lignes, groupe sans nom, « + N autres pistes », occupation du cache) | ADR-011 D10 | 2026-09-08 |
 
 ## KPI — phase 7, T-071 (i7-8550U, 4 cœurs / 8 threads, Windows 11 ; MZ-N505 sous WinUSB, disque « 202001 »)
 | Métrique | Valeur | Cible | Date |

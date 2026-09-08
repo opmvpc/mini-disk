@@ -25,20 +25,25 @@
 // the table is the one that fits, so these are the figure's numbers (4 px
 // margins, a 12 px scale band and a 12 px readout) and the total is the 56 px
 // the section and the ticket both ask for.
+// T-075 (P1, C3): the readout used to overlap the graduations and the residuals
+// were cut in the middle of a duration. Three bands now, in reading order and
+// each one with the room its text needs: graduations, occupancy, residuals.
 #define PLAN_GAUGE_MARGIN_DP      4
 #define PLAN_GAUGE_BAR_DP        14
-#define PLAN_GAUGE_BAR_GAP_DP     2
+#define PLAN_GAUGE_BAR_GAP_DP     4
 #define PLAN_GAUGE_TICK_DP        4
 #define PLAN_GAUGE_SCALE_DP      12
-#define PLAN_GAUGE_SCALE_GAP_DP   2
-#define PLAN_GAUGE_READOUT_DP    12
-#define PLAN_GAUGE_TOC_GAP_DP     2
+#define PLAN_GAUGE_SCALE_GAP_DP   8
+#define PLAN_GAUGE_READOUT_DP    18
+#define PLAN_GAUGE_REST_DP       18
+#define PLAN_GAUGE_TOC_GAP_DP     8
 #define PLAN_GAUGE_TOC_DP         4
-#define PLAN_GAUGE_HEIGHT_DP     56
+#define PLAN_GAUGE_HEIGHT_DP     94
 #define PLAN_GAUGE_SIDE_DP       12  // the gauge is inset by this much
 StaticAssert(PLAN_GAUGE_MARGIN_DP + PLAN_GAUGE_BAR_DP + PLAN_GAUGE_BAR_GAP_DP +
                      PLAN_GAUGE_TICK_DP + PLAN_GAUGE_SCALE_DP + PLAN_GAUGE_SCALE_GAP_DP +
-                     PLAN_GAUGE_READOUT_DP + PLAN_GAUGE_TOC_GAP_DP + PLAN_GAUGE_TOC_DP ==
+                     PLAN_GAUGE_READOUT_DP + PLAN_GAUGE_REST_DP + PLAN_GAUGE_TOC_GAP_DP +
+                     PLAN_GAUGE_TOC_DP ==
                  PLAN_GAUGE_HEIGHT_DP,
              plan_gauge_bands_sum_to_56);
 

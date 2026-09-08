@@ -59,9 +59,12 @@ static UI_Signal ui_button_common(String8 string, R_Icon icon, b32 has_icon, b32
     const UI_Theme *theme = ui_theme();
     UI_Box *box = 0;
     f32 padding = ui_dp(theme->space[UI_Space_12]);
-    UI_PrefWidth(icon_only ? ui_px(ui_dp(theme->row_standard), 1.0f)
+    // T-075, root cause 1: a button is control_h tall, never the height of the
+    // row it sits in - a row that is exactly its button has no room to put any
+    // space between itself and the next one.
+    UI_PrefWidth(icon_only ? ui_px(ui_dp(theme->control_h), 1.0f)
                            : ui_text_size(padding, 1.0f))
-    UI_PrefHeight(ui_px(ui_dp(theme->row_standard), 1.0f))
+    UI_PrefHeight(ui_px(ui_dp(theme->control_h), 1.0f))
     UI_BgColor(primary ? theme->accent : theme->control)
     UI_BorderColor(primary ? theme->accent : theme->border_control)
     UI_TextColor(primary ? theme->accent_fg : theme->fg_primary)
@@ -108,9 +111,9 @@ UI_Box *ui_spacer(UI_Size size) {
     UI_Box *box = 0;
     Axis2 axis = ui_top_parent()->child_layout_axis;
     if (axis == Axis2_X) {
-        UI_PrefWidth(size) { box = ui_build_box_from_key(0, 0); }
+        UI_PrefWidth(size) { box = ui_build_box_from_key(UI_Spacer, 0); }
     } else {
-        UI_PrefHeight(size) { box = ui_build_box_from_key(0, 0); }
+        UI_PrefHeight(size) { box = ui_build_box_from_key(UI_Spacer, 0); }
     }
     return box;
 }
@@ -126,6 +129,11 @@ typedef struct UI_TooltipState {
 } UI_TooltipState;
 
 global UI_TooltipState ui_tooltip_state;
+// The strip at the bottom of the window a tooltip may not cover: the status bar
+// (T-075, S1). Physical pixels, set once a frame by the application.
+global f32 ui_tooltip_reserved_bottom;
+
+void ui_tooltip_reserve_bottom(f32 pixels) { ui_tooltip_reserved_bottom = pixels; }
 
 void ui_tooltip_box(UI_Box *box, String8 text) {
     const UI_Theme *theme = ui_theme();
@@ -154,9 +162,16 @@ void ui_tooltip_box(UI_Box *box, String8 text) {
     f32 height = ui_dp(theme->row_standard);
     V2 mouse = ui_mouse();
     V2 viewport = ui_viewport();
-    f32 x = min_f32(mouse.x + ui_dp(theme->space[UI_Space_16]), viewport.x - width);
-    f32 y = mouse.y + ui_dp(theme->space[UI_Space_24]);
-    if (y + height > viewport.y) { y = mouse.y - height - ui_dp(theme->space[UI_Space_8]); }
+    f32 margin = ui_dp(theme->space[UI_Space_12]);
+    f32 gap = ui_dp(theme->space[UI_Space_8]);
+    width = min_f32(width, max_f32(viewport.x - 2.0f * margin, 1.0f));
+    f32 x = min_f32(mouse.x + ui_dp(theme->space[UI_Space_16]), viewport.x - width - margin);
+    // S1: the bubble hangs on its anchor, not on the pointer, and it flips above
+    // it as soon as it would land on the status bar - the strip the caller has
+    // reserved at the bottom of the window.
+    f32 limit = viewport.y - ui_tooltip_reserved_bottom - margin;
+    f32 y = box->rect.max.y + gap;
+    if (y + height > limit) { y = box->rect.min.y - height - gap; }
 
     UI_LayerScope(UI_Layer_Tooltip)
     UI_FixedX(max_f32(x, 0.0f)) UI_FixedY(max_f32(y, 0.0f))
@@ -874,6 +889,22 @@ f32 ui_splitter_update(UI_Splitter *state, Axis2 axis, f32 total) {
     return state->size;
 }
 
+void ui_split_fit_middle(f32 total, f32 min_middle, f32 *leading, f32 min_leading, f32 *trailing,
+                         f32 min_trailing) {
+    f32 lead = *leading;
+    f32 trail = *trailing;
+    f32 over = lead + trail + min_middle - total;
+    f32 give = min_f32(over, trail - min_trailing);
+    if (give > 0.0f) {
+        trail -= give;
+        over -= give;
+    }
+    give = min_f32(over, lead - min_leading);
+    if (give > 0.0f) { lead -= give; }
+    *leading = lead;
+    *trailing = trail;
+}
+
 void ui_splitter(UI_Splitter *state, Axis2 axis) {
     const UI_Theme *theme = ui_theme();
     f32 handle = ui_dp(theme->splitter_size);
@@ -890,7 +921,23 @@ void ui_splitter(UI_Splitter *state, Axis2 axis) {
     UI_Signal signal = ui_signal(box);
     if (signal.hovering || signal.dragging) {
         ui_cursor_request(axis == Axis2_X ? OsCursor_ResizeH : OsCursor_ResizeV);
-        box->bg_color = theme->accent;
+        // T-075 revue: the whole 6 dp handle painted in solid accent read as a
+        // blue rule down the window. The feedback is a 2 dp line at 60 %, down
+        // the middle of the handle and nowhere else.
+        f32 thin = ui_dp(2.0f);
+        f32 offset = (handle - thin) * 0.5f;
+        u32 tint = r_rgba(ui_color_red(theme->accent), ui_color_green(theme->accent),
+                          ui_color_blue(theme->accent), 153);
+        UI_Parent(box)
+        UI_PrefWidth(axis == Axis2_X ? ui_px(thin, 1.0f) : ui_pct(1.0f, 0.0f))
+        UI_PrefHeight(axis == Axis2_X ? ui_pct(1.0f, 0.0f) : ui_px(thin, 1.0f))
+        UI_FixedX(axis == Axis2_X ? offset : 0.0f)
+        UI_FixedY(axis == Axis2_X ? 0.0f : offset)
+        UI_BgColor(tint)
+        UI_CornerRadius(0.0f) {
+            ui_build_box_from_key(UI_FloatingX | UI_FloatingY | UI_DrawBackground,
+                                  UI_WIDGET_KEY(0x591171ull, state));
+        }
     }
 }
 

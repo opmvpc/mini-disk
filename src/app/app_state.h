@@ -34,9 +34,12 @@
 
 // Minimum widths of the three panels, in dp. Their sum plus the two handles is
 // what "the three panels stay visible" means; below it the window cannot go.
+// T-075 (C1): the disc panel could not hold its own commands at 200 dp and the
+// plan cut three column headers at 280; both minima are taken on the library,
+// which is the panel that had room to spare.
 #define APP_MIN_LIBRARY_DP 300.0f
-#define APP_MIN_PLAN_DP    280.0f
-#define APP_MIN_DISC_DP    200.0f
+#define APP_MIN_PLAN_DP    400.0f
+#define APP_MIN_DISC_DP    360.0f
 #define APP_MIN_BROWSER_DP  80.0f  // the artist/album columns, two rows at least
 #define APP_MIN_DETAIL_DP   96.0f  // the detail panel: a small cover and three lines
 #define APP_MIN_LIST_DP    160.0f  // what the track list keeps whatever is dragged
@@ -269,6 +272,11 @@ b32  app_settings_overlay_open(void);
 void app_settings_system_theme_changed(void);  // WM_SETTINGCHANGE
 AppShortcutContext app_settings_context(void);
 String8 app_shortcut_status_hint(Arena *arena);
+
+// app.c (T-075): one row of buttons - space_12 left and right, space_4 above
+// and below, space_4 between two buttons, and a wrap onto a second line when
+// the line is full. Returns the row, to be pushed as the parent.
+UI_Box *app_button_row(void);
 
 // view_library.c
 void app_library_panel(f32 width);

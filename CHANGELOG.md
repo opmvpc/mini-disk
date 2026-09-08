@@ -3,6 +3,17 @@
 ## Unreleased
 
 ### Phase 7 — Polish
+- **Polish visuel (T-075)** : les boutons ne sont plus collés les uns aux autres et ne sortent plus
+  de leur panneau. Un bouton fait `control_h` (28 dp) et sa rangée `row_control` (36 dp), les
+  rangées se replient sur une seconde ligne quand la place manque (`UI_Flow` dans `ui_core`, mesuré
+  dans les deux passes de layout existantes), le transport du disque passe en cinq icônes, le
+  panneau Disque défile au lieu de couler sous la barre de statut, les messages du pré-vol tiennent
+  sur deux ou trois lignes au lieu d'être coupés, les bulles basculent au-dessus de leur bouton près
+  du bas de la fenêtre et les compteurs de diagnostic quittent la barre de statut pour l'overlay
+  F11. Panneaux Disque et Plan élargis (360 et 400 dp minimum) : à 1100 × 700, la fenêtre minimale,
+  plus rien n'est coupé. La liste de pistes de la bibliothèque garde ses 160 dp quoi qu'il arrive :
+  le panneau de détail cède d'abord, puis le navigateur. Le survol d'une poignée de séparation se
+  voit sur 2 dp et non sur toute sa largeur.
 - **Régime de taille (T-070)** : nouvelle cible `build.bat map` (`/MAP` + `tools/size_report.py`) qui
   ventile l'exe par module et par symbole, et compare deux mesures (`--diff`). L'exe release passe de
   **636 928 à 622 080 octets** : `#pragma optimize("s") + inline_depth(1)` sur les unités froides que

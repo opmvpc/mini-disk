@@ -323,7 +323,10 @@ static void app_settings_cache_clear(void) {
     const UI_Theme *theme = ui_theme();
     Arena *frame = ui_frame_arena();
     u64 used = app_settings.transcode_bytes + app_settings.covers_bytes;
-    AppSettingsRow(app_settings_megabytes(frame, used)) {
+    // C-T075: "1 Mo" alone was a label with no subject. The row says what the
+    // number measures, and the button says what it does about it.
+    AppSettingsRow(str8f(frame, app_str_c(Str_SettingsCacheUsed),
+                         app_settings_megabytes(frame, used))) {
         if (ui_button(str8f(frame, "%S###sclr", app_str(Str_SettingsCacheClear))).clicked) {
             app_settings_clear_caches();
         }
@@ -341,7 +344,9 @@ static void app_settings_library(void) {
     Arena *frame = ui_frame_arena();
     u32 remove = app.prefs.folder_count;  // no folder asked to go
     for (u32 i = 0; i < app.prefs.folder_count; i += 1) {
-        AppSettingsRow(app_str(Str_SettingsFolders)) {
+        // T-075: the label belongs to the list, not to each of its lines - it
+        // was written once per folder, five times over for five folders.
+        AppSettingsRow(i == 0 ? app_str(Str_SettingsFolders) : str8_lit("")) {
             UI_PrefWidth(ui_pct(1.0f, 0.0f))
             UI_PrefHeight(ui_pct(1.0f, 1.0f)) {
                 ui_label_styled(UI_FontStyle_Caption, theme->fg_primary,
