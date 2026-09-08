@@ -33,6 +33,7 @@ enum {
     UI_DebugRow_Fps = 0,
     UI_DebugRow_MinMax,
     UI_DebugRow_Boxes,
+    UI_DebugRow_List,
     UI_DebugRow_Vertices,
     UI_DebugRow_Atlas,
     UI_DebugRow_Arenas,
@@ -56,6 +57,9 @@ typedef struct UI_DebugOverlay {
 
     u32 draw_calls;  // snapshot of the last completed frame
     u32 quads;
+    // What the virtualized list spent this frame (T-075, C5): it used to be in
+    // the status bar, where it competed with the numbers the user came for.
+    u64 list_boxes, list_visible;
 } UI_DebugOverlay;
 
 global UI_DebugOverlay ui_debug;
@@ -63,6 +67,11 @@ global UI_DebugOverlay ui_debug;
 void ui_debug_overlay_set_arenas(Arena *permanent, Arena *frame) {
     ui_debug.permanent = permanent;
     ui_debug.frame = frame;
+}
+
+void ui_debug_overlay_set_list_stats(u64 boxes, u64 visible) {
+    ui_debug.list_boxes = boxes;
+    ui_debug.list_visible = visible;
 }
 
 void ui_debug_overlay_toggle(void) { ui_debug.visible = !ui_debug.visible; }
@@ -172,6 +181,8 @@ void ui_debug_overlay_build(void) {
     rows[UI_DebugRow_Boxes] =
             str8f(frame_arena, "boxes %llu (%llu live)  draw calls %u", ui_frame_box_count(),
                   ui_box_count(), ui_debug.draw_calls);
+    rows[UI_DebugRow_List] = str8f(frame_arena, "list %llu boxes for %llu visible rows",
+                                   ui_debug.list_boxes, ui_debug.list_visible);
     rows[UI_DebugRow_Vertices] =
             str8f(frame_arena, "vertices %u  quads %u", ui_debug.quads * 4, ui_debug.quads);
     rows[UI_DebugRow_Atlas] = str8f(frame_arena, "atlas %u x %u  fill %02f %%", atlas_size,

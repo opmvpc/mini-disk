@@ -17,6 +17,12 @@ typedef enum R_Icon {
     R_Icon_ChevronRight,
     R_Icon_ChevronDown,
     R_Icon_Disc,
+    // The transport of the disc panel (T-075): the same unit square, the same
+    // rasterizer, no bitmap anywhere.
+    R_Icon_Pause,
+    R_Icon_Stop,
+    R_Icon_Prev,
+    R_Icon_Next,
     R_Icon_COUNT
 } R_Icon;
 

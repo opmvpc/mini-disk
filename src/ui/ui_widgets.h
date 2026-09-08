@@ -33,6 +33,9 @@ UI_Box   *ui_spacer(UI_Size size);
 // `text` must stay alive until ui_end: a literal, or the frame arena.
 void ui_tooltip_box(UI_Box *box, String8 text);
 md_inline void ui_tooltip(String8 text) { ui_tooltip_box(ui_last_box(), text); }
+// The strip at the bottom of the window a tooltip flips above rather than cover
+// (T-075, S1): the status bar, in physical pixels.
+void ui_tooltip_reserve_bottom(f32 pixels);
 
 // The cursor a widget asked for this frame; ui_widgets_end_frame hands it to
 // the platform and goes back to the arrow. Called once, just before ui_end.
@@ -164,6 +167,15 @@ void ui_splitter_init(UI_Splitter *state, f32 size, f32 min_leading, f32 min_tra
 // size; ui_splitter then builds the handle where the tree wants it.
 f32  ui_splitter_update(UI_Splitter *state, Axis2 axis, f32 total);
 void ui_splitter(UI_Splitter *state, Axis2 axis);
+
+// Three zones stacked in one column - leading, middle, trailing - where only
+// the middle one has no handle of its own and so no way to defend itself. It
+// keeps `min_middle` first: the trailing zone gives way down to `min_trailing`,
+// then the leading one down to `min_leading`. `leading` and `trailing` are read
+// and written; when even the three minimums do not fit, both come back at their
+// minimum and the middle takes what is left. Physical pixels (T-075 revue).
+void ui_split_fit_middle(f32 total, f32 min_middle, f32 *leading, f32 min_leading, f32 *trailing,
+                         f32 min_trailing);
 
 // --- context menu ----------------------------------------------------------
 typedef struct UI_ContextMenu {

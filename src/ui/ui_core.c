@@ -306,6 +306,10 @@ UI_Box *ui_build_box_from_key(UI_Flags flags, UI_Key key) {
     box->text_color = ui_top_text_color();
     box->font = ui_top_font();
     box->fixed_pos = v2(ui_top_fixed_x(), ui_top_fixed_y());
+    box->flow_gap_x = (u8)(ui_top_flow_gap_x() + 0.5f);
+    box->flow_gap_y = (u8)(ui_top_flow_gap_y() + 0.5f);
+    box->flow_pad_x = (u8)(ui_top_flow_pad_x() + 0.5f);
+    box->flow_pad_y = (u8)(ui_top_flow_pad_y() + 0.5f);
     box->display_string.str = 0;
     box->display_string.size = 0;
     box->icon = 0;
@@ -567,6 +571,54 @@ static UI_Flags ui_floating_flag(Axis2 axis) {
 // Order is preserved exactly: prefix passes still see a parent resolved before
 // its children, the postfix pass still sees resolved children.
 
+// --- flow (T-075) ------------------------------------------------------------
+// One walk over the children cut into lines: a line takes children while they
+// fit in the padded width, a child alone on its line that still does not fit is
+// clamped to that width, and every child is centred across its own line. The
+// same function measures (place = 0) and places (place = 1), so the height a
+// wrapped row needs is the height it is given - there is no second frame, no
+// second tree and nothing allocated.
+static f32 ui_flow_layout(UI_Box *box, b32 place) {
+    f32 pad_x = (f32)box->flow_pad_x;
+    f32 pad_y = (f32)box->flow_pad_y;
+    f32 gap_x = (f32)box->flow_gap_x;
+    f32 gap_y = (f32)box->flow_gap_y;
+    f32 avail = max_f32(box->computed_size[Axis2_X] - 2.0f * pad_x, 0.0f);
+    f32 y = pad_y;
+    b32 first_line = 1;
+    for (UI_Box *child = box->first; child;) {
+        UI_Box *last = child;
+        // A spacer that falls at the start of a line would indent it: a group
+        // separator is a gap *between* two groups, never a margin.
+        if (child->flags & UI_Spacer) { child->computed_size[Axis2_X] = 0.0f; }
+        if (child->computed_size[Axis2_X] > avail) { child->computed_size[Axis2_X] = avail; }
+        f32 width = child->computed_size[Axis2_X];
+        f32 height = child->computed_size[Axis2_Y];
+        for (UI_Box *next = child->next; next; next = next->next) {
+            f32 grown = width + gap_x + next->computed_size[Axis2_X];
+            if (grown > avail) { break; }
+            width = grown;
+            height = max_f32(height, next->computed_size[Axis2_Y]);
+            last = next;
+        }
+        if (!first_line) { y += gap_y; }
+        if (place) {
+            f32 x = pad_x;
+            for (UI_Box *at = child;; at = at->next) {
+                at->computed_rel_pos[Axis2_X] = x;
+                at->computed_rel_pos[Axis2_Y] =
+                    y + round_f32((height - at->computed_size[Axis2_Y]) * 0.5f);
+                x += at->computed_size[Axis2_X] + gap_x;
+                if (at == last) { break; }
+            }
+        }
+        y += height;
+        first_line = 0;
+        child = last->next;
+    }
+    return y + pad_y;
+}
+
 // Walk A. Pixels/TextContent/Null need nothing, PercentOfParent needs the
 // parent (already visited), ChildrenSum needs the children (visited below).
 static void ui_layout_sizes(UI_Box *box) {
@@ -624,6 +676,9 @@ static void ui_layout_sizes(UI_Box *box) {
     }
     if (sum_x) { box->computed_size[Axis2_X] = total[Axis2_X]; }
     if (sum_y) { box->computed_size[Axis2_Y] = total[Axis2_Y]; }
+    // A wrapped row is as tall as the lines it needs. The width it wraps in may
+    // still shrink in walk B, which measures it again there.
+    if ((box->flags & UI_Flow) && sum_y) { box->computed_size[Axis2_Y] = ui_flow_layout(box, 0); }
 }
 
 md_inline f32 ui_give_factor(UI_Box *box, u32 axis) {
@@ -634,7 +689,29 @@ md_inline f32 ui_give_factor(UI_Box *box, u32 axis) {
 // each child in proportion to size * (1 - strictness), strictness 1 never
 // gives. Their positions follow immediately, then the recursion, because
 // fixing a child only ever touches the sizes of *its own* children.
+static void ui_layout_place(UI_Box *box);
+
+// A wrapped row places its own children: their sizes are theirs, only the line
+// they land on is the parent's business.
+static void ui_flow_place(UI_Box *box) {
+    ui_flow_layout(box, 1);
+    Rect child_clip = (box->flags & UI_Clip) ? rect_intersect(box->rect, box->clip_rect)
+                                             : box->clip_rect;
+    for (UI_Box *child = box->first; child; child = child->next) {
+        f32 x = box->rect.min.x + child->computed_rel_pos[Axis2_X] - box->view_off.x;
+        f32 y = box->rect.min.y + child->computed_rel_pos[Axis2_Y] - box->view_off.y;
+        child->rect = rect(x, y, x + child->computed_size[Axis2_X],
+                           y + child->computed_size[Axis2_Y]);
+        child->clip_rect = child_clip;
+        ui_layout_place(child);
+    }
+}
+
 static void ui_layout_place(UI_Box *box) {
+    if (box->flags & UI_Flow) {
+        ui_flow_place(box);
+        return;
+    }
     Axis2 layout_axis = box->child_layout_axis;
     f32 available[Axis2_COUNT];
     available[Axis2_X] = box->computed_size[Axis2_X];
@@ -651,6 +728,12 @@ static void ui_layout_place(UI_Box *box) {
             if (child->pref_size[axis].kind == UI_SizeKind_PercentOfParent) {
                 child->computed_size[axis] = available[axis] * child->pref_size[axis].value;
             }
+        }
+        // The width a wrapped row wraps in is known here and nowhere earlier:
+        // this is where the number of lines - and so its height - is settled.
+        if ((child->flags & UI_Flow) &&
+            child->pref_size[Axis2_Y].kind == UI_SizeKind_ChildrenSum) {
+            child->computed_size[Axis2_Y] = ui_flow_layout(child, 0);
         }
         if (!(child->flags & floating_along)) {
             f32 child_size = child->computed_size[layout_axis];

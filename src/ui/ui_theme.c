@@ -18,6 +18,8 @@ static void ui_theme_metrics(UI_Theme *theme) {
     theme->row_compact = 22.0f;
     theme->row_standard = 28.0f;
     theme->row_comfortable = 40.0f;
+    theme->control_h = 28.0f;
+    theme->row_control = theme->control_h + 2.0f * theme->space[UI_Space_4];
     theme->radius = 4.0f;
     theme->radius_popup = 6.0f;
     theme->border = 1.0f;

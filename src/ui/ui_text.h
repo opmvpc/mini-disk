@@ -61,6 +61,12 @@ u64 ui_text_ellipsis_split(OsFont font, String8 text, f32 max_width, u32 flags);
 f32 ui_text_draw_ellipsized(OsFont font, String8 text, V2 baseline, f32 max_width, u32 color,
                             u32 flags);
 
+// Where a message that does not fit breaks: the last space whose prefix still
+// fits `max_width`, or `text.size` when the whole string fits, or when no space
+// gives a shorter first line. The byte at the break is the space itself, so the
+// caller drops it (T-075).
+u64 ui_text_wrap_point(OsFont font, String8 text, f32 max_width, u32 flags);
+
 UI_TextStats ui_text_stats(void);
 
 #endif // UI_TEXT_H

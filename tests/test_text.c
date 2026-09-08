@@ -153,6 +153,45 @@ TEST(text_ellipsis_position) {
     EXPECT(ui_text_ellipsis_split(test_text_font, text, ellipsis * 0.5f, 0) == 0);
 }
 
+// T-075 revue: the alert of the pre-flight, in the 300 px a narrow Disc panel
+// leaves it. It has to come back in whole words, never on one cut line.
+TEST(text_wrap_point_breaks_on_spaces) {
+    Unused(arena);
+    String8 text = str8_lit("D\xC3\xA9passement : le plan ne tient pas dans l'espace libre");
+    f32 width = 300.0f;
+    EXPECT(ui_text_width(test_text_font, text, 0) > width);  // it really does not fit
+
+    u64 at = ui_text_wrap_point(test_text_font, text, width, 0);
+    EXPECT(at > 0);
+    EXPECT(at < text.size);
+    EXPECT(text.str[at] == ' ');  // the break is a space, not a letter
+    EXPECT(ui_text_width(test_text_font, str8_prefix(text, at), 0) <= width);
+
+    // It is the *last* space that fits: one word more would overflow.
+    String8 rest = str8_skip(text, at + 1);
+    u64 next = 0;
+    while (next < rest.size && rest.str[next] != ' ') { next += 1; }
+    EXPECT(ui_text_width(test_text_font, str8_prefix(text, at + 1 + next), 0) > width);
+
+    // Three lines are enough for it at 300 px, each one broken on a space.
+    u32 lines = 1;
+    while (ui_text_width(test_text_font, rest, 0) > width) {
+        u64 cut = ui_text_wrap_point(test_text_font, rest, width, 0);
+        EXPECT(cut < rest.size);
+        rest = str8_skip(rest, cut + 1);
+        lines += 1;
+    }
+    lines += 1;
+    EXPECT(lines <= 3);
+
+    // A width that holds the whole string, and one that holds no space at all:
+    // both answer "no break here".
+    EXPECT(ui_text_wrap_point(test_text_font, text, ui_text_width(test_text_font, text, 0), 0) ==
+           text.size);
+    EXPECT(ui_text_wrap_point(test_text_font, text, 1.0f, 0) == text.size);
+    EXPECT(ui_text_wrap_point(test_text_font, text, 0.0f, 0) == text.size);
+}
+
 TEST(text_cache_hit_and_miss) {
     ui_text_reset();
     String8 text = str8_lit("cache me if you can");
@@ -260,6 +299,7 @@ static void test_text_run_all(void) {
     RUN(text_measure_matches_draw);
     RUN(text_tabular_numbers);
     RUN(text_ellipsis_position);
+    RUN(text_wrap_point_breaks_on_spaces);
     RUN(text_cache_hit_and_miss);
     RUN(text_subpixel_variants);
     RUN(text_dpi_rebuild);

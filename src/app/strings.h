@@ -368,6 +368,13 @@ typedef enum Str {
     Str_DiscWarnWrittenHere,
     Str_PlanBilledTip,          // "facture par mode %S . audio %S . perdu %S"
     Str_PlanGroupCount,         // "%u pistes . %S"
+    // T-075, appended at the end of the enum and of both tables for the same
+    // reason as T-071 above.
+    Str_DiscTocCells,           // "TOC : %u / %u cellules"
+    Str_DiscTocFree,            // "%S caracteres libres"
+    Str_DiscGroupUnnamed,       // "(sans nom)"
+    Str_TransferMoreTracks,     // "+ %u autres pistes"
+    Str_SettingsCacheUsed,      // "Occupation : %S"
     Str_COUNT
 } Str;
 
@@ -726,6 +733,12 @@ static const char *app_strings_fr[Str_COUNT] = {
     "Écrite à l'instant, encore dite réservée : l'effacement est tenté.",
     "Facturé par mode %S · audio %S · perdu %S",
     "%u pistes · %S",
+    // T-075
+    "TOC : %u / %u cellules",
+    "%S caractères libres",
+    "(sans nom)",
+    "+ %u autres pistes",
+    "Occupation : %S",
 };
 
 static const char *app_strings_en[Str_COUNT] = {
@@ -1073,6 +1086,12 @@ static const char *app_strings_en[Str_COUNT] = {
     "Written just now, still called reserved: the erase is attempted.",
     "Billed per mode %S · audio %S · wasted %S",
     "%u tracks · %S",
+    // T-075
+    "TOC: %u / %u cells",
+    "%S free characters",
+    "(unnamed)",
+    "+ %u more tracks",
+    "In use: %S",
 };
 
 global StrLang app_lang = APP_LANG_DEFAULT;

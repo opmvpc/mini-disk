@@ -435,7 +435,7 @@ static AppBrowserClick app_browser_column(UI_List *list, String8 id, String8 tit
     result.hit = 0;
     result.group = LIB_GROUP_ALL;
     f32 row_height = ui_dp(theme->row_compact);
-    f32 count_width = ui_dp(56.0f);
+    f32 count_width = ui_dp(32.0f);
     list->cursor = (selected == LIB_GROUP_ALL) ? 0 : selected + 1;
     list->has_cursor = 1;
 
@@ -470,6 +470,10 @@ static AppBrowserClick app_browser_column(UI_List *list, String8 id, String8 tit
                 app_cell(ui_pct(1.0f, 0.0f), name, color, 0, UI_TextAlign_Left);
                 app_cell_number(count_width, str8f(ui_frame_arena(), "%u", tracks),
                                 theme->fg_muted);
+                // L1: the counter used to end two pixels from the edge, under
+                // the scrollbar. The gutter is part of the row, not of the
+                // number.
+                ui_spacer(ui_px(ui_dp(theme->scrollbar_width_hover), 1.0f));
                 ui_list_row_end(list);
                 if (signal.clicked) {
                     result.hit = 1;
@@ -492,6 +496,29 @@ static void app_split_remember(UI_Splitter *split, f32 before, u32 *pref) {
     if (split->size == before) { return; }
     *pref = (u32)(split->size / ui_dpi_scale() + 0.5f);
     app.prefs_dirty = 1;
+}
+
+// What the column spends whatever the two handles are dragged to: the panel
+// header, the search row, the two collapse bars, the column headers, their four
+// separators and the two handles. What is left over is what the browser, the
+// track list and the detail panel share.
+static f32 app_library_chrome_h(void) {
+    const UI_Theme *theme = ui_theme();
+    return ui_dp(2.0f * theme->row_comfortable + 2.0f * theme->row_standard +
+                 theme->row_compact + 4.0f + 2.0f * theme->splitter_size);
+}
+
+// The two vertical handles clamped *together*: each one alone knows nothing of
+// the other, so 190 dp of browser over 230 dp of detail left the track list its
+// header and nothing else in a 700 dp window. The list keeps APP_MIN_LIST_DP;
+// the detail gives way first, then the browser, each down to its own minimum. A
+// zone folded away asks for nothing and gets nothing (T-075 revue).
+static void app_library_split_fit(f32 *browser_h, f32 *detail_h) {
+    f32 scale = ui_dpi_scale();
+    f32 min_browser = app.prefs.browser_collapsed ? 0.0f : APP_MIN_BROWSER_DP * scale;
+    f32 min_detail = app.prefs.detail_collapsed ? 0.0f : APP_MIN_DETAIL_DP * scale;
+    ui_split_fit_middle(app_library_panel_h - app_library_chrome_h(), APP_MIN_LIST_DP * scale,
+                        browser_h, min_browser, detail_h, min_detail);
 }
 
 static void app_browser_panel(void) {
@@ -535,6 +562,8 @@ static void app_browser_panel(void) {
     f32 before = app.browser_split.size;
     f32 browser_h = ui_splitter_update(&app.browser_split, Axis2_Y, app_library_panel_h);
     app_split_remember(&app.browser_split, before, &app.prefs.browser_height);
+    f32 detail_h = app.prefs.detail_collapsed ? 0.0f : app.detail_split.size;
+    app_library_split_fit(&browser_h, &detail_h);
     UI_PrefWidth(ui_pct(1.0f, 0.0f))
     UI_PrefHeight(ui_px(browser_h, 1.0f))
     UI_ChildLayoutAxis(Axis2_X)
@@ -742,6 +771,8 @@ static void app_detail_panel(f32 width) {
         f32 before = app.detail_split.size;
         detail_h = ui_splitter_update(&app.detail_split, Axis2_Y, app_library_panel_h);
         app_split_remember(&app.detail_split, before, &app.prefs.detail_height);
+        f32 browser_h = app.prefs.browser_collapsed ? 0.0f : app.browser_split.size;
+        app_library_split_fit(&browser_h, &detail_h);
         ui_splitter(&app.detail_split, Axis2_Y);
     }
     UI_PrefWidth(ui_pct(1.0f, 0.0f))
@@ -775,7 +806,10 @@ static void app_detail_panel(f32 width) {
     // panel shrinks it rather than pushing the facts off screen.
     // ...and so does a short panel: the cover shrinks to the height the user
     // dragged, never below 64 px.
-    f32 side = min_f32((f32)LIB_COVER_LARGE,
+    // C2: 250 px of cover over a list showing two tracks was the wrong half of
+    // the panel. 160 is the size the detail block is now laid out for; a wider
+    // panel does not grow it any further.
+    f32 side = min_f32(ui_dp(160.0f),
                        max_f32(min_f32(width * 0.4f - padding * 2.0f, detail_h - padding * 2.0f),
                                64.0f));
     // Nothing clicked yet: the first row of the current sort is what the panel

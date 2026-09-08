@@ -43,6 +43,15 @@ enum {
     // pixels - the two are mutually exclusive, and a hatch is not worth two more
     // bytes in a struct the layout walks twice per frame.
     UI_DrawHatch      = 1u << 13,
+    // An X axis that wraps (T-075): the children are laid out left to right
+    // inside the padded width of the box and start a new line as soon as the
+    // next one would not fit. The height the wrap needs is measured in the same
+    // two walks as the rest of the layout, never in a frame of its own.
+    UI_Flow           = 1u << 14,
+    // A pure spacer (ui_spacer). It draws nothing, and a wrapped row drops the
+    // one that falls at the start of a line: a group separator is a gap between
+    // two groups, never a margin.
+    UI_Spacer         = 1u << 15,
 };
 
 // Horizontal alignment of the drawn text inside the box. Durations, sizes and
@@ -147,6 +156,11 @@ struct UI_Box {
     // -- cold: retained across frames -----------------------------------
     V2 view_off_target;
     f32 hot_t, active_t, focus_t;  // exponentially smoothed, 0..1
+    // UI_Flow: the gap between two children of a line, the gap between two
+    // lines, and the inset on each side. Whole physical pixels in four u8, at
+    // the very end of the struct: those four bytes were the tail padding, so a
+    // wrapped row costs the tree - and the two walks - exactly nothing (T-075).
+    u8 flow_gap_x, flow_gap_y, flow_pad_x, flow_pad_y;
 };
 
 typedef struct UI_Signal {
@@ -197,7 +211,11 @@ typedef struct UI_Signal {
     X(text_align, u32)               \
     X(font, OsFont)                  \
     X(fixed_x, f32)                  \
-    X(fixed_y, f32)
+    X(fixed_y, f32)                  \
+    X(flow_gap_x, f32)               \
+    X(flow_gap_y, f32)               \
+    X(flow_pad_x, f32)               \
+    X(flow_pad_y, f32)
 
 #define X(name, type)      \
     void ui_push_##name(type value); \
@@ -224,6 +242,10 @@ UI_STACK_LIST
 #define UI_FixedX(v)          DeferLoop(ui_push_fixed_x(v), ui_pop_fixed_x())
 #define UI_FixedY(v)          DeferLoop(ui_push_fixed_y(v), ui_pop_fixed_y())
 #define UI_LayerScope(v)      DeferLoop(ui_push_layer(v), ui_pop_layer())
+#define UI_FlowGapX(v)        DeferLoop(ui_push_flow_gap_x(v), ui_pop_flow_gap_x())
+#define UI_FlowGapY(v)        DeferLoop(ui_push_flow_gap_y(v), ui_pop_flow_gap_y())
+#define UI_FlowPadX(v)        DeferLoop(ui_push_flow_pad_x(v), ui_pop_flow_pad_x())
+#define UI_FlowPadY(v)        DeferLoop(ui_push_flow_pad_y(v), ui_pop_flow_pad_y())
 
 // --- animation -------------------------------------------------------------
 // x += (target - x) * (1 - 2^(-rate * dt)). 30 converges in about 120 ms.

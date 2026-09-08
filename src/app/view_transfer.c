@@ -540,16 +540,18 @@ static void app_transfer_gauge(f32 panel_width) {
 static void app_transfer_warnings(void) {
     const UI_Theme *theme = ui_theme();
     const TransferSim *sim = &app_transfer.sim;
+    // The three blocking alerts: they are the reason the burn will not happen,
+    // so none of them is ever cut - they wrap (T-075 revue, defect 2).
     if (sim->warnings & TransferWarn_Protected) {
-        app_device_line(UI_FontStyle_Emphasis, theme->danger,
-                        app_str(Str_TransferWarnProtected));
+        app_device_lines(UI_FontStyle_Emphasis, theme->danger,
+                         app_str(Str_TransferWarnProtected), 3);
     }
     if (sim->warnings & TransferWarn_NoDisc) {
-        app_device_line(UI_FontStyle_Ui, theme->warning, app_str(Str_TransferWarnNoDisc));
+        app_device_lines(UI_FontStyle_Ui, theme->warning, app_str(Str_TransferWarnNoDisc), 3);
     }
     if (sim->warnings & TransferWarn_Overflow) {
-        app_device_line(UI_FontStyle_Emphasis, theme->danger,
-                        app_str(Str_TransferWarnOverflow));
+        app_device_lines(UI_FontStyle_Emphasis, theme->danger,
+                         app_str(Str_TransferWarnOverflow), 3);
     }
     if (sim->warnings & TransferWarn_MissingTrack) {
         app_device_line(UI_FontStyle_Ui, theme->warning,
@@ -557,15 +559,17 @@ static void app_transfer_warnings(void) {
                               sim->missing_count));
     }
     if (sim->warnings & TransferWarn_TocOverflow) {
-        app_device_line(UI_FontStyle_Ui, theme->danger, app_str(Str_TransferWarnToc));
+        app_device_lines(UI_FontStyle_Ui, theme->danger, app_str(Str_TransferWarnToc), 3);
     }
     if (sim->warnings & TransferWarn_Shortened) {
-        app_device_line(UI_FontStyle_Caption, theme->fg_secondary,
-                        app_str(Str_TransferWarnShortened));
+        app_device_lines(UI_FontStyle_Caption, theme->fg_secondary,
+                         app_str(Str_TransferWarnShortened), 2);
     }
     if (sim->warnings & TransferWarn_TitleKept) {
-        app_device_line(UI_FontStyle_Caption, theme->fg_secondary,
-                        app_str(Str_TransferTitleKept));
+        // T1: what the disc keeps is the thing to read before burning, so it is
+        // never cut - two lines, and the second one carries the ellipsis.
+        app_device_lines(UI_FontStyle_Caption, theme->fg_secondary,
+                         app_str(Str_TransferTitleKept), 2);
     }
 }
 
@@ -600,20 +604,28 @@ static void app_transfer_track_list(b32 running) {
         UI_ChildLayoutAxis(Axis2_X) {
             UI_Box *row = ui_build_box_from_key(0, 0);
             UI_Parent(row) {
-                app_cell(ui_px(ui_dp(28.0f), 1.0f), str8f(ui_frame_arena(), "%u", i + 1),
+                // T3: a number that does not fit renders as an ellipsis, and
+                // two ellipsis columns side by side read as one. 32 dp holds
+                // three digits, the duration keeps its 56, and the status only
+                // exists once there is a run to report.
+                app_cell(ui_px(ui_dp(32.0f), 1.0f), str8f(ui_frame_arena(), "%u", i + 1),
                          theme->fg_disabled, UI_TextFlag_TabularNumbers, UI_TextAlign_Right);
                 app_cell(ui_pct(1.0f, 0.0f), str8((u8 *)entry->title, entry->title_size), color, 0,
                          UI_TextAlign_Left);
-                app_cell(ui_px(ui_dp(96.0f), 0.0f), status, color, 0, UI_TextAlign_Right);
-                app_cell(ui_px(ui_dp(56.0f), 0.0f), app_ms_duration(entry->duration_ms),
+                if (status.size != 0) {
+                    app_cell(ui_px(ui_dp(96.0f), 0.0f), status, color, 0, UI_TextAlign_Right);
+                }
+                app_cell(ui_px(ui_dp(56.0f), 1.0f), app_ms_duration(entry->duration_ms),
                          theme->fg_muted, UI_TextFlag_TabularNumbers, UI_TextAlign_Right);
             }
         }
         if (!entry->missing) { shown += 1; }
     }
     if (sim->count > 12) {
-        app_device_line(UI_FontStyle_Caption, theme->fg_disabled,
-                        str8f(ui_frame_arena(), "+ %u", sim->count - 12));
+        // C4: "+ 8" looked like a fragment of the list above it.
+        app_device_line(UI_FontStyle_Caption, theme->fg_secondary,
+                        str8f(ui_frame_arena(), app_str_c(Str_TransferMoreTracks),
+                              sim->count - 12));
     }
 }
 
@@ -653,52 +665,41 @@ static void app_transfer_preflight_panel(void) {
         app_device_line(UI_FontStyle_Caption, theme->fg_secondary,
                         str8f(ui_frame_arena(), app_str_c(Str_TransferWarnNotEmpty),
                               sim->tracks_before));
-        UI_PrefWidth(ui_pct(1.0f, 0.0f))
-        UI_PrefHeight(ui_px(ui_dp(theme->row_standard), 1.0f))
-        UI_ChildLayoutAxis(Axis2_X) {
-            UI_Box *row = ui_build_box_from_key(0, 0);
-            UI_Parent(row) {
-                ui_spacer(ui_px(ui_dp(theme->space[UI_Space_12]), 1.0f));
-                if (ui_button(str8f(ui_frame_arena(), "%S###append",
-                                    app_str(Str_TransferAppend)))
-                            .clicked) {
-                    app_transfer.policy = TransferPolicy_Append;
-                    app_transfer_resimulate();
-                }
-                ui_spacer(ui_px(ui_dp(theme->space[UI_Space_8]), 1.0f));
-                if (ui_button(str8f(ui_frame_arena(), "%S###erasefirst",
-                                    app_str(Str_TransferErase)))
-                            .clicked) {
-                    app_transfer.policy = TransferPolicy_EraseFirst;
-                    app_transfer_resimulate();
-                }
-                ui_tooltip(app_str(Str_TransferEraseHint));
+        ui_spacer(ui_px(ui_dp(theme->space[UI_Space_8]), 1.0f));
+        UI_Parent(app_button_row()) {
+            if (ui_button(str8f(ui_frame_arena(), "%S###append", app_str(Str_TransferAppend)))
+                        .clicked) {
+                app_transfer.policy = TransferPolicy_Append;
+                app_transfer_resimulate();
             }
+            if (ui_button(str8f(ui_frame_arena(), "%S###erasefirst",
+                                app_str(Str_TransferErase)))
+                        .clicked) {
+                app_transfer.policy = TransferPolicy_EraseFirst;
+                app_transfer_resimulate();
+            }
+            ui_tooltip(app_str(Str_TransferEraseHint));
         }
     }
 
-    UI_PrefWidth(ui_pct(1.0f, 0.0f))
-    UI_PrefHeight(ui_px(ui_dp(theme->row_standard), 1.0f))
-    UI_ChildLayoutAxis(Axis2_X) {
-        UI_Box *row = ui_build_box_from_key(0, 0);
-        UI_Parent(row) {
-            ui_spacer(ui_px(ui_dp(theme->space[UI_Space_12]), 1.0f));
-            if (sim->allowed) {
-                // MI-32: the button says the verb and the count, never "OK".
-                if (ui_button_primary(str8f(ui_frame_arena(), "%S###burnnow",
-                                            str8f(ui_frame_arena(),
-                                                  app_str_c(Str_TransferBurnN),
-                                                  sim->write_count)))
-                            .clicked) {
-                    app_transfer_start();
-                }
-            }
-            ui_spacer(ui_px(ui_dp(theme->space[UI_Space_8]), 1.0f));
-            if (ui_button(str8f(ui_frame_arena(), "%S###burnback", app_str(Str_TransferBack)))
+    // T2: the row used to keep its height when the primary button was absent,
+    // which left a hole to the left of "Revenir au plan". A row of buttons is
+    // now as tall as the buttons it has.
+    ui_spacer(ui_px(ui_dp(theme->space[UI_Space_8]), 1.0f));
+    UI_Parent(app_button_row()) {
+        if (sim->allowed) {
+            // MI-32: the button says the verb and the count, never "OK".
+            if (ui_button_primary(str8f(ui_frame_arena(), "%S###burnnow",
+                                        str8f(ui_frame_arena(), app_str_c(Str_TransferBurnN),
+                                              sim->write_count)))
                         .clicked) {
-                app_transfer.open = 0;
-                app_transfer.run.phase = TransferPhase_Idle;
+                app_transfer_start();
             }
+        }
+        if (ui_button(str8f(ui_frame_arena(), "%S###burnback", app_str(Str_TransferBack)))
+                    .clicked) {
+            app_transfer.open = 0;
+            app_transfer.run.phase = TransferPhase_Idle;
         }
     }
 }
@@ -774,77 +775,63 @@ static void app_transfer_running_panel(f32 panel_width) {
         app_device_line(UI_FontStyle_Ui, theme->warning,
                         str8f(ui_frame_arena(), app_str_c(Str_TransferCancelWarn),
                               transfer_written_count(run)));
-        UI_PrefWidth(ui_pct(1.0f, 0.0f))
-        UI_PrefHeight(ui_px(ui_dp(theme->row_standard), 1.0f))
-        UI_ChildLayoutAxis(Axis2_X) {
-            UI_Box *row = ui_build_box_from_key(0, 0);
-            UI_Parent(row) {
-                ui_spacer(ui_px(ui_dp(theme->space[UI_Space_12]), 1.0f));
-                if (ui_button(str8f(ui_frame_arena(), "%S###cancelyes",
-                                    app_str(Str_TransferCancelYes)))
-                            .clicked) {
-                    TransferEvent event;
-                    StructZero(&event);
-                    event.kind = TransferEvent_CancelRequested;
-                    event.now_us = now;
-                    transfer_apply(run, &event);
-                    netmd_device_post(&app_device.thread, NetmdCmd_CancelUpload, 0);
-                    app_transfer_logf("annulation demandee");
-                    app_transfer.confirm_cancel = 0;
-                }
-                ui_spacer(ui_px(ui_dp(theme->space[UI_Space_8]), 1.0f));
-                if (ui_button(str8f(ui_frame_arena(), "%S###cancelno",
-                                    app_str(Str_TransferCancelNo)))
-                            .clicked) {
-                    app_transfer.confirm_cancel = 0;
-                }
+        UI_Parent(app_button_row()) {
+            if (ui_button(str8f(ui_frame_arena(), "%S###cancelyes",
+                                app_str(Str_TransferCancelYes)))
+                        .clicked) {
+                TransferEvent event;
+                StructZero(&event);
+                event.kind = TransferEvent_CancelRequested;
+                event.now_us = now;
+                transfer_apply(run, &event);
+                netmd_device_post(&app_device.thread, NetmdCmd_CancelUpload, 0);
+                app_transfer_logf("annulation demandee");
+                app_transfer.confirm_cancel = 0;
+            }
+            if (ui_button(str8f(ui_frame_arena(), "%S###cancelno",
+                                app_str(Str_TransferCancelNo)))
+                        .clicked) {
+                app_transfer.confirm_cancel = 0;
             }
         }
         return;
     }
 
-    UI_PrefWidth(ui_pct(1.0f, 0.0f))
-    UI_PrefHeight(ui_px(ui_dp(theme->row_standard), 1.0f))
-    UI_ChildLayoutAxis(Axis2_X) {
-        UI_Box *row = ui_build_box_from_key(0, 0);
-        UI_Parent(row) {
-            ui_spacer(ui_px(ui_dp(theme->space[UI_Space_12]), 1.0f));
-            if (run->phase == TransferPhase_Paused) {
-                if (ui_button_primary(str8f(ui_frame_arena(), "%S###resume",
-                                            app_str(Str_TransferResume)))
-                            .clicked) {
-                    TransferEvent event;
-                    StructZero(&event);
-                    event.kind = TransferEvent_Resume;
-                    event.now_us = now;
-                    transfer_apply(run, &event);
-                    netmd_device_upload(&app_device.thread, &app_transfer.plan);
-                    app_transfer_logf("reprise");
-                }
-            } else if (run->phase == TransferPhase_Running) {
-                if (ui_button(str8f(ui_frame_arena(), "%S###pause",
-                                    app_str(Str_TransferPause)))
-                            .clicked) {
-                    TransferEvent event;
-                    StructZero(&event);
-                    event.kind = TransferEvent_PauseRequested;
-                    event.now_us = now;
-                    transfer_apply(run, &event);
-                    // The device thread stops between two tracks: cancelling
-                    // the run is what a pause *is* at the protocol level, and
-                    // the tracks already committed stay committed.
-                    netmd_device_post(&app_device.thread, NetmdCmd_CancelUpload, 0);
-                    app_transfer_logf("pause demandee");
-                }
-                ui_tooltip(app_str(Str_TransferPauseHint));
+    UI_Parent(app_button_row()) {
+        if (run->phase == TransferPhase_Paused) {
+            if (ui_button_primary(str8f(ui_frame_arena(), "%S###resume",
+                                        app_str(Str_TransferResume)))
+                        .clicked) {
+                TransferEvent event;
+                StructZero(&event);
+                event.kind = TransferEvent_Resume;
+                event.now_us = now;
+                transfer_apply(run, &event);
+                netmd_device_upload(&app_device.thread, &app_transfer.plan);
+                app_transfer_logf("reprise");
             }
-            ui_spacer(ui_px(ui_dp(theme->space[UI_Space_8]), 1.0f));
-            if (run->phase != TransferPhase_Cancelling) {
-                if (ui_button(str8f(ui_frame_arena(), "%S###cancel",
-                                    app_str(Str_TransferCancel)))
-                            .clicked) {
-                    app_transfer.confirm_cancel = 1;
-                }
+        } else if (run->phase == TransferPhase_Running) {
+            if (ui_button(str8f(ui_frame_arena(), "%S###pause",
+                                app_str(Str_TransferPause)))
+                        .clicked) {
+                TransferEvent event;
+                StructZero(&event);
+                event.kind = TransferEvent_PauseRequested;
+                event.now_us = now;
+                transfer_apply(run, &event);
+                // The device thread stops between two tracks: cancelling
+                // the run is what a pause *is* at the protocol level, and
+                // the tracks already committed stay committed.
+                netmd_device_post(&app_device.thread, NetmdCmd_CancelUpload, 0);
+                app_transfer_logf("pause demandee");
+            }
+            ui_tooltip(app_str(Str_TransferPauseHint));
+        }
+        if (run->phase != TransferPhase_Cancelling) {
+            if (ui_button(str8f(ui_frame_arena(), "%S###cancel",
+                                app_str(Str_TransferCancel)))
+                        .clicked) {
+                app_transfer.confirm_cancel = 1;
             }
         }
     }
@@ -867,34 +854,27 @@ static void app_transfer_result_line(void) {
                         str8f(ui_frame_arena(), app_str_c(Str_TransferFailedN),
                               run->last_result, run->done_count));
     }
-    UI_PrefWidth(ui_pct(1.0f, 0.0f))
-    UI_PrefHeight(ui_px(ui_dp(theme->row_standard), 1.0f))
-    UI_ChildLayoutAxis(Axis2_X) {
-        UI_Box *row = ui_build_box_from_key(0, 0);
-        UI_Parent(row) {
-            ui_spacer(ui_px(ui_dp(theme->space[UI_Space_12]), 1.0f));
-            // A run that stopped short can be picked up where it stopped: the
-            // entries already Done are skipped by netmd_upload_run itself.
-            if (run->done_count < run->count) {
-                if (ui_button_primary(str8f(ui_frame_arena(), "%S###resumerun",
-                                            app_str(Str_TransferResume)))
-                            .clicked) {
-                    TransferEvent event;
-                    StructZero(&event);
-                    event.kind = TransferEvent_Resume;
-                    event.now_us = os_time_now_us();
-                    transfer_apply(run, &event);
-                    netmd_device_upload(&app_device.thread, &app_transfer.plan);
-                    app_transfer_logf("reprise apres interruption");
-                }
-                ui_spacer(ui_px(ui_dp(theme->space[UI_Space_8]), 1.0f));
-            }
-            if (ui_button(str8f(ui_frame_arena(), "%S###burndone",
-                                app_str(Str_TransferBack)))
+    UI_Parent(app_button_row()) {
+        // A run that stopped short can be picked up where it stopped: the
+        // entries already Done are skipped by netmd_upload_run itself.
+        if (run->done_count < run->count) {
+            if (ui_button_primary(str8f(ui_frame_arena(), "%S###resumerun",
+                                        app_str(Str_TransferResume)))
                         .clicked) {
-                app_transfer.open = 0;
-                app_transfer.run.phase = TransferPhase_Idle;
+                TransferEvent event;
+                StructZero(&event);
+                event.kind = TransferEvent_Resume;
+                event.now_us = os_time_now_us();
+                transfer_apply(run, &event);
+                netmd_device_upload(&app_device.thread, &app_transfer.plan);
+                app_transfer_logf("reprise apres interruption");
             }
+        }
+        if (ui_button(str8f(ui_frame_arena(), "%S###burndone",
+                            app_str(Str_TransferBack)))
+                    .clicked) {
+            app_transfer.open = 0;
+            app_transfer.run.phase = TransferPhase_Idle;
         }
     }
 }
@@ -908,7 +888,6 @@ b32 app_transfer_takes_over(void) {
 
 // What the Disc panel calls in place of the T-042 burn button.
 void app_transfer_bar(f32 panel_width) {
-    const UI_Theme *theme = ui_theme();
     u32 phase = app_transfer.run.phase;
     if (phase == TransferPhase_Running || phase == TransferPhase_Pausing ||
         phase == TransferPhase_Paused || phase == TransferPhase_Cancelling) {
@@ -926,23 +905,16 @@ void app_transfer_bar(f32 panel_width) {
         app_transfer_preflight_panel();
         return;
     }
-    UI_PrefWidth(ui_pct(1.0f, 0.0f))
-    UI_PrefHeight(ui_px(ui_dp(theme->row_standard), 1.0f))
-    UI_ChildLayoutAxis(Axis2_X) {
-        UI_Box *row = ui_build_box_from_key(0, 0);
-        UI_Parent(row) {
-            ui_spacer(ui_px(ui_dp(theme->space[UI_Space_12]), 1.0f));
-            if (ui_button_primary(str8f(ui_frame_arena(), "%S###burn", app_str(Str_DiscBurn)))
-                        .clicked) {
-                app_transfer_open();
-            }
-            ui_tooltip(app_str(Str_DiscBurnHint));
-            ui_spacer(ui_px(ui_dp(theme->space[UI_Space_8]), 1.0f));
-            if (ui_button(str8f(ui_frame_arena(), "%S###clear", app_str(Str_DiscClear)))
-                        .clicked) {
-                app_plan_clear();
-            }
-            ui_tooltip(app_str(Str_DiscClearHint));
+    UI_Parent(app_button_row()) {
+        if (ui_button_primary(str8f(ui_frame_arena(), "%S###burn", app_str(Str_DiscBurn)))
+                    .clicked) {
+            app_transfer_open();
         }
+        ui_tooltip(app_str(Str_DiscBurnHint));
+        if (ui_button(str8f(ui_frame_arena(), "%S###clear", app_str(Str_DiscClear)))
+                    .clicked) {
+            app_plan_clear();
+        }
+        ui_tooltip(app_str(Str_DiscClearHint));
     }
 }

@@ -337,6 +337,10 @@ md_inline b32 app_device_connected(void) {
     return app_device.state == AppDeviceState_Connected;
 }
 
+// T-075 (T1, D3): the messages this panel carries are the ones the user has to
+// read before acting, so the ones that do not fit on a line are wrapped instead
+// of being cut. The wrap point is `ui_text_wrap_point`, the last space that
+// fits; a word longer than the panel still gets the ellipsis of its own box.
 static void app_device_line(UI_FontStyle style, u32 color, String8 text) {
     const UI_Theme *theme = ui_theme();
     UI_PrefWidth(ui_pct(1.0f, 0.0f))
@@ -350,6 +354,26 @@ static void app_device_line(UI_FontStyle style, u32 color, String8 text) {
     }
 }
 
+// The same line, over at most `max_lines` of them: the last one keeps the
+// ellipsis, the ones before it break on a space (T-075, T1).
+static void app_device_lines(UI_FontStyle style, u32 color, String8 text, u32 max_lines) {
+    const UI_Theme *theme = ui_theme();
+    OsFont font = ui_font(style);
+    f32 width = rect_width(ui_top_parent()->rect) - 2.0f * ui_dp(theme->space[UI_Space_12]);
+    if (width <= 0.0f) {
+        app_device_line(style, color, text);
+        return;
+    }
+    String8 rest = text;
+    for (u32 line = 0; line + 1 < max_lines && rest.size != 0; line += 1) {
+        u64 at = ui_text_wrap_point(font, rest, width, 0);
+        if (at == rest.size) { break; }
+        app_device_line(style, color, str8_prefix(rest, at));
+        rest = str8_skip(rest, at + 1);
+    }
+    app_device_line(style, color, rest);
+}
+
 // The three steps and the one button of P-001, in the panel itself: the first
 // wall every user of this app hits is the missing driver, so it is not hidden
 // behind a dialog.
@@ -361,18 +385,11 @@ static void app_device_driver_help(void) {
     app_device_line(UI_FontStyle_Caption, theme->fg_secondary, app_str(Str_DeviceStep3));
     ui_spacer(ui_px(ui_dp(theme->space[UI_Space_8]), 1.0f));
 
-    UI_PrefWidth(ui_pct(1.0f, 0.0f))
-    UI_PrefHeight(ui_px(ui_dp(theme->row_standard), 1.0f))
-    UI_ChildLayoutAxis(Axis2_X) {
-        UI_Box *row = ui_build_box_from_key(0, 0);
-        UI_Parent(row) {
-            ui_spacer(ui_px(ui_dp(theme->space[UI_Space_12]), 1.0f));
-            if (ui_button(str8f(ui_frame_arena(), "%S###zadig", app_str(Str_DeviceZadig)))
-                        .clicked) {
-                os_open_url(str8_lit("https://zadig.akeo.ie"));
-            }
-            ui_tooltip(app_str(Str_DeviceZadigHint));
+    UI_Parent(app_button_row()) {
+        if (ui_button(str8f(ui_frame_arena(), "%S###zadig", app_str(Str_DeviceZadig))).clicked) {
+            os_open_url(str8_lit("https://zadig.akeo.ie"));
         }
+        ui_tooltip(app_str(Str_DeviceZadigHint));
     }
 }
 
@@ -493,54 +510,43 @@ static void app_disc_gauge(const PlanCapacity *capacity) {
 }
 
 static void app_disc_transport_bar(void) {
-    const UI_Theme *theme = ui_theme();
-    UI_PrefWidth(ui_pct(1.0f, 0.0f))
-    UI_PrefHeight(ui_px(ui_dp(theme->row_standard), 1.0f))
-    UI_ChildLayoutAxis(Axis2_X) {
-        UI_Box *row = ui_build_box_from_key(0, 0);
-        UI_Parent(row) {
-            ui_spacer(ui_px(ui_dp(theme->space[UI_Space_12]), 1.0f));
-            if (ui_button(str8f(ui_frame_arena(), "%S###dplay", app_str(Str_DiscPlay))).clicked) {
-                netmd_device_post(&app_device.thread, NetmdCmd_Play, 0);
-            }
-            ui_spacer(ui_px(ui_dp(APP_FOCUS_GAP_DP), 1.0f));
-            if (ui_button(str8f(ui_frame_arena(), "%S###dpause", app_str(Str_DiscPause)))
-                        .clicked) {
-                netmd_device_post(&app_device.thread, NetmdCmd_Pause, 0);
-            }
-            ui_spacer(ui_px(ui_dp(APP_FOCUS_GAP_DP), 1.0f));
-            if (ui_button(str8f(ui_frame_arena(), "%S###dstop", app_str(Str_DiscStop))).clicked) {
-                netmd_device_post(&app_device.thread, NetmdCmd_Stop, 0);
-            }
-            ui_spacer(ui_px(ui_dp(theme->space[UI_Space_8]), 1.0f));
-            if (ui_button(str8f(ui_frame_arena(), "%S###dprev", app_str(Str_DiscPrev))).clicked) {
-                netmd_device_post(&app_device.thread, NetmdCmd_Prev, 0);
-            }
-            ui_spacer(ui_px(ui_dp(APP_FOCUS_GAP_DP), 1.0f));
-            if (ui_button(str8f(ui_frame_arena(), "%S###dnext", app_str(Str_DiscNext))).clicked) {
-                netmd_device_post(&app_device.thread, NetmdCmd_Next, 0);
-            }
+    // T-075 (D2): five text buttons were 380 px wide in a panel of 310. Five
+    // icons of control_h are 156 with their gaps, and each one says what it does
+    // in a tooltip; Relire and Ejecter stay text, on a row of their own.
+    UI_Parent(app_button_row()) {
+        if (ui_button_icon(R_Icon_Play, str8_lit("###dplay")).clicked) {
+            netmd_device_post(&app_device.thread, NetmdCmd_Play, 0);
         }
+        ui_tooltip(app_str(Str_DiscPlay));
+        if (ui_button_icon(R_Icon_Pause, str8_lit("###dpause")).clicked) {
+            netmd_device_post(&app_device.thread, NetmdCmd_Pause, 0);
+        }
+        ui_tooltip(app_str(Str_DiscPause));
+        if (ui_button_icon(R_Icon_Stop, str8_lit("###dstop")).clicked) {
+            netmd_device_post(&app_device.thread, NetmdCmd_Stop, 0);
+        }
+        ui_tooltip(app_str(Str_DiscStop));
+        ui_spacer(ui_px(ui_dp(ui_theme()->space[UI_Space_4]), 1.0f));
+        if (ui_button_icon(R_Icon_Prev, str8_lit("###dprev")).clicked) {
+            netmd_device_post(&app_device.thread, NetmdCmd_Prev, 0);
+        }
+        ui_tooltip(app_str(Str_DiscPrev));
+        if (ui_button_icon(R_Icon_Next, str8_lit("###dnext")).clicked) {
+            netmd_device_post(&app_device.thread, NetmdCmd_Next, 0);
+        }
+        ui_tooltip(app_str(Str_DiscNext));
     }
-    UI_PrefWidth(ui_pct(1.0f, 0.0f))
-    UI_PrefHeight(ui_px(ui_dp(theme->row_standard), 1.0f))
-    UI_ChildLayoutAxis(Axis2_X) {
-        UI_Box *row = ui_build_box_from_key(0, 0);
-        UI_Parent(row) {
-            ui_spacer(ui_px(ui_dp(theme->space[UI_Space_12]), 1.0f));
-            if (ui_button(str8f(ui_frame_arena(), "%S###dreload", app_str(Str_DiscRefresh)))
-                        .clicked) {
-                app_device.disc_reading = 1;
-                netmd_device_post(&app_device.thread, NetmdCmd_ReadDisc, 0);
-            }
-            ui_tooltip(app_str(Str_DiscRefreshHint));
-            ui_spacer(ui_px(ui_dp(APP_FOCUS_GAP_DP), 1.0f));
-            if (ui_button(str8f(ui_frame_arena(), "%S###deject", app_str(Str_DiscEject)))
-                        .clicked) {
-                netmd_device_post(&app_device.thread, NetmdCmd_Eject, 0);
-            }
-            ui_tooltip(app_str(Str_DiscEjectHint));
+    UI_Parent(app_button_row()) {
+        if (ui_button(str8f(ui_frame_arena(), "%S###dreload", app_str(Str_DiscRefresh)))
+                    .clicked) {
+            app_device.disc_reading = 1;
+            netmd_device_post(&app_device.thread, NetmdCmd_ReadDisc, 0);
         }
+        ui_tooltip(app_str(Str_DiscRefreshHint));
+        if (ui_button(str8f(ui_frame_arena(), "%S###deject", app_str(Str_DiscEject))).clicked) {
+            netmd_device_post(&app_device.thread, NetmdCmd_Eject, 0);
+        }
+        ui_tooltip(app_str(Str_DiscEjectHint));
     }
 }
 
@@ -668,42 +674,33 @@ static void app_device_edit_keys(const DiscLayout *disc) {
 
 // The bar of the four gestures, for the hands that do not know the shortcuts.
 static void app_device_edit_bar(const DiscLayout *disc) {
-    const UI_Theme *theme = ui_theme();
-    UI_PrefWidth(ui_pct(1.0f, 0.0f))
-    UI_PrefHeight(ui_px(ui_dp(theme->row_standard), 1.0f))
-    UI_ChildLayoutAxis(Axis2_X) {
-        UI_Box *row = ui_build_box_from_key(0, 0);
-        UI_Parent(row) {
-            ui_spacer(ui_px(ui_dp(theme->space[UI_Space_12]), 1.0f));
-            if (ui_button(str8f(ui_frame_arena(), "%S###drename", app_str(Str_DiscEditRename)))
-                        .clicked) {
-                app_device_rename_open(app_device.cursor);
-            }
-            ui_tooltip(app_str(Str_DiscEditRenameHint));
-            ui_spacer(ui_px(ui_dp(APP_FOCUS_GAP_DP), 1.0f));
-            if (ui_button(str8f(ui_frame_arena(), "%S###dgroupmake", app_str(Str_DiscEditGroup)))
-                        .clicked) {
-                app_device_edit_prepare(NetmdEditKind_CreateGroup, 0, 0,
-                                        app_str(Str_DiscEditNewGroup), app_device.selection);
-            }
-            ui_tooltip(app_str(Str_DiscEditGroupHint));
-            ui_spacer(ui_px(ui_dp(APP_FOCUS_GAP_DP), 1.0f));
-            if (ui_button(str8f(ui_frame_arena(), "%S###dungroup", app_str(Str_DiscEditUngroup)))
-                        .clicked &&
-                app_device.cursor < disc->track_count &&
-                disc->tracks[app_device.cursor].group != NETMD_NO_GROUP) {
-                app_device_edit_prepare(NetmdEditKind_DissolveGroup,
-                                        disc->tracks[app_device.cursor].group, 0, str8(0, 0), 0);
-            }
-            ui_tooltip(app_str(Str_DiscEditUngroupHint));
-            ui_spacer(ui_px(ui_dp(APP_FOCUS_GAP_DP), 1.0f));
-            if (ui_button(str8f(ui_frame_arena(), "%S###derase", app_str(Str_DiscEditErase)))
-                        .clicked) {
-                app_device_edit_prepare(NetmdEditKind_EraseTracks, 0, 0, str8(0, 0),
-                                        app_device.selection);
-            }
-            ui_tooltip(app_str(Str_DiscEditEraseHint));
+    UI_Parent(app_button_row()) {
+        if (ui_button(str8f(ui_frame_arena(), "%S###drename", app_str(Str_DiscEditRename)))
+                    .clicked) {
+            app_device_rename_open(app_device.cursor);
         }
+        ui_tooltip(app_str(Str_DiscEditRenameHint));
+        if (ui_button(str8f(ui_frame_arena(), "%S###dgroupmake", app_str(Str_DiscEditGroup)))
+                    .clicked) {
+            app_device_edit_prepare(NetmdEditKind_CreateGroup, 0, 0,
+                                    app_str(Str_DiscEditNewGroup), app_device.selection);
+        }
+        ui_tooltip(app_str(Str_DiscEditGroupHint));
+        if (ui_button(str8f(ui_frame_arena(), "%S###dungroup", app_str(Str_DiscEditUngroup)))
+                    .clicked &&
+            app_device.cursor < disc->track_count &&
+            disc->tracks[app_device.cursor].group != NETMD_NO_GROUP) {
+            app_device_edit_prepare(NetmdEditKind_DissolveGroup,
+                                    disc->tracks[app_device.cursor].group, 0, str8(0, 0), 0);
+        }
+        ui_tooltip(app_str(Str_DiscEditUngroupHint));
+        ui_spacer(ui_px(ui_dp(ui_theme()->space[UI_Space_4]), 1.0f));
+        if (ui_button(str8f(ui_frame_arena(), "%S###derase", app_str(Str_DiscEditErase)))
+                    .clicked) {
+            app_device_edit_prepare(NetmdEditKind_EraseTracks, 0, 0, str8(0, 0),
+                                    app_device.selection);
+        }
+        ui_tooltip(app_str(Str_DiscEditEraseHint));
     }
 }
 
@@ -869,7 +866,9 @@ static void app_disc_group_row(const DiscLayout *disc, u32 group) {
     }
     String8 name = str8((u8 *)info->name, info->name_size);
     b32 unnamed = (name.size == 0);
-    if (unnamed) { name = app_str(Str_DiscUntitled); }
+    // D4: the ellipsis of an empty name is an empty string, and the header read
+    // as one dot. A group with no name says so, like an untitled track does.
+    if (unnamed) { name = app_str(Str_DiscGroupUnnamed); }
     UI_Font(ui_font(unnamed ? UI_FontStyle_Italic : UI_FontStyle_Ui)) {
         app_cell(ui_pct(1.0f, 0.0f), name, unnamed ? theme->fg_disabled : theme->fg_primary, 0,
                  UI_TextAlign_Left);
@@ -1005,11 +1004,18 @@ void app_device_disc_panel(void) {
     app_disc_gauge(&app_disc_capacity);
     // The title budget, in the same panel as the audio one: both are finite,
     // both are shared, and only one of them is usually known about (D3).
+    // D3: one line could not hold both halves of the title budget and the
+    // ellipsis ate the number. Two lines, each one complete.
     app_device_line(UI_FontStyle_Caption, theme->fg_muted,
-                    str8f(ui_frame_arena(), app_str_c(Str_DiscDiffBudget), app_disc_cells,
-                          (PLAN_TOC_CELLS > app_disc_cells)
-                                  ? (PLAN_TOC_CELLS - app_disc_cells) * PLAN_TOC_CELL_CHARS
-                                  : 0u));
+                    str8f(ui_frame_arena(), app_str_c(Str_DiscTocCells), app_disc_cells,
+                          (u32)PLAN_TOC_CELLS));
+    app_device_line(UI_FontStyle_Caption, theme->fg_muted,
+                    str8f(ui_frame_arena(), app_str_c(Str_DiscTocFree),
+                          app_num_u64(ui_frame_arena(),
+                                      (PLAN_TOC_CELLS > app_disc_cells)
+                                              ? (PLAN_TOC_CELLS - app_disc_cells) *
+                                                        PLAN_TOC_CELL_CHARS
+                                              : 0u)));
     ui_spacer(ui_px(ui_dp(theme->space[UI_Space_8]), 1.0f));
     app_disc_transport_bar();
     app_device_edit_bar(disc);

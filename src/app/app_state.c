@@ -259,15 +259,20 @@ void app_init(Arena *permanent, f32 scale) {
     // Three panels that all stay on screen down to 1024 x 640 logical: the disc
     // is measured from the right, the library from the left, and each splitter
     // is clamped against what the other two panels need (see app_body).
-    ui_splitter_init(&app.library_split, 720.0f * scale, APP_MIN_LIBRARY_DP * scale,
+    // T-075 (C1): at 1700 px the disc panel was given 240 dp and drew its
+    // commands outside itself. The first launch now hands it 380 dp and the plan
+    // 470, both taken on the library, which had the space.
+    ui_splitter_init(&app.library_split, 620.0f * scale, APP_MIN_LIBRARY_DP * scale,
                      (APP_MIN_PLAN_DP + APP_MIN_DISC_DP) * scale);
-    ui_splitter_init(&app.disc_split, 240.0f * scale, APP_MIN_DISC_DP * scale,
+    ui_splitter_init(&app.disc_split, 380.0f * scale, APP_MIN_DISC_DP * scale,
                      (APP_MIN_LIBRARY_DP + APP_MIN_PLAN_DP) * scale);
     app.disc_split.measures_trailing = 1;
     // The two vertical ones: a browser of 150 dp and a detail panel tall enough
     // for a 256 px cover by default, or whatever the preferences remember.
-    f32 browser_h = (app.prefs.browser_height ? (f32)app.prefs.browser_height : 150.0f) * scale;
-    f32 detail_h = (app.prefs.detail_height ? (f32)app.prefs.detail_height : 280.0f) * scale;
+    // C2: the browser took 230 px and the detail 386 for two visible tracks.
+    // 190 and 230 - a cover of 160 px - give the list the rest.
+    f32 browser_h = (app.prefs.browser_height ? (f32)app.prefs.browser_height : 190.0f) * scale;
+    f32 detail_h = (app.prefs.detail_height ? (f32)app.prefs.detail_height : 230.0f) * scale;
     ui_splitter_init(&app.browser_split, browser_h, APP_MIN_BROWSER_DP * scale,
                      APP_MIN_LIST_DP * scale);
     ui_splitter_init(&app.detail_split, detail_h, APP_MIN_LIST_DP * scale,
@@ -324,4 +329,29 @@ void app_shutdown(void) {
     // The five second window does not apply to a close: whatever is unsaved
     // goes out now, so the next launch opens on it.
     if (app.plan.dirty) { plan_save(&app.plan, app.plan_autosave_path); }
+}
+
+// The row of buttons of T-075. It lives here and not next to app_status_bar
+// in app.c because the views that use it are also built by the bench, which
+// links app_state.c and the four view_*.c and not the frame loop.
+// One row of buttons, everywhere: space_12 left and right, space_4 above
+// and below - so a button of control_h makes a row of row_control and two
+// consecutive rows are space_8 apart without a spacer between them - space_4
+// between two buttons of a group, and a wrap onto a second line as soon as the
+// line is full (UI_Flow). A group separation is one ui_spacer of space_4 inside
+// the row (4 + 4 + 4 = space_12); a button group under a block of text takes one
+// ui_spacer of space_8 above it (8 + 4 = space_12).
+UI_Box *app_button_row(void) {
+    const UI_Theme *theme = ui_theme();
+    UI_Box *row = 0;
+    UI_PrefWidth(ui_pct(1.0f, 0.0f))
+    UI_PrefHeight(ui_children_sum(1.0f))
+    UI_ChildLayoutAxis(Axis2_X)
+    UI_FlowGapX(ui_dp(theme->space[UI_Space_4]))
+    UI_FlowGapY(ui_dp(theme->space[UI_Space_8]))
+    UI_FlowPadX(ui_dp(theme->space[UI_Space_12]))
+    UI_FlowPadY(ui_dp(theme->space[UI_Space_4])) {
+        row = ui_build_box_from_key(UI_Flow, 0);
+    }
+    return row;
 }

@@ -123,6 +123,48 @@ static void icon_build_shape(R_IconShape *shape, R_Icon icon) {
             icon_circle(shape, v2(0.5f, 0.5f), 0.46f, 0);
             icon_circle(shape, v2(0.5f, 0.5f), 0.15f, 1);
         } break;
+        case R_Icon_Pause: {
+            icon_contour_begin(shape);
+            icon_point(shape, 0.28f, 0.18f);
+            icon_point(shape, 0.28f, 0.82f);
+            icon_point(shape, 0.44f, 0.82f);
+            icon_point(shape, 0.44f, 0.18f);
+            icon_contour_begin(shape);
+            icon_point(shape, 0.56f, 0.18f);
+            icon_point(shape, 0.56f, 0.82f);
+            icon_point(shape, 0.72f, 0.82f);
+            icon_point(shape, 0.72f, 0.18f);
+        } break;
+        case R_Icon_Stop: {
+            icon_contour_begin(shape);
+            icon_point(shape, 0.24f, 0.24f);
+            icon_point(shape, 0.24f, 0.76f);
+            icon_point(shape, 0.76f, 0.76f);
+            icon_point(shape, 0.76f, 0.24f);
+        } break;
+        case R_Icon_Prev: {
+            // A triangle pointing left with the bar it stops against.
+            icon_contour_begin(shape);
+            icon_point(shape, 0.80f, 0.18f);
+            icon_point(shape, 0.80f, 0.82f);
+            icon_point(shape, 0.34f, 0.50f);
+            icon_contour_begin(shape);
+            icon_point(shape, 0.20f, 0.18f);
+            icon_point(shape, 0.20f, 0.82f);
+            icon_point(shape, 0.31f, 0.82f);
+            icon_point(shape, 0.31f, 0.18f);
+        } break;
+        case R_Icon_Next: {
+            icon_contour_begin(shape);
+            icon_point(shape, 0.20f, 0.18f);
+            icon_point(shape, 0.66f, 0.50f);
+            icon_point(shape, 0.20f, 0.82f);
+            icon_contour_begin(shape);
+            icon_point(shape, 0.69f, 0.18f);
+            icon_point(shape, 0.69f, 0.82f);
+            icon_point(shape, 0.80f, 0.82f);
+            icon_point(shape, 0.80f, 0.18f);
+        } break;
         default: Assert(0); break;
     }
 }

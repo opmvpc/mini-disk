@@ -14,6 +14,10 @@
 // the scratch arenas find themselves.
 void ui_debug_overlay_set_arenas(Arena *permanent, Arena *frame);
 
+// What the virtualized list of the moment spent: the counters C5 moved out of
+// the status bar. Called once a frame by the application.
+void ui_debug_overlay_set_list_stats(u64 boxes, u64 visible);
+
 void ui_debug_overlay_toggle(void);
 b32  ui_debug_overlay_visible(void);
 

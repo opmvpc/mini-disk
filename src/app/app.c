@@ -15,12 +15,16 @@ static void app_toolbar(void) {
         UI_Parent(bar) {
             ui_spacer(ui_px(ui_dp(theme->space[UI_Space_8]), 1.0f));
             UI_PrefHeight(ui_px(ui_dp(theme->row_standard), 1.0f)) {
+                // B1 / C7: space_8 inside a group, a line, and space_16 before
+                // the commands that are not icons.
                 if (ui_button_icon(R_Icon_Disc, str8_lit("###device")).clicked) {}
                 ui_tooltip(app_str(Str_ToolbarDeviceHint));
-                ui_spacer(ui_px(ui_dp(theme->space[UI_Space_4]), 1.0f));
+                ui_spacer(ui_px(ui_dp(theme->space[UI_Space_8]), 1.0f));
                 if (ui_button_icon(R_Icon_Play, str8_lit("###preview")).clicked) {}
                 ui_tooltip(app_str(Str_ToolbarPreviewHint));
-                ui_spacer(ui_px(ui_dp(theme->space[UI_Space_12]), 1.0f));
+                ui_spacer(ui_px(ui_dp(theme->space[UI_Space_16]), 1.0f));
+                ui_separator();
+                ui_spacer(ui_px(ui_dp(theme->space[UI_Space_16]), 1.0f));
                 if (app.scan_active) {
                     if (ui_button(str8f(ui_frame_arena(), "%S###folder",
                                         app_str(Str_ToolbarCancelScan)))
@@ -67,11 +71,16 @@ static void app_status_bar(void) {
     UI_Font(ui_font(UI_FontStyle_Caption))
     UI_TextPadding(ui_dp(theme->space[UI_Space_12])) {
         UI_Box *bar = ui_build_box_from_key(UI_DrawBackground, 0);
+        // The status bar is the strip a tooltip flips above instead of covering.
+        ui_tooltip_reserve_bottom(ui_dp(theme->row_compact));
         UI_Parent(bar) {
+            // C5: the box counters are a diagnostic, and a diagnostic belongs in
+            // the diagnostic overlay (F12). What is left is what the user asked
+            // for: how many tracks the library holds.
+            ui_debug_overlay_set_list_stats(app.list.box_count, app.list.visible_count);
             ui_label_styled(UI_FontStyle_Caption, theme->fg_muted,
-                            str8f(ui_frame_arena(), app_str_c(Str_StatusBoxes), app_track_count(),
-                                  app.list.box_count, app.list.visible_count,
-                                  ui_frame_box_count()));
+                            app_count(ui_frame_arena(), Str_TrackCountOne, Str_TrackCountMany,
+                                      app_track_count()));
             ui_spacer(ui_pct(1.0f, 0.0f));
             // The plan, always in sight: the 12 px gauge of s9.10 and the two
             // numbers that go with it.
@@ -85,8 +94,19 @@ static void app_status_bar(void) {
             app_plan_gauge_compact(ui_dp(120.0f));
             ui_spacer(ui_px(ui_dp(theme->space[UI_Space_12]), 1.0f));
             // The same table the dispatch and the help overlay read (s8.8).
-            ui_label_styled(UI_FontStyle_Caption, theme->fg_muted,
-                            app_shortcut_status_hint(ui_frame_arena()));
+            // S2: the hints are the only thing here that may be cut, so they are
+            // the only thing that gives width - and they keep space_12 of margin
+            // to the edge of the window whatever happens.
+            UI_PrefWidth(ui_text_size(0.0f, 0.0f))
+            UI_PrefHeight(ui_pct(1.0f, 1.0f))
+            UI_TextAlign(UI_TextAlign_Right)
+            UI_TextPadding(0.0f)
+            UI_Font(ui_font(UI_FontStyle_Caption))
+            UI_TextColor(theme->fg_muted) {
+                UI_Box *hints = ui_build_box_from_key(UI_DrawText, 0);
+                hints->display_string = app_shortcut_status_hint(ui_frame_arena());
+            }
+            ui_spacer(ui_px(ui_dp(theme->space[UI_Space_12]), 1.0f));
         }
     }
 }
@@ -128,6 +148,13 @@ static void app_body(void) {
             app.disc_split.min_trailing = APP_MIN_DISC_DP * scale;
             app.disc_split.min_leading = (APP_MIN_LIBRARY_DP + APP_MIN_PLAN_DP) * scale + handle;
             f32 disc_width = ui_splitter_update(&app.disc_split, Axis2_X, total);
+
+            // The same rule down the library column: the two vertical handles
+            // never let the track list below APP_MIN_LIST_DP, at any DPI.
+            app.browser_split.min_leading = APP_MIN_BROWSER_DP * scale;
+            app.browser_split.min_trailing = APP_MIN_LIST_DP * scale;
+            app.detail_split.min_trailing = APP_MIN_DETAIL_DP * scale;
+            app.detail_split.min_leading = APP_MIN_LIST_DP * scale;
 
             app.library_split.min_leading = APP_MIN_LIBRARY_DP * scale;
             app.library_split.min_trailing = APP_MIN_PLAN_DP * scale + handle + disc_width;

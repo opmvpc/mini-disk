@@ -343,6 +343,52 @@ TEST(widgets_splitter_clamps_and_resets) {
     EXPECT(ui_splitter_update(&splitter, Axis2_X, 300.0f) == 200.0f);  // min wins
 }
 
+// T-075 revue: the library column, in dp at 100 %. Browser 190, detail 230, and
+// the track list keeps its 160 whatever the window is worth.
+TEST(widgets_split_fit_middle_keeps_the_list) {
+    Unused(arena);
+    f32 browser = 190.0f;
+    f32 detail = 230.0f;
+
+    // 700 dp to share: everything fits, nothing moves.
+    ui_split_fit_middle(700.0f, 160.0f, &browser, 80.0f, &detail, 96.0f);
+    EXPECT(browser == 190.0f);
+    EXPECT(detail == 230.0f);
+
+    // 500: 80 too many, the detail alone pays them and stays above its 96.
+    browser = 190.0f;
+    detail = 230.0f;
+    ui_split_fit_middle(500.0f, 160.0f, &browser, 80.0f, &detail, 96.0f);
+    EXPECT(browser == 190.0f);
+    EXPECT(detail == 150.0f);
+    EXPECT(500.0f - browser - detail >= 160.0f);
+
+    // 400: the detail is down to its 96 and the browser gives the rest, still
+    // above its own 80. The three minimums are 336, so the list keeps 160.
+    browser = 190.0f;
+    detail = 230.0f;
+    ui_split_fit_middle(400.0f, 160.0f, &browser, 80.0f, &detail, 96.0f);
+    EXPECT(detail == 96.0f);
+    EXPECT(browser == 144.0f);
+    EXPECT(400.0f - browser - detail >= 160.0f);
+
+    // 300: not even the three minimums fit. Both zones sit at their minimum and
+    // the list takes what is left rather than nothing at all.
+    browser = 190.0f;
+    detail = 230.0f;
+    ui_split_fit_middle(300.0f, 160.0f, &browser, 80.0f, &detail, 96.0f);
+    EXPECT(browser == 80.0f);
+    EXPECT(detail == 96.0f);
+
+    // A folded zone asks for nothing and gives nothing: the other one keeps all
+    // it can.
+    browser = 0.0f;
+    detail = 230.0f;
+    ui_split_fit_middle(400.0f, 160.0f, &browser, 0.0f, &detail, 96.0f);
+    EXPECT(browser == 0.0f);
+    EXPECT(detail == 230.0f);
+}
+
 // --- context menu and tooltip ----------------------------------------------
 static b32 test_widgets_menu_frame(UI_ContextMenu *menu, const OsEvent *events, u64 event_count,
                                    i32 *out_chosen) {
@@ -444,6 +490,7 @@ static void test_widgets_run_all(void) {
     RUN(widgets_list_ensure_visible);
     RUN(widgets_list_is_virtualized);
     RUN(widgets_splitter_clamps_and_resets);
+    RUN(widgets_split_fit_middle_keeps_the_list);
     RUN(widgets_context_menu_keyboard);
     RUN(widgets_tooltip_waits_half_a_second);
 }

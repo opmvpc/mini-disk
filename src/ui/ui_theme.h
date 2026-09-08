@@ -78,6 +78,11 @@ typedef struct UI_Theme {
     f32 row_compact;      // 22, list rows
     f32 row_standard;     // 28, controls
     f32 row_comfortable;  // 40, headers and toolbars
+    // T-075. A button is control_h tall, a row of buttons row_control: the two
+    // space_4 above and below are what keeps two consecutive rows from sharing
+    // a border.
+    f32 control_h;        // 28, a button
+    f32 row_control;      // 36, a row of buttons
     f32 radius;           // 4
     f32 radius_popup;     // 6
     f32 border;           // 1
