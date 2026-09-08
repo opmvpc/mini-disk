@@ -176,6 +176,108 @@ static void bench_print(BenchResult r) {
     scratch_end(scratch);
 }
 
+// --- the budgets, and the machine they mean something on (T-022, P-010) ----
+// Every perf assertion in this file is an assertion about a machine at rest.
+// With an agent compiling in the next worktree they fire on the scheduler, not
+// on the code, and killing the run in the middle throws away the numbers that
+// were already measured - which is exactly what P-010 described. So a budget
+// that is missed is printed, loudly, and only fails the run when the machine
+// was measured idle at startup. Correctness assertions are untouched: those
+// hold under any load.
+global b32 bench_machine_idle;
+
+static void bench_budget(const char *what, u64 measured, u64 budget) {
+    if (measured <= budget) { return; }
+    ArenaTemp scratch = scratch_begin(0, 0);
+    os_debug_print(str8f(scratch.arena, "  BUDGET %s: %llu > %llu%s\n", what, measured, budget,
+                         bench_machine_idle ? "" : " (machine chargee, non bloquant)"));
+    scratch_end(scratch);
+    AssertAlways(!bench_machine_idle);
+}
+
+static void bench_budget_min(const char *what, u64 measured, u64 floor_value) {
+    if (measured >= floor_value) { return; }
+    ArenaTemp scratch = scratch_begin(0, 0);
+    os_debug_print(str8f(scratch.arena, "  BUDGET %s: %llu < %llu%s\n", what, measured,
+                         floor_value, bench_machine_idle ? "" : " (machine chargee, non bloquant)"));
+    scratch_end(scratch);
+    AssertAlways(!bench_machine_idle);
+}
+
+static void bench_probe_kernel(void *data, u64 begin, u64 end) {
+    volatile u64 *sink = (volatile u64 *)data;
+    u64 acc = 0;
+    for (u64 i = begin; i < end; i += 1) { acc += hash64_mix(i + 1); }
+    *sink += acc;
+}
+
+// Is this machine ours? A fixed kernel run alone, then one such kernel per
+// hardware thread all at once. On a free machine the parallel pass costs about
+// twice the single one - eight logical threads on four cores, so the siblings
+// share a pipeline - and with someone compiling next door it costs four or five
+// times as much. That multiple is exactly the condition under which the budgets
+// below would be measuring the neighbour instead of the code.
+//
+// The measurement is taken three times and the **worst** ratio decides. Taking
+// the best would be the mistake that cost two runs: under load a single pass
+// can be caught in a slow window, which inflates the denominator and makes a
+// saturated machine look idle - after which an armed budget kills the run for
+// the neighbour's reasons. Erring the other way only disarms an assertion.
+// Two numbers, because two different things can go wrong.
+//   - the **spread** of nine single-threaded passes: min against max. Almost
+//     every budget in this file is single-threaded, and what hurts one is a
+//     neighbour on the same core - which shows up as passes that disagree with
+//     each other, not as passes that are uniformly slow. At rest the spread is
+//     a few percent.
+//   - the **parallel ratio**: the same kernel once per hardware thread against
+//     the fastest single pass. Eight logical threads on four cores cost about
+//     2x by themselves; past 2.5x somebody else is holding cores.
+// Both must pass for a budget to be armed. Note that the min, not the mean, is
+// the denominator: taking a slow single pass as the reference is what made a
+// saturated machine look idle in the first calibration, and an armed budget on
+// a loaded machine kills the run for the neighbour's reasons.
+#define BENCH_PROBE_WORK       (1u << 21)
+#define BENCH_PROBE_SAMPLES    9
+#define BENCH_PROBE_SPREAD_MAX 125  // max <= 1.25x min over nine single passes
+#define BENCH_PROBE_PAR_MAX    250  // parallel <= 2.5x the fastest single pass
+static void bench_probe_machine(void) {
+    volatile u64 sink = 0;
+    u64 min_us = U64_MAX;
+    u64 max_us = 0;
+    for (u32 i = 0; i < BENCH_PROBE_SAMPLES; i += 1) {
+        u64 one_us = os_time_now_us();
+        bench_probe_kernel((void *)&sink, 0, BENCH_PROBE_WORK);
+        one_us = os_time_now_us() - one_us;
+        if (one_us == 0) { one_us = 1; }
+        if (one_us < min_us) { min_us = one_us; }
+        if (one_us > max_us) { max_us = one_us; }
+    }
+
+    jobs_init(0);
+    u32 threads = jobs_worker_count() + 1;
+    JobCounter counter;
+    counter.pending = 0;
+    u64 parallel_us = os_time_now_us();
+    jobs_dispatch(&counter, bench_probe_kernel, (void *)&sink,
+                  (u64)threads * BENCH_PROBE_WORK);
+    jobs_wait(&counter);
+    parallel_us = os_time_now_us() - parallel_us;
+    jobs_shutdown();
+
+    u64 spread = max_us * 100 / min_us;
+    u64 ratio = parallel_us * 100 / min_us;
+    bench_machine_idle = (spread <= BENCH_PROBE_SPREAD_MAX) && (ratio <= BENCH_PROBE_PAR_MAX);
+    ArenaTemp scratch = scratch_begin(0, 0);
+    os_debug_print(str8f(scratch.arena,
+                         "machine: %u threads, noyau seul %llu a %llu us (dispersion %llu.%02llu), "
+                         "%u en parallele %llu us (rapport %llu.%02llu) -> %s\n",
+                         threads, min_us, max_us, spread / 100, spread % 100, threads, parallel_us,
+                         ratio / 100, ratio % 100,
+                         bench_machine_idle ? "au repos, budgets armes"
+                                            : "chargee, budgets en simple rapport"));
+    scratch_end(scratch);
+}
+
 static BenchResult bench_mem_copy(void) {
     u64 block_size = MB(16);
     u32 iterations = 16;
@@ -247,7 +349,7 @@ static BenchResult bench_batch_build(void) {
                          "  batches: %u draw calls, r_end_frame %llu us (best of %u, budget 900)\n",
                          batches, best_us, iterations));
     scratch_end(scratch);
-    AssertAlways(best_us <= 900);
+    bench_budget("r_core batch build (us)", best_us, 900);
     arena_release(frame_arena);
 
     BenchResult result;
@@ -442,7 +544,7 @@ static BenchResult bench_ui_layout(void) {
     os_debug_print(str8f(scratch.arena, "  ui: %llu ns per box (best), %llu ns per box (mean)\n",
                          best_us * 1000 / box_count, mean_us * 1000 / box_count));
     scratch_end(scratch);
-    AssertAlways(best_us < 1000);  // the acceptance criterion: < 1 ms
+    bench_budget("ui_layout (us)", best_us, 1000);  // the acceptance criterion: < 1 ms
 
     r_end_frame();
     arena_release(frame_arena);
@@ -493,7 +595,7 @@ static BenchResult bench_jobs_dispatch(void) {
     u64 micros = bench_jobs_dispatch_run(0, job_count);  // 0: one worker per core, minus us
     u64 end_cycles = __rdtsc();
     u64 ns_per_job = micros * 1000 / job_count;
-    AssertAlways(ns_per_job < 1000);  // the acceptance criterion
+    bench_budget("jobs (ns/job)", ns_per_job, 1000);  // the acceptance criterion
 
     BenchResult result;
     result.name = "jobs dispatch 200k empty jobs";
@@ -1332,6 +1434,79 @@ static BenchResult bench_plan_file(void) {
     return result;
 }
 
+// T-073 / P-009: what a durable save now costs the frame thread. The frame
+// serialises 254 tracks into the saver's arena and pushes a job; the job does
+// the 7 ms the disk asks for, on another core. The budget is 200 us for the
+// hand-over, snapshot included - the rest is not on the critical path any more.
+static BenchResult bench_plan_save_async(void) {
+    Arena *arena = arena_alloc(MB(16));
+    Arena *text = arena_alloc(MB(16));
+    Plan *plan = push_struct(bench_arena, Plan);
+    plan_init(plan, arena, text);
+    ArenaTemp scratch = scratch_begin(0, 0);
+    for (u32 i = 0; i < PLAN_ENTRY_MAX; i += 1) {
+        PlanEntry entry;
+        StructZero(&entry);
+        entry.track_id = i;
+        entry.path_id = lib_intern(&plan->strings,
+                                   str8f(scratch.arena, "C:\music\artist %u\album\%02u - a "
+                                                        "reasonably long file name.flac",
+                                         i / 12, i % 12));
+        entry.title_override =
+            lib_intern(&plan->strings, str8f(scratch.arena, "Track number %u", i));
+        entry.duration_ms = 180000 + i * 97;
+        entry.group_id = PLAN_GROUP_NONE;
+        plan_add(plan, 0, i, entry);
+    }
+    scratch_end(scratch);
+
+    String8 path = os_path_join(bench_arena, os_known_folder(bench_arena, OsKnownFolder_Temp),
+                                str8_lit("minidisk_bench_async.mdplan"));
+    PlanSaver saver;
+    plan_saver_init(&saver, arena_alloc(MB(8)));
+    jobs_init(0);
+
+    u32 iterations = 64;
+    u64 best_us = U64_MAX;
+    u64 total_us = 0;
+    u64 disk_us = 0;
+    u64 cycles = 0;
+    for (u32 i = 0; i < iterations; i += 1) {
+        u64 start_cycles = __rdtsc();
+        u64 start_us = os_time_now_us();
+        AssertAlways(plan_save_async(&saver, plan, path));
+        u64 frame_us = os_time_now_us() - start_us;
+        cycles += __rdtsc() - start_cycles;
+        total_us += frame_us;
+        if (frame_us < best_us) { best_us = frame_us; }
+        // The next iteration would be refused while this one is in flight: the
+        // bench waits, the application would simply come back in five seconds.
+        plan_save_wait(&saver);
+        AssertAlways(plan_save_state(&saver) == PlanSave_Done);
+        disk_us += saver.disk_us;
+    }
+    u64 size = saver.bytes.size;
+    jobs_shutdown();
+    os_file_delete(path);
+    arena_release(text);
+    arena_release(arena);
+
+    bench_line("plan save async: frame thread (snapshot + push), best", best_us, 0,
+               PLAN_ENTRY_MAX, "tracks");
+    bench_line("plan save async: frame thread, mean", total_us / iterations,
+               cycles / iterations, size, "bytes");
+    bench_line("plan save async: the job, on another core", disk_us / iterations, 0, size,
+               "bytes");
+    bench_budget("plan save async, frame (us)", best_us, 200);  // the ticket's budget
+
+    BenchResult result;
+    result.name = "plan save async, frame cost";
+    result.cycles = cycles / iterations;
+    result.micros = total_us / iterations;
+    result.bytes = 0;
+    return result;
+}
+
 // T-031: the full recompute the gauge does on every edit - the cluster cost of
 // 254 tracks, their fit states, the tri-modal remainder, and the whole title
 // budget with its group syntax. The ticket's ceiling is 50 us; a plan is a
@@ -1562,7 +1737,7 @@ static BenchResult bench_plan_view_frame(void) {
                          "(best of %u, mean %llu, budget 1500)\n",
                          boxes, best_us, iterations, mean_us));
     scratch_end(scratch);
-    AssertAlways(best_us < 1500);
+    bench_budget("plan view frame (us)", best_us, 1500);
 
     arena_release(frame_arena);
 
@@ -1655,7 +1830,7 @@ static BenchResult bench_dsp_resampler(void) {
     scratch_end(scratch);
     // The guard catches a regression, not a busy machine: the number that
     // matters is the one printed above, against the 200x of the ticket.
-    AssertAlways(realtime > 150.0);
+    bench_budget_min("dsp resampler (x temps reel)", (u64)realtime, 150);
 
     BenchResult result;
     result.name = "dsp resample 48k->44.1k stereo, 4 min";
@@ -1691,7 +1866,7 @@ static BenchResult bench_dsp_r128(void) {
                          BENCH_DSP_SECONDS, micros, realtime,
                          (f64)dsp_r128_integrated_lufs(&state)));
     scratch_end(scratch);
-    AssertAlways(realtime > 300.0);  // printed target: 500x, see T-041
+    bench_budget_min("dsp r128 (x temps reel)", (u64)realtime, 300);  // target 500x, T-041
 
     BenchResult result;
     result.name = "dsp R128 measure, 4 min stereo";
@@ -1753,7 +1928,7 @@ static BenchResult bench_dsp_pipeline(void) {
                          micros, task.result.sp_frames, (f64)task.result.measured_lufs,
                          (f64)task.result.applied_gain_db));
     scratch_end(scratch);
-    AssertAlways(micros < 1500000);  // two passes; see the render-only bench
+    bench_budget("dsp pipeline (us)", micros, 1500000);  // two passes, see render-only
     arena_release(track_arena);
 
     BenchResult result;
@@ -1792,7 +1967,7 @@ static BenchResult bench_dsp_pipeline_render(void) {
                          "(budget 500000), %f x real time\n",
                          micros, (f64)BENCH_DSP_SECONDS * 1000000.0 / (f64)Max(micros, (u64)1)));
     scratch_end(scratch);
-    AssertAlways(micros < 800000);
+    bench_budget("dsp pipeline render (us)", micros, 800000);
     arena_release(track_arena);
 
     BenchResult result;
@@ -1921,33 +2096,84 @@ static BenchResult bench_netmd_des(void) {
     return result;
 }
 
+// --- one arena per group (P-010) -------------------------------------------
+// The bench used to take a single GB(1) arena and commit into it for the whole
+// run: 32 MB for mem_copy, ~97 MB for the renderer and the atlas, then 64 MB in
+// one block for the parallel sum, and not one page ever given back. Two benches
+// at once on this machine - two agents, two worktrees - reached the point where
+// Windows refuses a commit, and the process died at a different bench every
+// time with a silent code 3. Each group now reserves its own arena and releases
+// it before the next one starts, so the peak is a group and not the sum.
+static void bench_group_begin(u64 reserve) {
+    AssertAlways(bench_arena == 0);
+    bench_arena = arena_alloc(reserve);
+}
+
+static void bench_group_end(void) {
+    ArenaTemp scratch = scratch_begin(0, 0);
+    os_debug_print(str8f(scratch.arena, "  [groupe] %llu MB engages, rendus\n",
+                         bench_arena->committed >> 20));
+    scratch_end(scratch);
+    arena_release(bench_arena);
+    bench_arena = 0;
+}
+
+static void bench_library_release(void) {
+    arena_release(bench_search_arena);
+    arena_release(bench_index_arena);
+    arena_release(bench_lib_text);
+    arena_release(bench_lib_arena);
+}
+
 int main(void) {
     os_init();
-    bench_arena = arena_alloc(GB(1));
     os_debug_print(str8_lit("minidisk benches\n"));
+    bench_probe_machine();
+
+    bench_group_begin(MB(256));  // base
     bench_print(bench_mem_copy());
+    bench_group_end();
+
+    bench_group_begin(MB(256));  // renderer, atlas, text, layout
     bench_print(bench_batch_build());
     bench_print(bench_atlas_skyline());
     bench_print(bench_text_glyph_cache());
     bench_print(bench_ui_layout());
+    bench_group_end();
+
+    bench_group_begin(MB(256));  // the job system, and its 64 MB block
     bench_print(bench_jobs_dispatch());
     bench_print(bench_jobs_parallel_sum());
+    bench_group_end();
+
+    bench_group_begin(MB(512));  // the scan, the tags, a realistic frame
     bench_print(bench_library_scan());
     bench_print(bench_tags_parse());
     bench_print(bench_realistic_frame());
+    bench_group_end();
+
+    bench_group_begin(MB(256));  // 100 000 tracks: index, search, cache
     bench_library_generate();
     bench_print(bench_index_sort());
     bench_print(bench_index_search());
     bench_print(bench_index_search_refined());
     bench_print(bench_library_cache());
     bench_print(bench_view_sort_click());
+    bench_library_release();
+    bench_group_end();
+
+    bench_group_begin(MB(512));  // prefs, covers, the plan
     bench_print(bench_prefs_round_trip());
     bench_print(bench_cover_decode());
     bench_print(bench_cover_atlas());
     bench_print(bench_plan_file());
+    bench_print(bench_plan_save_async());
     bench_print(bench_plan_capacity());
     bench_print(bench_plan_gauge_layout());
     bench_print(bench_plan_view_frame());
+    bench_group_end();
+
+    bench_group_begin(MB(512));  // netmd, dsp, codecs
     bench_print(bench_netmd_des());
     bench_print(bench_dsp_resampler());
     bench_print(bench_dsp_r128());
@@ -1958,5 +2184,6 @@ int main(void) {
     bench_codec_decode("codec_flac", "tests\\data\\audio\\sine.flac", 200);
     bench_codec_decode("codec_mp3", "tests\\data\\audio\\sine.mp3", 100);
     bench_codec_decode("codec_ogg", "tests\\data\\audio\\sine.ogg", 100);
+    bench_group_end();
     return 0;
 }

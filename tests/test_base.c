@@ -253,10 +253,109 @@ TEST(platform_basics) {
     EXPECT(os_file_read_all(arena, str8_lit("build\\does_not_exist.bin")).size == 0);
 }
 
+// T-073 / P-010: the edge of an arena, and what a refused commit says.
+//
+// The failure itself is fatal by design - an arena that cannot grow is a sizing
+// bug and AssertAlways is the right answer - so it cannot be provoked inside a
+// process that has to keep running. What is tested here is everything around
+// it: an arena with a tiny reserve behaves exactly at its edge, a commit of the
+// kind that fails on a saturated machine really does fail and really does leave
+// an error code behind, and the message the reporter prints formats without
+// allocating a byte.
+TEST(arena_tiny_reserve) {
+    Unused(arena);
+    Arena *tiny = arena_alloc(KB(64));
+    EXPECT(tiny->reserved == KB(64));
+    EXPECT(tiny->committed == ARENA_COMMIT_CHUNK);
+    // Right up to the edge: the commit target is clamped to the reserve, and
+    // the last byte of it is writable.
+    u64 room = tiny->reserved - ARENA_HEADER_SIZE;
+    u8 *block = push_array(tiny, u8, room);
+    mem_set(block, 0x7E, room);
+    EXPECT(block[room - 1] == 0x7E);
+    EXPECT(tiny->committed == tiny->reserved);
+    EXPECT(arena_pos(tiny) == tiny->reserved);
+    arena_release(tiny);
+
+    // A commit outside any reservation: what the diagnostic reads.
+    EXPECT(!os_memory_commit((void *)(u64)0x10000, KB(64)));
+    EXPECT(os_last_error() != 0);
+
+    // The reporter's own tool: formatting into the caller's buffer, no arena.
+    u8 buffer[64];
+    String8 line = str8f_buf(buffer, sizeof(buffer), "commit %llu, err %u", (u64)65536, 487u);
+    EXPECT(str8_eq(line, str8_lit("commit 65536, err 487")));
+    // And it truncates rather than overflowing.
+    u8 small[8];
+    String8 cut = str8f_buf(small, sizeof(small), "%llu", (u64)1234567890);
+    EXPECT(cut.size == sizeof(small));
+}
+
+// T-073: the log ring - written by anyone, drained by one flush. The two things
+// worth testing are what it does when it is full and how many files it leaves.
+TEST(log_ring) {
+    String8 dir = os_path_join(arena, os_known_folder(arena, OsKnownFolder_Temp),
+                               str8_lit("minidisk_test_log"));
+    os_dir_create(dir);
+    String8 logs = os_path_join(arena, dir, str8_lit("logs"));
+    os_dir_create(logs);
+    // Six days of history, more than os_log_init is allowed to keep, plus a
+    // file that is not ours and must survive.
+    for (u32 i = 0; i < 6; i += 1) {
+        os_file_write_all(
+            os_path_join(arena, logs, str8f(arena, "minidisk-2020-01-%02u.txt", i + 1)),
+            str8_lit("ancien\n"));
+    }
+    os_file_write_all(os_path_join(arena, logs, str8_lit("garde-moi.txt")), str8_lit("x\n"));
+
+    os_log_init(dir);
+    String8 path = os_log_path(arena);
+    EXPECT(path.size != 0);
+
+    u32 ours = 0;
+    b32 stranger = 0;
+    OsDirIter it;
+    if (os_dir_iter_begin(&it, logs)) {
+        OsFileInfo info;
+        while (os_dir_iter_next(&it, &info)) {
+            if (info.is_dir) { continue; }
+            if (str8_starts_with(info.name, str8_lit("minidisk-"))) { ours += 1; }
+            if (str8_eq(info.name, str8_lit("garde-moi.txt"))) { stranger = 1; }
+        }
+        os_dir_iter_end(&it);
+    }
+    EXPECT(ours <= OS_LOG_FILE_MAX);
+    EXPECT(stranger);
+
+    // A line goes in, a flush puts it on disk.
+    u64 dropped_before = os_log_dropped();
+    os_debug_print(str8_lit("test: une ligne de journal\n"));
+    os_log_flush();
+    String8 content = os_file_read_all(arena, path);
+    EXPECT(str8_find(content, str8_lit("une ligne de journal"), 0) != content.size);
+
+    // Overflow: two rings' worth in one go with no flush in between. What does
+    // not fit is refused and counted, and the next flush says so in the file.
+    u8 *big = push_array(arena, u8, KB(4));
+    mem_set(big, 'A', KB(4));
+    big[KB(4) - 1] = '\n';
+    for (u32 i = 0; i < 32; i += 1) { os_debug_print(str8(big, KB(4))); }
+    EXPECT(os_log_dropped() > dropped_before);
+    os_log_flush();
+    content = os_file_read_all(arena, path);
+    EXPECT(str8_find(content, str8_lit("octet(s) perdu(s)"), 0) != content.size);
+    os_log_shutdown();
+
+    // The handle is not kept between flushes: nothing is holding the file.
+    EXPECT(os_file_delete(path));
+}
+
 static void test_base_run_all(void) {
     RUN(arena_push);
     RUN(arena_temp);
     RUN(arena_commit_growth);
+    RUN(arena_tiny_reserve);
+    RUN(log_ring);
     RUN(scratch_conflicts);
     RUN(string_compare);
     RUN(string_slices);

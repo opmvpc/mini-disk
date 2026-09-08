@@ -4,6 +4,7 @@
 #include "../platform.h"
 #include "../../base/base_hash.h"
 #include "../../base/base_math.h"
+#include "../../base/base_jobs.h"
 
 typedef struct Win32State {
     u64 page_size;
@@ -29,7 +30,13 @@ void os_init(void) {
     win32_state.instance = GetModuleHandleW(0);
 }
 
-no_return void os_exit(i32 code) { ExitProcess((UINT)code); }
+// Every way out of the process goes through here, an AssertAlways included
+// (base.h): emptying the log ring on the way is what puts the last line an
+// assertion printed on disk, without a single byte of code at the assert site.
+no_return void os_exit(i32 code) {
+    os_log_flush();
+    ExitProcess((UINT)code);
+}
 
 // --- virtual memory --------------------------------------------------------
 
@@ -43,6 +50,8 @@ void os_memory_release(void *ptr, u64 size) {
     Unused(size);
     VirtualFree(ptr, 0, MEM_RELEASE);
 }
+
+u32 os_last_error(void) { return (u32)GetLastError(); }
 
 u64 os_page_size(void) { return win32_state.page_size; }
 
@@ -239,9 +248,204 @@ u32 os_thread_current_id(void) { return GetCurrentThreadId(); }
 
 // --- diagnostics -----------------------------------------------------------
 
+// --- the error log ---------------------------------------------------------
+// The ring is written by every thread and drained by one job. Its lock is held
+// for a mem_copy and nothing else: no thread ever waits on a disk behind it,
+// which is the whole point (P-009's lesson applied to the log).
+
+#define WIN32_LOG_PATH_MAX 512
+#define WIN32_LOG_STAGING  KB(8)
+
+typedef struct Win32Log {
+    OsMutex mutex;
+    b32 ready;
+    u8 ring[OS_LOG_RING_SIZE];
+    u64 write, read;  // monotonic, masked into the ring: write - read is pending
+    u64 dropped, dropped_written;
+    u64 last_flush_us;
+    volatile u32 flushing;  // one flush at a time, whoever asked for it
+    u16 path[WIN32_LOG_PATH_MAX];
+    u64 path_size;
+} Win32Log;
+
+global Win32Log win32_log;
+
+md_inline u64 win32_log_pending(void) { return win32_log.write - win32_log.read; }
+
+// Append, or refuse and count. Refusing the newest line rather than dropping
+// the oldest keeps the ring in file order: a log whose middle is missing is a
+// log nobody can read, and the count says exactly how much went missing.
+static void win32_log_append(String8 s) {
+    os_mutex_lock(&win32_log.mutex);
+    if (s.size > OS_LOG_RING_SIZE - win32_log_pending()) {
+        win32_log.dropped += s.size;
+    } else {
+        u64 at = win32_log.write & (OS_LOG_RING_SIZE - 1);
+        u64 first = Min(s.size, OS_LOG_RING_SIZE - at);
+        mem_copy(win32_log.ring + at, s.str, first);
+        if (first < s.size) { mem_copy(win32_log.ring, s.str + first, s.size - first); }
+        win32_log.write += s.size;
+    }
+    os_mutex_unlock(&win32_log.mutex);
+}
+
+// Opened and closed per flush: at most one pair of syscalls a second, and no
+// handle left dangling when the process dies inside an assertion.
+static HANDLE win32_log_open(void) {
+    if (win32_log.path_size == 0) { return INVALID_HANDLE_VALUE; }
+    HANDLE file = CreateFileW((LPCWSTR)win32_log.path, FILE_APPEND_DATA,
+                              FILE_SHARE_READ | FILE_SHARE_WRITE, 0, OPEN_ALWAYS,
+                              FILE_ATTRIBUTE_NORMAL, 0);
+    // This is the boundary, so the two shapes of "no file" become one here:
+    // CreateFileW answers INVALID_HANDLE_VALUE, but /analyze only knows that a
+    // HANDLE may be null, and one comparison is cheaper than arguing with it.
+    return (file == 0) ? INVALID_HANDLE_VALUE : file;
+}
+
+void os_log_flush(void) {
+    if (!win32_log.ready) { return; }
+    // A flush already running drains everything this one would have: leaving
+    // is not losing a line, and it is what keeps os_exit from waiting on a job.
+    if (os_atomic_cas_u32(&win32_log.flushing, 0, 1) != 0) { return; }
+    global u8 staging[WIN32_LOG_STAGING];  // guarded by `flushing`
+    HANDLE file = INVALID_HANDLE_VALUE;
+    for (;;) {
+        os_mutex_lock(&win32_log.mutex);
+        u64 size = Min(win32_log_pending(), (u64)sizeof(staging));
+        u64 at = win32_log.read & (OS_LOG_RING_SIZE - 1);
+        u64 first = Min(size, OS_LOG_RING_SIZE - at);
+        mem_copy(staging, win32_log.ring + at, first);
+        if (first < size) { mem_copy(staging + first, win32_log.ring, size - first); }
+        win32_log.read += size;
+        os_mutex_unlock(&win32_log.mutex);
+        if (size == 0) { break; }
+        if (file == INVALID_HANDLE_VALUE) { file = win32_log_open(); }
+        if (file == INVALID_HANDLE_VALUE || file == 0) { break; }
+        DWORD written = 0;
+        WriteFile(file, staging, (DWORD)size, &written, 0);
+    }
+    if (file != INVALID_HANDLE_VALUE && file != 0) {
+        if (win32_log.dropped != win32_log.dropped_written) {
+            u8 line[128];
+            String8 note = str8f_buf(line, sizeof(line),
+                                       "[log] ring plein: %llu octet(s) perdu(s)\n",
+                                       win32_log.dropped);
+            DWORD written = 0;
+            WriteFile(file, note.str, (DWORD)note.size, &written, 0);
+            win32_log.dropped_written = win32_log.dropped;
+        }
+        CloseHandle(file);
+    }
+    os_atomic_store_u32(&win32_log.flushing, 0);
+}
+
+static void win32_log_flush_job(void *data, u64 begin, u64 end) {
+    Unused(data);
+    Unused(begin);
+    Unused(end);
+    os_log_flush();
+}
+
+void os_log_tick(u64 now_us) {
+    if (!win32_log.ready) { return; }
+    u64 pending = win32_log_pending();
+    if (pending == 0) { return; }
+    // Half a ring is the point past which waiting for the second would start
+    // costing lines, so it goes out now whatever the clock says.
+    if (pending < OS_LOG_RING_SIZE / 2 && now_us - win32_log.last_flush_us < OS_LOG_FLUSH_US) {
+        return;
+    }
+    win32_log.last_flush_us = now_us;
+    // With no pool - the tests, the selftest - there is no other thread to hand
+    // it to and the caller writes it itself.
+    if (jobs_worker_count() != 0) {
+        jobs_push(0, win32_log_flush_job, 0);
+    } else {
+        os_log_flush();
+    }
+}
+
+// Rotation: the files are named after the day, so byte order is age order.
+// Everything past the four oldest goes, which leaves room for today's.
+static void win32_log_rotate(Arena *arena, String8 dir) {
+    String8List files;
+    StructZero(&files);
+    OsDirIter it;
+    if (os_dir_iter_begin(&it, dir)) {
+        OsFileInfo info;
+        while (os_dir_iter_next(&it, &info)) {
+            if (info.is_dir) { continue; }
+            if (!str8_starts_with(info.name, str8_lit("minidisk-"))) { continue; }
+            if (!str8_ends_with(info.name, str8_lit(".txt"))) { continue; }
+            str8_list_push(arena, &files, str8_copy(arena, info.name));
+        }
+        os_dir_iter_end(&it);
+    }
+    while (files.count >= OS_LOG_FILE_MAX && files.first != 0) {
+        String8Node *oldest = files.first;
+        String8Node *previous = 0;
+        String8Node *before_oldest = 0;
+        for (String8Node *node = files.first; node != 0; node = node->next) {
+            if (str8_cmp(node->str, oldest->str) < 0) {
+                oldest = node;
+                before_oldest = previous;
+            }
+            previous = node;
+        }
+        os_file_delete(os_path_join(arena, dir, oldest->str));
+        if (before_oldest) {
+            before_oldest->next = oldest->next;
+        } else {
+            files.first = oldest->next;
+        }
+        files.count -= 1;
+    }
+}
+
+void os_log_init(String8 base_dir) {
+    if (win32_log.ready) { return; }
+    os_mutex_init(&win32_log.mutex);
+    ArenaTemp scratch = scratch_begin(0, 0);
+    String8 dir = os_path_join(scratch.arena, base_dir, str8_lit("logs"));
+    if (os_dir_create(dir)) {
+        win32_log_rotate(scratch.arena, dir);
+        OsWallClock now;
+        os_time_local(&now);
+        String8 name = str8f(scratch.arena, "minidisk-%04u-%02u-%02u.txt", now.year, now.month,
+                             now.day);
+        String16 path = str16_from_str8(scratch.arena, os_path_join(scratch.arena, dir, name));
+        if (path.size < WIN32_LOG_PATH_MAX) {
+            for (u64 i = 0; i <= path.size; i += 1) { win32_log.path[i] = path.str[i]; }
+            win32_log.path_size = path.size;
+            win32_log.last_flush_us = os_time_now_us();
+            win32_log.ready = 1;
+        }
+    }
+    scratch_end(scratch);
+}
+
+void os_log_shutdown(void) {
+    if (!win32_log.ready) { return; }
+    os_log_flush();
+    win32_log.ready = 0;
+    // The path stays: os_log_path still names the file that was written, which
+    // is what the shutdown test looks at once the log is closed.
+}
+
+u64 os_log_dropped(void) { return win32_log.dropped; }
+
+String8 os_log_path(Arena *arena) {
+    if (win32_log.path_size == 0) { return str8(0, 0); }
+    String16 path;
+    path.str = win32_log.path;
+    path.size = win32_log.path_size;
+    return str8_from_str16(arena, path);
+}
+
 void os_debug_print(String8 s) {
     ArenaTemp scratch = scratch_begin(0, 0);
     String8 text = str8_copy(scratch.arena, s);  // guarantees the null terminator
+    if (win32_log.ready) { win32_log_append(text); }
     OutputDebugStringA((LPCSTR)text.str);
     HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
     if (out != 0 && out != INVALID_HANDLE_VALUE) {
@@ -258,6 +462,53 @@ void os_debug_print(String8 s) {
 static void app_run(void);
 
 // --- self test (--selftest): boot the base layer without opening a window ---
+
+// T-073: everything the frame loop starts, started and stopped without a
+// window, in the order app_run stops it. What it proves is that the order is
+// executable, not just written down in a comment: a device thread that is not
+// joined, a save job left in the ring or a log file that is never opened all
+// show up here as a failure or as a hang.
+static i32 win32_selftest_lifecycle(Arena *arena) {
+    i32 failures = 0;
+    String8 dir = os_path_join(arena, os_known_folder(arena, OsKnownFolder_Temp),
+                               str8_lit("minidisk-selftest"));
+    os_dir_create(dir);
+    os_log_init(dir);
+
+    jobs_init(0);
+    if (jobs_worker_count() == 0 && os_cpu_count() > 1) { failures += 1; }
+
+    // The device thread: started and joined, nothing posted to it, so no byte
+    // ever reaches a real recorder from here.
+    NetmdDevice *device = push_struct_zero(arena, NetmdDevice);
+    netmd_device_start(device, arena_alloc(MB(4)));
+    netmd_device_stop(device);
+
+    // A plan through the save job, and the file it leaves behind.
+    Plan *plan = push_struct_zero(arena, Plan);
+    plan_init(plan, arena_alloc(MB(4)), arena_alloc(MB(4)));
+    PlanSaver saver;
+    plan_saver_init(&saver, arena_alloc(MB(8)));
+    String8 plan_path = os_path_join(arena, dir, str8_lit("selftest.mdplan"));
+    if (!plan_save_async(&saver, plan, plan_path)) { failures += 1; }
+    plan_save_wait(&saver);
+    if (plan_save_state(&saver) != PlanSave_Done) { failures += 1; }
+    OsFileInfo info;
+    StructZero(&info);
+    if (!os_file_stat(plan_path, &info) || info.size == 0) { failures += 1; }
+    os_file_delete(plan_path);
+
+    os_debug_print(str8_lit("selftest: journal\n"));
+    jobs_shutdown();
+    os_log_flush();  // step 5: this thread empties the ring, no worker is left
+    StructZero(&info);
+    String8 log_path = os_log_path(arena);
+    if (log_path.size == 0 || !os_file_stat(log_path, &info) || info.size == 0) { failures += 1; }
+    if (os_log_dropped() != 0) { failures += 1; }
+    // The log stays open: the "selftest: ok" line printed by the caller has to
+    // reach the file too, and os_exit flushes what is left of the ring.
+    return failures;
+}
 
 static i32 win32_selftest(void) {
     Arena *arena = arena_alloc(MB(64));
@@ -276,6 +527,8 @@ static i32 win32_selftest(void) {
     if (hash64_mix(0) == 0) { failures += 1; }
     if (sqrt_f32(16.0f) != 4.0f) { failures += 1; }
     if (os_time_now_us() == 0 && os_thread_current_id() == 0) { failures += 1; }
+
+    failures += win32_selftest_lifecycle(arena);
 
     // Literal messages on purpose: str8f is exercised by the tests, and keeping it
     // out of this path keeps the release exe free of code nothing else calls yet.

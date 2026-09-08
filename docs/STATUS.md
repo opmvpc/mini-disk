@@ -1,6 +1,6 @@
 # STATUS — où on en est
 
-Dernière mise à jour : 2026-09-07
+Dernière mise à jour : 2026-09-08
 
 ## Phase actuelle : 7 · Polish — T-070 (taille), T-071 (cohérence UI), T-072 (prefs/thème clair/i18n), T-073 (robustesse) en parallèle
 ## Phase actuelle (historique) : 3 + 5 en parallèle — T-020, T-021, T-040, T-041 mergés dans main ; T-042 fait et **validé sur le vrai MZ-N505** (le pilote WinUSB est lié, P-001 levé), T-022 en cours
@@ -43,6 +43,37 @@ Dernière mise à jour : 2026-09-07
   du DSP de T-041 qui deviennent atteignables depuis `app/` par le bouton « Graver », pas de DES.
   `SIZE_BUDGET_KB` reste à **600**, à resserrer en phase 7 (levier `/O1`, P-007).
 - Ordre de merge du 2026-09-07 : T-020 → T-041 → T-040 → T-021 (conflits d'includes résolus en gardant les deux côtés).
+
+### Fait en phase 7
+- **T-073 — robustesse base et E/S** (2026-09-08) : P-010 et P-009 refermés, P-005 clos de notre côté,
+  journal d'erreurs livré.
+  - **P-010** — `build.bat bench` s'arrêtait au milieu, code 3, à un banc différent chaque fois. Cause :
+    une seule arène de `GB(1)` engagée du début à la fin sans jamais rendre une page (~200 Mo en fin de
+    série), jusqu'au refus de commit par Windows quand deux bancs tournaient à la fois. Le banc prend
+    maintenant **une arène par groupe** (sept), relâchée entre eux : pic à **64 Mo** au lieu du gigaoctet.
+    Un commit refusé **dit ce qu'il sait** avant de mourir (taille, `GetLastError`, réservé / engagé /
+    pos), formaté dans un tampon de pile. `jobs_init` sur un pool vivant fait un `jobs_shutdown` explicite
+    avec jointure au lieu d'un `Assert` sans effet en release. Enfin les budgets de temps du banc ne sont
+    **armés que si une sonde mesure la machine au repos** — les arrêts vus en T-022 mesuraient le voisin.
+    **Preuve : cinq passes de suite, cinq fois code 0**, pendant qu'une boucle de compilation tournait à
+    côté et que deux autres agents travaillaient sur la machine.
+  - **P-009** — la barrière de durabilité (`FlushFileBuffers`) quitte le thread de frame : celui-ci
+    sérialise un **instantané immuable** du document dans l'arène du `PlanSaver` (aucun verrou sur le
+    plan) et un job écrit, synchronise et renomme. Autosave et « Enregistrer » partagent ce chemin ;
+    l'indicateur de l'en-tête passe à trois états (en cours / à jour / **échec**). Coût sur la frame pour
+    254 pistes : **13 µs** contre un budget de 200 µs.
+  - **Journal d'erreurs** — `os_debug_print` alimente un ring de 64 Ko vidé par un job dans
+    `<cache>\logs\minidisk-<date>.txt`, rotation à 5 fichiers, jamais d'E/S sur le thread de frame. Comme
+    `AssertAlways` sort par `os_exit` qui vide le ring, **la dernière ligne d'une assertion arrive sur le
+    disque**. Pas de thread de timer derrière : un réveil par seconde pour regarder un ring vide serait
+    précisément le résidu que P-005 a mis une phase à identifier.
+  - **P-005** — re-mesuré au protocole STATUS sur la version actuelle : **31,25 ms sur 12 s = 0,26 %**
+    d'un cœur, identique à T-032 à la milliseconde près alors que le process a **quatre threads de
+    plus**. Un seul thread consomme, le dernier créé (pilote Intel) ; le thread principal, les workers et
+    le thread device sont à 0 ms. Rien à éteindre de notre côté : **clos**.
+  - **Fermeture propre** — l'ordre d'arrêt est documenté étape par étape dans `app_run` et exécuté par un
+    `--selftest` étendu qui démarre et arrête tout sans fenêtre (pool, thread device joint, plan sauvé par
+    le job et relu, journal vidé). Aucun octet n'atteint un appareil réel.
 
 ### Fait en phase 3
 - **2026-09-07, validation sur le vrai MZ-N505** (WinUSB via Zadig, P-001 clos) : énumération → `Ready`,
@@ -224,6 +255,25 @@ Dernière mise à jour : 2026-09-07
   gain (le seuil de trim est un niveau absolu), et le banc « pipeline complet < 0,5 s » non tenu à
   669 ms — la passe de rendu seule est à 195 ms, c'est la passe de mesure R128 qui coûte les 403 ms
   restants. Détail et justifications dans `tickets/T-041-dsp-resampler-r128-dither.md`.
+
+## KPI — phase 7, T-073 (i7-8550U, 4 cœurs / 8 threads, Windows 11 ; **machine partagée avec deux autres agents et une boucle de compilation pendant toutes les mesures**)
+| Métrique | Valeur | Cible | Date |
+|----------|--------|-------|------|
+| Taille exe release | **641 536 o** ; base de la branche (`73e366b`) recompilée sur la même machine : 636 928 o, soit **+4 608 o** pour T-073 | ± 8 Ko autour de la base | 2026-09-08 |
+| Budget CI (`SIZE_BUDGET_KB` = 700) | 716 800 o, **marge 75 264 o** | < 700 KB | 2026-09-08 |
+| Imports | kernel32 + user32 (table d'import du PE lue à la main) | ces deux-là | 2026-09-08 |
+| Tests | **253 cas, 6 890 checks**, 0 échec (ASan) ; 4 cas ajoutés (`arena_tiny_reserve`, `log_ring`, `jobs_pool_reinit`, `plan_save_job`) | verts | 2026-09-08 |
+| Cibles `build.bat` | debug, release, test, check, analyze, bench — **les six vertes** | vertes | 2026-09-08 |
+| **Banc sous charge (P-010)** | `build.bat bench` **5 passes / 5 en code 0** (137, 130, 125, 165, 118 s) pendant une boucle de compilation et deux autres agents ; sonde « machine chargée » aux cinq passes (rapport parallèle 2,47 à 5,35, dispersion 1,59 à 3,10) | 5 / 5 | 2026-09-08 |
+| Mémoire du banc | pic **64 Mo** (le plus gros des sept groupes : 32 / 0 / 64 / 4 / 0 / 16 / 16 Mo), arène relâchée entre groupes | contre `GB(1)` réservé et ~200 Mo engagés en fin de série | 2026-09-08 |
+| **Sauvegarde du plan, thread de frame (P-009)** | **13 µs** pour 254 pistes, instantané de 28 016 o compris (moyenne 17 à 20 µs ; 11 µs sur une passe plus calme) | < 200 µs | 2026-09-08 |
+| Sauvegarde du plan, le job sur un autre cœur | 4 900 à 5 744 µs (`.tmp` + `FlushFileBuffers` + rename) — la barrière de durabilité de l'OS, inchangée mais hors du chemin de frame | — | 2026-09-08 |
+| `plan .mdplan` save + load, 254 pistes | 5 361 µs (meilleur des 5 passes chargées) — critère T-030 de 5 ms toujours **non tenu en temps mur**, par décision (P-009) | — | 2026-09-08 |
+| **CPU au repos (P-005)**, 12 s après chauffe | **31,25 ms, soit 0,26 %** d'un cœur ; 18 threads, **un seul consomme** (le dernier créé, pilote Intel) ; thread principal, workers du pool et thread device à **0 ms** | < 0,5 % | 2026-09-08 |
+| `plan view frame`, 254 entrées / 867 boxes | 373 µs (meilleur des 5 passes chargées) | < 1 500 µs | 2026-09-08 |
+| `ui layout`, 12 020 boxes | 425 µs (meilleur des 5 passes chargées) | < 1 000 µs | 2026-09-08 |
+| Journal d'erreurs | ring de 64 Ko, vidage par job (≤ 1 écriture / s, immédiat au-delà de la moitié), rotation à 5 fichiers, **0 E/S sur le thread de frame**, dernière ligne d'un `AssertAlways` sur le disque | — | 2026-09-08 |
+| Fermeture propre | ordre d'arrêt en 7 étapes documenté dans `app_run`, exécuté par `--selftest` (pool, thread device joint, plan sauvé par le job, journal vidé) : `selftest: ok` | exécutable | 2026-09-08 |
 
 ## KPI — phase 5, T-045 (i7-8550U, 4 cœurs / 8 threads, Windows 11)
 | Métrique | Valeur | Cible | Date |

@@ -83,6 +83,9 @@ typedef struct AppState {
     // The document itself, with the two arenas it owns: opening a file empties
     // them, so nothing else may ever push into them.
     Plan plan;
+    // Every durable write of the plan goes through it, autosave and Save alike:
+    // the frame thread only encodes, a job does the disk (P-009, T-073).
+    PlanSaver plan_saver;
     String8 plan_autosave_path;
     String8 plan_path;  // what Save writes to; empty until the first Save as
     u32 plan_disc;      // the tab the view edits, an index into plan.discs
@@ -210,6 +213,23 @@ md_inline void app_plan_sync(void) {
     if (app.plan_revision != app.plan.revision) { app_plan_recompute(); }
 }
 md_inline u32 app_plan_count(void) { return app_plan_disc()->entry_count; }
+
+// The two hooks the plan header uses for the save (T-073), so that view_plan.c
+// says what it wants and not how it is done.
+// Save and Save as: the same path as the autosave, off the frame thread. It
+// returns 1 when the snapshot was handed over - the dirty flag goes then, and
+// the indicator carries the rest of the story.
+md_inline b32 app_plan_save_to(String8 path) {
+    return plan_save_async(&app.plan_saver, &app.plan, path);
+}
+// The colour of the dot: amber while something is unsaved or being written,
+// red when the last write failed, green when the document is on disk.
+md_inline u32 app_plan_save_color(const UI_Theme *theme) {
+    PlanSaveState state = plan_save_state(&app.plan_saver);
+    if (state == PlanSave_Failed) { return theme->danger; }
+    if (app.plan.dirty || state == PlanSave_Running) { return theme->warning; }
+    return theme->success;
+}
 
 // view_plan.c
 void app_plan_panel(void);

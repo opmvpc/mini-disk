@@ -80,5 +80,10 @@ String8  str8_from_cstr16(Arena *arena, const u16 *cstr);
 String8 str8fv(Arena *arena, const char *fmt, va_list args);
 String8 str8f(Arena *arena, const char *fmt, ...);
 u64     str8_format_buffer(u8 *buffer, u64 capacity, const char *fmt, va_list args);
+// The same, straight into the caller's buffer, for the two paths that must not
+// allocate a byte: what a failed commit prints about itself (the allocator is
+// precisely what broke, P-010) and the lines the log ring writes on its own.
+// The result is clamped to `capacity`: it truncates, it never overflows.
+String8 str8f_buf(u8 *buffer, u64 capacity, const char *fmt, ...);
 
 #endif // BASE_STRING_H

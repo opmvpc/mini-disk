@@ -37,3 +37,42 @@ lignes plutôt qu'un total qui mentirait sur ce qu'on mesure.
    « < 5 ms disque compris » dépend de la machine et pas du code.
 3. Ne pas ré-écrire quand rien n'a changé : déjà le cas (le drapeau `dirty`), mais un plan qu'on édite
    en continu écrit toutes les 5 s, ce qui reste très en dessous de tout seuil d'usure.
+
+## Résolu en T-073 (2026-09-08) — piste 1
+
+C'est la piste 1 qui a été prise, telle qu'elle était écrite : **sortir l'écriture durable de la boucle de
+frame**, sans rien céder sur la durabilité.
+
+Une sauvegarde est maintenant deux temps.
+
+1. Le thread de frame **sérialise** le document dans l'arène du `PlanSaver` (`plan_serialize`). Le tampon
+   obtenu est un instantané immuable d'octets : le job ne relit jamais le document vivant, et **aucun
+   verrou n'est pris sur le plan** — il n'y en a pas besoin, puisque plus personne ne le lit ailleurs que
+   sur le thread qui l'écrit.
+2. Un job (`plan_save_job`) écrit le `.tmp`, appelle `FlushFileBuffers`, renomme en `MOVEFILE_WRITE_THROUGH`
+   et publie son verdict dans `saver->state` (`en cours` / `à jour` / `échec`), lu sans verrou par
+   l'en-tête du plan. Il demande un redraw en finissant : c'est le seul réveil qu'une sauvegarde coûte.
+
+L'autosave et « Enregistrer » passent tous deux par ce chemin (`plan_autosave_tick` et
+`app_plan_save_to`). Une sauvegarde demandée pendant qu'une autre est en vol est **refusée, pas
+empilée** : l'appelant garde son drapeau `dirty` et revient au tick suivant. La seule attente du
+programme est à la fermeture, où `app_shutdown` joint le job avant que le processus meure.
+
+Mesure (i7-8550U, banc `plan save async`, 64 itérations) : les cinq passes de la preuve P-010, machine
+chargée par deux autres agents et une boucle de compilation, et une passe sur une machine plus calme.
+
+| Mesure | Machine chargée (5 passes) | Machine plus calme (1 passe) |
+|--------|---------------------------|------------------------------|
+| Thread de frame : instantané de 254 pistes + pousse du job, meilleur | **13 µs** (13, 13, 14, 14, 14) | **11 µs** |
+| Thread de frame, moyenne des 64 itérations | 17 à 20 µs | 30 µs |
+| Le job, sur un autre cœur : `.tmp` + `FlushFileBuffers` + rename | 4 900 à 5 744 µs | 4 422 µs |
+| Taille de l'instantané | 28 016 octets | 28 016 octets |
+
+Budget du ticket : < 200 µs sur le thread de frame. Tenu avec un facteur **14** dans le pire des cas
+mesuré, et la valeur ne bouge presque pas avec la charge — ce qui est attendu, puisque ce qui reste sur
+la frame est un `mem_copy` et non un appel au disque. La barrière de durabilité
+n'a pas bougé d'une milliseconde — elle n'est simplement plus sur le chemin critique d'une frame.
+
+Le critère de T-030 (« save + load < 5 ms ») reste **non tenu en temps mur** et le restera : c'est le
+disque. La piste 2 de ce document — renégocier le critère — devient donc « aucune frame ne dépasse son
+budget », et c'est ce que le banc `plan save async` mesure maintenant à côté de `plan .mdplan`.

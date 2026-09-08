@@ -553,14 +553,20 @@ TEST(plan_autosave) {
     String8 path = plan_autosave_path(arena, dir);
     os_file_delete(path);
 
-    EXPECT(!plan_autosave_tick(plan, path, 0));  // nothing changed, nothing written
+    PlanSaver saver;
+    plan_saver_init(&saver, arena_alloc(MB(8)));
+
+    EXPECT(!plan_autosave_tick(plan, &saver, path, 0));  // nothing changed, nothing written
     plan_add(plan, 0, 0, test_plan_entry(plan, 1));
     EXPECT(plan->dirty);
     plan->dirty_us = 0;
-    EXPECT(!plan_autosave_tick(plan, path, PLAN_AUTOSAVE_US - 1));  // not yet five seconds
-    EXPECT(plan_autosave_tick(plan, path, PLAN_AUTOSAVE_US));
+    // Not yet five seconds.
+    EXPECT(!plan_autosave_tick(plan, &saver, path, PLAN_AUTOSAVE_US - 1));
+    EXPECT(plan_autosave_tick(plan, &saver, path, PLAN_AUTOSAVE_US));
     EXPECT(!plan->dirty);
-    EXPECT(!plan_autosave_tick(plan, path, PLAN_AUTOSAVE_US * 3));
+    plan_save_wait(&saver);  // the write is a job now (T-073)
+    EXPECT(plan_save_state(&saver) == PlanSave_Done);
+    EXPECT(!plan_autosave_tick(plan, &saver, path, PLAN_AUTOSAVE_US * 3));
 
     // The recovery a cold start does.
     TestPlan recovered;
@@ -569,6 +575,82 @@ TEST(plan_autosave) {
     EXPECT(recovered.plan->discs[0].entry_count == 1);
     os_file_delete(path);
     test_plan_close(&recovered);
+    arena_release(saver.arena);
+    test_plan_close(&tp);
+}
+
+// T-073 / P-009: the snapshot and the job. What the frame thread hands over is
+// byte for byte what the synchronous save writes, the job does the disk, and a
+// second save asked for while the first is in flight is refused, not queued.
+TEST(plan_save_job) {
+    TestPlan tp;
+    test_plan_open(&tp, arena);
+    Plan *plan = tp.plan;
+    for (u32 i = 0; i < 32; i += 1) { plan_add(plan, 0, i, test_plan_entry(plan, i + 1)); }
+
+    String8 dir = os_known_folder(arena, OsKnownFolder_Temp);
+    String8 async_path = os_path_join(arena, dir, str8_lit("minidisk_test_async.mdplan"));
+    String8 sync_path = os_path_join(arena, dir, str8_lit("minidisk_test_sync.mdplan"));
+
+    // The snapshot is the file: same bytes as the synchronous path writes.
+    String8 snapshot = plan_serialize(arena, plan);
+    EXPECT(plan_save(plan, sync_path) == PlanFile_Ok);
+    String8 written = os_file_read_all(arena, sync_path);
+    EXPECT(written.size == snapshot.size);
+    // The creation stamp is the only field a second encoding moves: compare
+    // everything but it.
+    EXPECT(written.size > OffsetOf(PlanFileHeader, created_us) + 8);
+    EXPECT(mem_cmp(written.str, snapshot.str, OffsetOf(PlanFileHeader, created_us)) == 0);
+    u64 tail = OffsetOf(PlanFileHeader, created_us) + 8;
+    EXPECT(mem_cmp(written.str + tail, snapshot.str + tail, written.size - tail) == 0);
+
+    PlanSaver saver;
+    plan_saver_init(&saver, arena_alloc(MB(8)));
+    EXPECT(plan_save_state(&saver) == PlanSave_Idle);
+
+    jobs_init(2);
+    EXPECT(plan_save_async(&saver, plan, async_path));
+    // The frame thread is free the moment it has handed the buffer over: the
+    // budget is 200 us for 254 tracks, and this plan is a small one. Under ASan
+    // with three agents compiling next door the hand-over is measured against
+    // the scheduler and not against the code, so the budget is printed here and
+    // the assertion keeps only the ceiling that catches a real regression: a
+    // frame thread that went back to doing the disk itself costs milliseconds,
+    // not microseconds. The number of record is the bench's, machine at rest.
+    if (saver.frame_us >= 200) {
+        test_report("  note   plan_save_async frame: %llu us (machine chargee)\n", saver.frame_us);
+    }
+    EXPECT(saver.frame_us < 5000);
+    plan_save_wait(&saver);
+    EXPECT(plan_save_state(&saver) == PlanSave_Done);
+    EXPECT(saver.saves == 1);
+
+    // Same document on disk, whichever path wrote it.
+    TestPlan reloaded;
+    test_plan_open(&reloaded, arena);
+    EXPECT(plan_load(reloaded.plan, async_path) == PlanFile_Ok);
+    EXPECT(reloaded.plan->discs[0].entry_count == 32);
+    test_plan_close(&reloaded);
+
+    // A save asked for while one is running is refused; the caller keeps its
+    // dirty flag. Simulated by holding the state, since a real job of 30 us is
+    // over before the next line runs.
+    os_atomic_store_u32(&saver.state, PlanSave_Running);
+    EXPECT(!plan_save_async(&saver, plan, async_path));
+    os_atomic_store_u32(&saver.state, PlanSave_Done);
+
+    // A path that cannot be written is a failure the header can show, not a
+    // crash and not a stall.
+    EXPECT(plan_save_async(&saver, plan,
+                           os_path_join(arena, dir, str8_lit("no_such_dir\\x.mdplan"))));
+    plan_save_wait(&saver);
+    EXPECT(plan_save_state(&saver) == PlanSave_Failed);
+    EXPECT(saver.status == PlanFile_WriteFailed);
+    jobs_shutdown();
+
+    os_file_delete(async_path);
+    os_file_delete(sync_path);
+    arena_release(saver.arena);
     test_plan_close(&tp);
 }
 
@@ -602,5 +684,6 @@ static void test_plan_run_all(void) {
     RUN(plan_text_round_trip);
     RUN(plan_file_rejects);
     RUN(plan_autosave);
+    RUN(plan_save_job);
     RUN(plan_events);
 }

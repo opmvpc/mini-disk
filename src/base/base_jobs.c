@@ -212,7 +212,11 @@ static void jobs_worker(void *data) {
 
 void jobs_init(u32 worker_count) {
     JobPool *pool = &jobs_pool;
-    Assert(!pool->initialized);
+    // A pool that is still alive is stopped first, every worker joined (P-010).
+    // Rebuilding the cells under a running generation is the one way a
+    // parallel-for can come back with a partial answer: the workers of the old
+    // pool would still be popping from the ring the new one is resetting.
+    if (pool->initialized) { jobs_shutdown(); }
     if (worker_count == 0) {
         u32 cpus = os_cpu_count();
         worker_count = (cpus > 1) ? cpus - 1 : 0;

@@ -16,6 +16,7 @@
 #define PLAN_FILE_H
 
 #include "plan_model.h"
+#include "../../base/base_jobs.h"
 
 #define PLAN_FILE_VERSION 1
 #define PLAN_FILE_STRINGS_MAX MB(4)
@@ -74,11 +75,54 @@ PlanFileStatus plan_load(Plan *plan, String8 path);
 PlanFileStatus plan_export_text(const Plan *plan, String8 path);
 PlanFileStatus plan_import_text(Plan *plan, String8 path);
 
+// --- the durable save, off the frame thread (P-009) ------------------------
+// The barrier that makes a save durable (FlushFileBuffers, then a rename with
+// WRITE_THROUGH) costs about 7 ms on this machine and not one of them is ours:
+// it is the disk. What is ours is the encoding, half a millisecond, and that is
+// the only part with any business on the frame thread.
+//
+// So a save is two steps. The frame thread serialises the document into the
+// saver's own arena - an immutable snapshot of bytes, so the job never reads
+// the live plan and no lock is ever taken on it - and hands that buffer to a
+// job. The job writes, flushes, renames, and publishes its verdict in `state`,
+// which the plan header reads to show whether the last save is running, done or
+// failed. A save asked for while one is in flight is refused, not queued: the
+// caller keeps its dirty flag and comes back on the next tick.
+typedef enum PlanSaveState {
+    PlanSave_Idle = 0,
+    PlanSave_Running,
+    PlanSave_Done,
+    PlanSave_Failed,
+} PlanSaveState;
+
+typedef struct PlanSaver {
+    Arena *arena;  // the snapshot and the path; cleared before each save
+    JobCounter counter;
+    volatile u32 state;   // PlanSaveState, written by the job, read by the view
+    volatile u32 status;  // the PlanFileStatus the last finished save returned
+    String8 path;
+    String8 bytes;  // the snapshot the job writes
+    u64 frame_us;   // what the last hand-over cost the frame thread
+    u64 disk_us;    // what the job spent on the disk, for the record
+    u64 saves;      // finished saves, for the tests
+} PlanSaver;
+
+void plan_saver_init(PlanSaver *saver, Arena *arena);
+// 1 when the snapshot was taken and the job pushed, 0 when a save is still in
+// flight. The frame cost (snapshot included) lands in `saver->frame_us`.
+b32  plan_save_async(PlanSaver *saver, const Plan *plan, String8 path);
+void plan_save_wait(PlanSaver *saver);  // the shutdown path, and the tests
+md_inline PlanSaveState plan_save_state(const PlanSaver *saver) {
+    return (PlanSaveState)os_atomic_load_u32(&saver->state);
+}
+// The snapshot on its own: the bytes plan_save writes, and what the bench times.
+String8 plan_serialize(Arena *arena, const Plan *plan);
+
 // %LOCALAPPDATA%\minidisk\plans\autosave.mdplan, the directory created on the
 // way. `base_dir` is the application's data folder.
 String8 plan_autosave_path(Arena *arena, String8 base_dir);
-// Called once per frame. Writes when the plan has been dirty for five seconds,
-// clears the flag, and returns 1 when it wrote (B-01).
-b32 plan_autosave_tick(Plan *plan, String8 path, u64 now_us);
+// Called once per frame. Hands the plan to the saver when it has been dirty for
+// five seconds, clears the flag, and returns 1 when it did (B-01).
+b32 plan_autosave_tick(Plan *plan, PlanSaver *saver, String8 path, u64 now_us);
 
 #endif // PLAN_FILE_H

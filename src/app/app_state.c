@@ -113,7 +113,11 @@ void app_plan_tick(void) {
     b32 changed = 0;
     while (plan_events_next(&app.plan.events, &event)) { changed = 1; }
     if (changed) { os_request_redraw(); }
-    plan_autosave_tick(&app.plan, app.plan_autosave_path, os_time_now_us());
+    u64 now_us = os_time_now_us();
+    plan_autosave_tick(&app.plan, &app.plan_saver, app.plan_autosave_path, now_us);
+    // The log ring goes out on a job whenever the loop is awake and a second
+    // has passed. Nothing here wakes the loop up on its own (P-005).
+    os_log_tick(now_us);
 }
 
 void app_plan_add_selection(void) {
@@ -242,7 +246,13 @@ void app_init(Arena *permanent, f32 scale) {
     // ever push into them.
     plan_init(&app.plan, arena_alloc(MB(16)), arena_alloc(MB(16)));
     app_plan_recompute();  // the gauge has real numbers from the first frame
+    // An arena of its own for the snapshot a save job reads: a 254 track plan
+    // is 28 KB, and 8 MB covers the biggest document the model allows.
+    plan_saver_init(&app.plan_saver, arena_alloc(MB(8)));
     app.plan_autosave_path = plan_autosave_path(permanent, app.cache_dir);
+    // The log mirror opens as soon as the cache directory is known, so that
+    // everything printed from here on ends up in a file as well.
+    os_log_init(app.cache_dir);
     app.cache_path = os_path_join(permanent, app.cache_dir, str8_lit("library.mdlib"));
     lib_covers_init(&app.covers, permanent, app.cache_dir);
 
@@ -319,9 +329,16 @@ void app_init(Arena *permanent, f32 scale) {
     scratch_end(scratch);
 }
 
+// Step three of the shutdown order documented in app_run: the document and the
+// preferences, in that order, and this is the only place that ever waits for a
+// save job - the process is about to die and the bytes must be on the platter.
 void app_shutdown(void) {
-    if (app.prefs_dirty) { prefs_save(&app.prefs, app.prefs_path); }
+    plan_save_wait(&app.plan_saver);
     // The five second window does not apply to a close: whatever is unsaved
     // goes out now, so the next launch opens on it.
-    if (app.plan.dirty) { plan_save(&app.plan, app.plan_autosave_path); }
+    if (app.plan.dirty) {
+        plan_save_async(&app.plan_saver, &app.plan, app.plan_autosave_path);
+        plan_save_wait(&app.plan_saver);
+    }
+    if (app.prefs_dirty) { prefs_save(&app.prefs, app.prefs_path); }
 }

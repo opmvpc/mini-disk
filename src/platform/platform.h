@@ -493,6 +493,31 @@ void    os_cursor_set(OsCursor cursor);
 // --- diagnostics -----------------------------------------------------------
 void os_debug_print(String8 s);
 
+// The last error the OS reported on this thread: what an allocation failure
+// prints about itself before it dies (P-010).
+u32 os_last_error(void);
+
+// --- the error log (T-073) -------------------------------------------------
+// os_debug_print keeps every line in a 64 KB ring in memory. The ring is
+// emptied into <dir>\logs\minidisk-<date>.txt by a job - never by the thread
+// that printed, so no frame ever touches the disk - and os_exit empties what
+// is left, which is how an AssertAlways gets its last line on disk.
+//
+// There is no timer thread behind it: a thread that wakes every second to look
+// at an empty ring is exactly the residual CPU P-005 spent a phase chasing.
+// os_log_tick is called by the frame loop, which is awake whenever anything has
+// been printed, and a ring past half full pushes its flush job immediately.
+#define OS_LOG_RING_SIZE KB(64)
+#define OS_LOG_FLUSH_US  1000000  // at most one file write per second
+#define OS_LOG_FILE_MAX  5        // older files are deleted by os_log_init
+
+void    os_log_init(String8 dir);  // <dir>\logs, created on the way; rotates
+void    os_log_tick(u64 now_us);   // pushes the flush job when one is due
+void    os_log_flush(void);        // synchronous: shutdown, os_exit, the tests
+void    os_log_shutdown(void);
+u64     os_log_dropped(void);          // bytes a full ring had to refuse
+String8 os_log_path(Arena *arena);     // the file written, empty when off
+
 // Counters the debug overlay reads to answer P-005: how often the loop really
 // wakes up at rest, and which messages the window proc is handed meanwhile.
 // `messages` counts every call into the window proc, `dispatched` only the ones
