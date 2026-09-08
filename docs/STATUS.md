@@ -1,9 +1,28 @@
 # STATUS — où on en est
 
-Dernière mise à jour : 2026-09-07
+Dernière mise à jour : 2026-09-08
 
 ## Phase actuelle : 7 · Polish — T-070 (taille), T-071 (cohérence UI), T-072 (prefs/thème clair/i18n), T-073 (robustesse) en parallèle
 ## Phase actuelle (historique) : 3 + 5 en parallèle — T-020, T-021, T-040, T-041 mergés dans main ; T-042 fait et **validé sur le vrai MZ-N505** (le pilote WinUSB est lié, P-001 levé), T-022 en cours
+
+### Fait en phase 7
+- **T-070 — régime de taille.** `build.bat map` (nouvelle cible) + `tools/size_report.py` : la carte
+  du linker agrégée par module, top 40 des symboles, `--diff` entre deux mesures. Exe release
+  **636 928 → 622 080 o** (−14 848, −2,3 %) : `#pragma optimize("s") + inline_depth(1)` (`MdCold`)
+  sur les seules unités qu'**aucune ligne de banc ne traverse** (protocole NetMD, dialogues, USB,
+  Media Foundation, `plan_cmd`, `codec_mf`, `transfer`, `app_state`), `/INCLUDE:codec_open` retiré
+  (il valait 0 octet depuis T-043) et `--selftest` qui **ouvre un vrai WAV par `codec_open`** pour
+  garantir que `/OPT:REF` ne mange pas les décodeurs. `SIZE_BUDGET_KB` : 700 → **630**.
+- **La cible de 500 KB n'est pas atteinte, et c'est mesuré** : `/O2 /Os` global la donnerait
+  (491 520 o) mais coûte +44 % au layout — hors budget — et +47 % au texte ; `/Os` sur les décodeurs
+  tiers vaut 36 864 o mais **n'a pas pu être départagé** (machine à 100 %, trois autres agents :
+  deux exécutions du *même* binaire `/O2` ont donné `codec_ogg` 306× puis 182×, R128 735× puis 331×).
+  `DR_FLAC_NO_CRC` vaut 20 992 o et retire la détection de corruption FLAC (ADR-012) : refusé.
+  Trois portes chiffrées vers 500 KB sont posées dans la Livraison de T-070, **arbitrage lead**.
+- **`build.bat bench` est rouge aujourd'hui pour cause de charge machine, pas à cause de T-070** : il
+  s'arrête sur `r_core batch build` (1 290 µs pour un budget de 900) alors que `src/ui/r_core.c`
+  n'est pas dans le diff et que le même banc rendait 705-769 µs le matin. **À relancer machine au
+  repos avant le merge**, et à ce moment-là trancher le `/Os` du code tiers.
 
 ### Fait (phase 0 terminée)
 - 4 rapports de recherche livrés (`research/01..04`, ~10 700 lignes) + tokens de design (`02b`).
@@ -224,6 +243,20 @@ Dernière mise à jour : 2026-09-07
   gain (le seuil de trim est un niveau absolu), et le banc « pipeline complet < 0,5 s » non tenu à
   669 ms — la passe de rendu seule est à 195 ms, c'est la passe de mesure R128 qui coûte les 403 ms
   restants. Détail et justifications dans `tickets/T-041-dsp-resampler-r128-dither.md`.
+
+## KPI — phase 7, T-070 (i7-8550U, 4 cœurs / 8 threads, Windows 11 ; **machine partagée avec les agents T-071/072/073 pendant toutes les mesures**)
+| Métrique | Valeur | Cible | Date |
+|----------|--------|-------|------|
+| Taille exe release | **622 080 o** (636 928 avant, **−14 848**, −2,3 %) | < 500 KB — **non atteinte**, arbitrage lead | 2026-09-08 |
+| `SIZE_BUDGET_KB` | **630** (607,5 Ko utilisés, **22,5 Ko de marge**) — pas 550 : l'exe ne rentre pas | marge surveillée (P-007) | 2026-09-08 |
+| Tests | **249 cas, 6 848 checks**, 0 échec sous ASan — inchangés | verts | 2026-09-08 |
+| Cibles `build.bat` | debug, release, **map** (nouvelle), test, check, analyze **vertes** ; **bench rouge par charge machine** (`r_core batch build` 1 290 µs / budget 900, sur du code hors diff) | vertes | 2026-09-08 |
+| Imports | kernel32 + user32 | 2 DLL | 2026-09-08 |
+| `--selftest` | vert, et **ouvre désormais un WAV via `codec_open`** : la présence des décodeurs dans l'image est prouvée, pas supposée | exit 0 | 2026-09-08 |
+| Répartition (symboles) | app 142 760 · dr_flac 52 340 · netmd 44 664 · stb_vorbis 40 816 · ui 37 956 · dr_wav 31 088 · tags 30 736 · plan 29 400 · win32 27 940 · minimp3 24 880 · chaînes/shaders 24 736 · library 24 424 · renderer 14 968 · codecs 9 748 · dsp 8 880 · pipeline 8 304 | — | 2026-09-08 |
+| Plancher incompressible | **43 796 o** de déroulement x64 (`.xdata` 26 884 + `.pdata` 16 912), 7 % de l'exe, aucune option MSVC pour l'enlever | — | 2026-09-08 |
+| Remplissage de sections | **< 1 300 o** au total (5 sections, `FileAlignment` 512 déjà par défaut) → `/ALIGN:16` ne lie même pas (`LNK1164`) et ne vaudrait rien | > 8 KB pour être retenu | 2026-09-08 |
+| Bruit du banc | **facteur 2,2 entre deux exécutions du même binaire** (`codec_ogg` 306× puis 182×) — le critère « > 5 % = perte » est **inexploitable** dans ces conditions | machine au repos | 2026-09-08 |
 
 ## KPI — phase 5, T-045 (i7-8550U, 4 cœurs / 8 threads, Windows 11)
 | Métrique | Valeur | Cible | Date |

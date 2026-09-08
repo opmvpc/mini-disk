@@ -1,4 +1,32 @@
 // main.c - unity build: the single translation unit holding all of our code (ADR-002).
+//
+// ---------------------------------------------------------------------------
+//  MdCold / MdHot - regime de taille (T-070)
+// ---------------------------------------------------------------------------
+//  /O2 optimise pour la vitesse (/Ot) : MSVC deroule, duplique et aligne. Sur
+//  l'ensemble du programme cela coute 145 408 octets d'exe pour un gain qui n'a
+//  de sens que sur le code chaud (rendu, layout, DSP, decodeurs). MdCold
+//  bascule une plage d'unites en /Os - /O2 moins /Ot, donc toujours
+//  /Og /Oi /Ob2 /Oy, seulement sans le deroulage ni la duplication - et MdHot
+//  revient au reglage de la ligne de commande.
+//
+//  La regle d'admission est stricte : une unite ne passe en MdCold que si
+//  *aucune ligne de banc* ne la traverse, donc qu'aucune perte de perf ne peut
+//  lui etre imputee. Cela exclut prefs.c, tags_*, lib_*, plan_capacity,
+//  plan_file, netmd_des, win32_file, win32_image et tout le per-frame
+//  (view_*.c, app.c, plan_view.c, ui/, r_*) : ce sont eux que les bancs
+//  couvrent, et /Os leur coute 15 a 45 % (mesure globale, cf. le ticket).
+//  Ce qui reste - le protocole NetMD, l'edition, la session securisee, les
+//  dialogues, l'USB, Media Foundation, les commandes de plan, l'etat de
+//  l'application - ne tourne ni par frame ni par echantillon : c'est du code
+//  qui attend un peripherique ou un clic.
+//  inline_depth(1) va avec : dans ces unites, l'inlining en cascade des macros
+//  DeferLoop et des accesseurs recopie le meme prologue des dizaines de fois
+//  pour un code qui attend de toute facon un peripherique (mesure : -11 264 o,
+//  soit deux fois et demie ce que /Os seul rend sur le meme perimetre).
+#define MdCold __pragma(optimize("s", on)) __pragma(inline_depth(1))
+#define MdHot  __pragma(optimize("", on)) __pragma(inline_depth())
+
 #include "base/base.h"
 #include "base/base_arena.h"
 #include "base/base_string.h"
@@ -70,14 +98,18 @@
 
 #include "platform/win32/win32_platform.c"
 #include "platform/win32/win32_file.c"
+MdCold  // dialogues : ouverts par un clic, jamais dans une frame
 #include "platform/win32/win32_dialog.c"
+MdHot
 #include "platform/win32/win32_thread.c"
 #include "platform/win32/win32_window.c"
 #include "platform/win32/win32_gl.c"
 #include "platform/win32/win32_font_dwrite.c"
 #include "platform/win32/win32_image.c"
+MdCold  // USB et Media Foundation : le temps passe est dans le peripherique
 #include "platform/win32/win32_usb.c"
 #include "platform/win32/win32_media.c"
+MdHot
 
 #include "core/library/lib_model.c"
 #include "core/library/tags.c"
@@ -92,21 +124,27 @@
 #include "core/library/lib_cache.c"
 #include "core/library/lib_covers.c"
 #include "core/plan/plan_model.c"
+MdCold  // une commande de plan par action utilisateur (annuler/refaire compris)
 #include "core/plan/plan_cmd.c"
+MdHot
 #include "core/plan/plan_capacity.c"
 #include "core/plan/plan_file.c"
 #include "core/plan/plan_toc.c"
+MdCold  // protocole NetMD : une trame USB toutes les quelques ms au mieux
 #include "core/netmd/netmd_models.c"
 #include "core/netmd/netmd_proto.c"
 #include "core/netmd/netmd_disc.c"
 #include "core/netmd/netmd_control.c"
+MdHot   // netmd_des : banc "netmd DES-CBC 8 MB", 8 Mo chiffres par transfert
 #include "core/netmd/netmd_des.c"
+MdCold
 #include "core/netmd/netmd_secure.c"
 #include "core/netmd/netmd_upload.c"
 #include "core/netmd/netmd_replay.c"
 #include "core/netmd/netmd_edit.c"
 #include "core/netmd/netmd_backup.c"
 #include "core/netmd/netmd_device.c"
+MdHot
 #include "core/dsp/dsp_math.c"
 #include "core/dsp/dsp_resample.c"
 #include "core/dsp/dsp_loudness.c"
@@ -121,7 +159,9 @@
 #include "core/codecs/codec_flac.c"
 #include "core/codecs/codec_wav.c"
 #include "core/codecs/codec_ogg.c"
+MdCold  // codec_mf : wrapper Media Foundation, le temps est dans l'encodeur ATRAC3
 #include "core/codecs/codec_mf.c"
+MdHot
 
 #include "ui/gl_loader.c"
 #include "ui/r_atlas.c"
@@ -139,10 +179,13 @@
 
 #include "app/prefs.c"
 #include "app/plan_view.c"
+MdCold  // orchestration : une transition d'etat par piste, pas par frame
 #include "app/transfer.c"
 #include "app/app_state.c"
+MdHot
 #include "app/view_library.c"
 #include "app/view_device.c"
 #include "app/view_plan.c"
 #include "app/view_transfer.c"
 #include "app/app.c"
+MdHot
