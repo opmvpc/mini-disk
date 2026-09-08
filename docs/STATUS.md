@@ -60,6 +60,9 @@ Dernière mise à jour : 2026-09-08
   thème clair). Ce sont des fonctions, pas une régression de compacité. `SIZE_BUDGET_KB` 630 → **660** ; la
   règle T-070 reste « tendance à la baisse à fonctions égales », et le levier `/Os` sur le code tiers
   (−36 KB) est toujours à trancher sur un banc au repos avant le tag de phase 7.
+  Après T-071 et T-073 : **662 016 o** en local, mais **677 376 o sur le runner CI** (MSVC plus récent, +15 KB
+  sur le même source : à mesurer par module avec `build.bat map` sur le runner) → `SIZE_BUDGET_KB` **690**
+  pour que la CI mesure la version du runner, pas la nôtre. Le budget se lit désormais « taille CI ».
 - **T-071 — cohérence UI et défauts des phases 3-5** (worktree `t071`, 2026-09-08) :
   - **Un seul état pour le panneau Disque** (`src/app/device_panel.h`) : `NetmdPanelState` calculé une
     fois, lu par le sous-titre d'en-tête **et** par le corps. L'incohérence du 2026-09-07 (« pilote
