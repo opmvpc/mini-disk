@@ -4,7 +4,7 @@ cd /d "%~dp0"
 
 REM ---------------------------------------------------------------------------
 REM  minidisk build - the only entry point (ADR-002). MSVC + Windows SDK only.
-REM  Usage: build.bat [debug|release|test|check|analyze|bench|clean]
+REM  Usage: build.bat [debug|release|map|test|check|analyze|bench|clean]
 REM ---------------------------------------------------------------------------
 
 set MODE=%1
@@ -34,18 +34,25 @@ REM  /utf-8 : les chaines UI de src/app/strings.h sont en UTF-8 dans la source e
 REM  doivent le rester dans l'executable (sinon MSVC les relit en codepage ANSI).
 set COMMON=/nologo /std:c11 /utf-8 /Zi /Isrc /FC /diagnostics:column %WARN%
 set DEFS=/DUNICODE /D_UNICODE /DWIN32_LEAN_AND_MEAN /DNOMINMAX
-set REL_CL=/DBUILD_DEBUG=0 /DBUILD_NO_CRT=1 /O2 /Oi /Gy /Gw /GS- /Gs9999999 /GR- /EHa- /GL
+REM  MD_REL_OPT / MD_TP_OPT : leviers de taille mesurables un par un (T-070).
+REM  Valeur par defaut = ce qui est livre ; on les surcharge dans l'environnement
+REM  le temps d'une mesure, jamais en CI.
+if not defined MD_REL_OPT set MD_REL_OPT=/O2
+if not defined MD_TP_OPT  set MD_TP_OPT=/O2
+set REL_CL=/DBUILD_DEBUG=0 /DBUILD_NO_CRT=1 %MD_REL_OPT% /Oi /Gy /Gw /GS- /Gs9999999 /GR- /EHa- /GL
 set DBG_CL=/DBUILD_DEBUG=1 /DBUILD_NO_CRT=0 /Od /MTd /fsanitize=address
-REM  /INCLUDE:codec_open : les decodeurs de T-040 sont livres avant le pipeline
-REM  qui les appellera (T-041). Sans ce point d'ancrage, /OPT:REF les retire de
-REM  l'exe et le KPI de taille ne mesurerait rien.
+REM  /INCLUDE:codec_open a disparu (T-070) : il ancrait les decodeurs de T-040,
+REM  livres avant le pipeline qui devait les appeler (T-041). Depuis T-043 le
+REM  pipeline les appelle pour de bon, et --selftest ouvre un WAV a travers
+REM  codec_open : si /OPT:REF retirait la table des decodeurs, le smoke test de
+REM  la CI le dirait tout de suite.
 set REL_LINK=/LTCG /INCREMENTAL:NO /NODEFAULTLIB /ENTRY:entry_point /SUBSYSTEM:WINDOWS ^
  /OPT:REF /OPT:ICF /MERGE:.rdata=.text /MERGE:.pdata=.text /STACK:0x100000,0x10000 ^
  /DYNAMICBASE /NXCOMPAT /HIGHENTROPYVA /PDBALTPATH:%%_PDB%% ^
- /INCLUDE:codec_open ^
  /MANIFEST:EMBED /MANIFESTINPUT:src\app.manifest
 
 if "%MODE%"=="release" goto :release
+if "%MODE%"=="map"     goto :map
 if "%MODE%"=="debug"   goto :debug
 if "%MODE%"=="test"    goto :test
 if "%MODE%"=="bench"   goto :bench
@@ -61,11 +68,29 @@ REM  /GL- sur le code tiers : sous LTCG, MSVC transforme leurs affectations de
 REM  struct en appels memcpy "library helper" que /NODEFAULTLIB ne peut pas
 REM  resoudre (C2268, cf. CONVENTIONS.md et T-004). On ne patche pas les sources
 REM  vendorisees : on retire /GL de ces deux unites, elles restent en /O2.
-cl %COMMON% %DEFS% %REL_CL% /GL- /c src\third_party.c /Fobuild\third_party.obj /Fdbuild\minidisk.pdb || exit /b 1
-cl %COMMON% %DEFS% %REL_CL% /GL- /c src\third_party_vorbis.c /Fobuild\third_party_vorbis.obj /Fdbuild\minidisk.pdb || exit /b 1
+cl %COMMON% %DEFS% %REL_CL% /GL- %MD_TP_OPT% /c src\third_party.c /Fobuild\third_party.obj /Fdbuild\minidisk.pdb || exit /b 1
+cl %COMMON% %DEFS% %REL_CL% /GL- %MD_TP_OPT% /c src\third_party_vorbis.c /Fobuild\third_party_vorbis.obj /Fdbuild\minidisk.pdb || exit /b 1
 cl %COMMON% %DEFS% %REL_CL% src\main.c /Fobuild\main.obj /Fdbuild\minidisk.pdb ^
    /link %REL_LINK% /OUT:build\minidisk.exe build\third_party.obj build\third_party_vorbis.obj ^
    kernel32.lib user32.lib || exit /b 1
+goto :size
+
+REM ---------------------------------------------------------------------------
+REM  map: la release, plus /MAP, plus le rapport de taille par module (T-070).
+REM  Sous /LTCG la carte n'attribue plus rien aux .obj (tout notre code est de
+REM  toute facon dans un seul objet, unity build), mais elle liste chaque symbole
+REM  avec son RVA : les tailles sont deduites des ecarts d'adresses, comme dans
+REM  P-004. C'est ce que tools\size_report.py agrege par prefixe de module.
+:map
+echo [map] build release + carte...
+cl %COMMON% %DEFS% %REL_CL% /GL- %MD_TP_OPT% /c src\third_party.c /Fobuild\third_party.obj /Fdbuild\minidisk.pdb || exit /b 1
+cl %COMMON% %DEFS% %REL_CL% /GL- %MD_TP_OPT% /c src\third_party_vorbis.c /Fobuild\third_party_vorbis.obj /Fdbuild\minidisk.pdb || exit /b 1
+cl %COMMON% %DEFS% %REL_CL% src\main.c /Fobuild\main.obj /Fdbuild\minidisk.pdb ^
+   /link %REL_LINK% /MAP:build\minidisk.map /MAPINFO:EXPORTS ^
+   /OUT:build\minidisk.exe build\third_party.obj build\third_party_vorbis.obj ^
+   kernel32.lib user32.lib || exit /b 1
+echo [map] rapport...
+python tools\size_report.py build\minidisk.map build\minidisk.exe || exit /b 1
 goto :size
 
 REM ---------------------------------------------------------------------------
@@ -98,9 +123,9 @@ exit /b 0
 REM ---------------------------------------------------------------------------
 :bench
 echo [bench] build...
-set BENCH_CL=/DBUILD_DEBUG=0 /DBUILD_NO_CRT=0 /DBUILD_BENCH=1 /O2 /Oi /Gy /MT
-cl %COMMON% %DEFS% %BENCH_CL% /c src\third_party.c /Fobuild\third_party_bench.obj /Fdbuild\bench.pdb || exit /b 1
-cl %COMMON% %DEFS% %BENCH_CL% /c src\third_party_vorbis.c /Fobuild\third_party_vorbis_bench.obj /Fdbuild\bench.pdb || exit /b 1
+set BENCH_CL=/DBUILD_DEBUG=0 /DBUILD_NO_CRT=0 /DBUILD_BENCH=1 %MD_REL_OPT% /Oi /Gy /MT
+cl %COMMON% %DEFS% %BENCH_CL% %MD_TP_OPT% /c src\third_party.c /Fobuild\third_party_bench.obj /Fdbuild\bench.pdb || exit /b 1
+cl %COMMON% %DEFS% %BENCH_CL% %MD_TP_OPT% /c src\third_party_vorbis.c /Fobuild\third_party_vorbis_bench.obj /Fdbuild\bench.pdb || exit /b 1
 cl %COMMON% %DEFS% %BENCH_CL% ^
    tests\bench_main.c /Fobuild\bench.obj /Fdbuild\bench.pdb ^
    /link /INCREMENTAL:NO /SUBSYSTEM:CONSOLE /OUT:build\bench.exe ^

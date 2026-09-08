@@ -259,6 +259,44 @@ static void app_run(void);
 
 // --- self test (--selftest): boot the base layer without opening a window ---
 
+// Eight frames of 44,1 kHz mono PCM 16 in a canonical RIFF/WAVE, 60 bytes.
+// It is here rather than in a fixture file because the point is to prove
+// something about the *shipped exe*: the link line no longer carries
+// /INCLUDE:codec_open (T-070), so nothing but a real call anchors the decoder
+// table. This one opens a file through codec_open and reads it back.
+static const u8 win32_selftest_wav[60] = {
+    0x52, 0x49, 0x46, 0x46, 0x34, 0x00, 0x00, 0x00, 0x57, 0x41, 0x56, 0x45,
+    0x66, 0x6D, 0x74, 0x20, 0x10, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00,
+    0x44, 0xAC, 0x00, 0x00, 0x88, 0x58, 0x01, 0x00, 0x02, 0x00, 0x10, 0x00,
+    0x64, 0x61, 0x74, 0x61, 0x10, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x10, 0x00, 0x20, 0x00, 0x30,
+    0x00, 0x40, 0x00, 0x50, 0x00, 0x60, 0x00, 0x70,
+};
+
+static i32 win32_selftest_decoder(Arena *arena) {
+    u16 temp_dir[OS_PATH_MAX];
+    if (GetTempPathW(OS_PATH_MAX, (LPWSTR)temp_dir) == 0) { return 1; }
+
+    String8 path = os_path_join(arena, str8_from_cstr16(arena, temp_dir),
+                                str8_lit("minidisk_selftest.wav"));
+    String8 bytes = {(u8 *)win32_selftest_wav, sizeof(win32_selftest_wav)};
+    if (!os_file_write_all(path, bytes)) { return 1; }
+
+    i32 failures = 0;
+    Decoder *decoder = 0;
+    if (codec_open(&decoder, path) != CODEC_OK) {
+        failures += 1;
+    } else {
+        if (decoder->info.sample_rate != 44100 || decoder->info.channels != 1) { failures += 1; }
+        f32 samples[8] = {0};
+        f32 *planes[1] = {samples};
+        if (codec_read_f32_planar(decoder, planes, 8) != 8) { failures += 1; }
+        codec_close(decoder);
+    }
+    os_file_delete(path);
+    return failures;
+}
+
 static i32 win32_selftest(void) {
     Arena *arena = arena_alloc(MB(64));
     i32 failures = 0;
@@ -276,6 +314,8 @@ static i32 win32_selftest(void) {
     if (hash64_mix(0) == 0) { failures += 1; }
     if (sqrt_f32(16.0f) != 4.0f) { failures += 1; }
     if (os_time_now_us() == 0 && os_thread_current_id() == 0) { failures += 1; }
+
+    failures += win32_selftest_decoder(arena);
 
     // Literal messages on purpose: str8f is exercised by the tests, and keeping it
     // out of this path keeps the release exe free of code nothing else calls yet.

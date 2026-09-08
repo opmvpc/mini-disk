@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Phase 7 — Polish
+- **Régime de taille (T-070)** : nouvelle cible `build.bat map` (`/MAP` + `tools/size_report.py`) qui
+  ventile l'exe par module et par symbole, et compare deux mesures (`--diff`). L'exe release passe de
+  **636 928 à 622 080 octets** : `#pragma optimize("s") + inline_depth(1)` sur les unités froides que
+  plus aucun banc ne traverse (protocole NetMD, dialogues, USB, Media Foundation, commandes de plan,
+  Media Foundation codec, orchestration du transfert), `/INCLUDE:codec_open` retiré du lien — il ne
+  valait plus rien depuis T-043 — et `--selftest` qui ouvre désormais un vrai WAV par `codec_open`
+  pour prouver que `/OPT:REF` laisse les décodeurs dans l'image. `SIZE_BUDGET_KB` : 700 → 630.
+  La cible de 500 KB **n'est pas atteinte** : les leviers qui la donneraient (`/O2 /Os` global,
+  `DR_FLAC_NO_CRC`) coûtent de la perf mesurée ou une fonction ; les chiffres de chaque arbitrage
+  sont dans la Livraison du ticket.
+
 ### Phase 5 — Audio & gravure (T-040..T-043), terminée — tag `v0.5.0-phase5`
 De la bibliothèque au disque, pour de vrai, dans un exe de 636 928 octets :
 - **Décodeurs** (T-040) : MP3, FLAC, WAV/AIFF, Ogg Vorbis sans CRT, plus un repli Media Foundation
