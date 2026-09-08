@@ -1,6 +1,6 @@
 # STATUS — où on en est
 
-Dernière mise à jour : 2026-09-07
+Dernière mise à jour : 2026-09-08
 
 ## Phase actuelle : 7 · Polish — T-070 (taille), T-071 (cohérence UI), T-072 (prefs/thème clair/i18n), T-073 (robustesse) en parallèle
 ## Phase actuelle (historique) : 3 + 5 en parallèle — T-020, T-021, T-040, T-041 mergés dans main ; T-042 fait et **validé sur le vrai MZ-N505** (le pilote WinUSB est lié, P-001 levé), T-022 en cours
@@ -43,6 +43,54 @@ Dernière mise à jour : 2026-09-07
   du DSP de T-041 qui deviennent atteignables depuis `app/` par le bouton « Graver », pas de DES.
   `SIZE_BUDGET_KB` reste à **600**, à resserrer en phase 7 (levier `/O1`, P-007).
 - Ordre de merge du 2026-09-07 : T-020 → T-041 → T-040 → T-021 (conflits d'includes résolus en gardant les deux côtés).
+
+### Fait en phase 7
+- **T-072 livré : préférences, thème clair réel, i18n complète, raccourcis et aide clavier.**
+  `src/app/view_settings.c` est un panneau modal (`Ctrl+,` ou l'engrenage de la barre d'outils) posé sur
+  `UI_Layer_Popup` derrière un voile qui mange les clics, et qui **possède le clavier** tant qu'il est là
+  (`ui_popup_set_active`) : les trois listes en dessous cessent de lire les touches. Quatorze de ses seize
+  lignes sont une table (`app_setting_rows[]` : libellé, type, champ de `Prefs` par `OffsetOf`, pas,
+  bornes, unité) — langue, thème, mode MD par défaut, cible de loudness, plafond true-peak, rognage,
+  fondus, blanc entre les pistes, tailles des deux caches ; écrites à la main seulement celles qui lisent
+  le disque ou portent un verbe (occupation des caches + « Vider », dossiers surveillés, vignettes).
+  **Langue et thème s'appliquent à chaud** : aucune boîte ne met une couleur en cache d'une frame à
+  l'autre, donc c'est un appel et un redessin, sans redémarrage ni relayout manuel.
+  `ui_theme_light` vient de research/02 §10.4 et 02b **avec chaque paire fond/texte mesurée** : deux
+  échelles descendues d'un cran pour passer 4,5:1 partout, ombre à 18 % au lieu de 45 %. Le thème
+  **sombre** corrige au passage `fg_muted`, qui ne donnait que 3,9:1 (→ 5,5:1). Le choix « système » est
+  résolu par `os_system_theme()` (`AppsUseLightTheme` via `RegGetValueW` **chargé dynamiquement**, pour
+  que la table d'imports reste kernel32 + user32) et réévalué sur `WM_SETTINGCHANGE` ;
+  `DwmSetWindowAttribute` assortit la barre de titre.
+  i18n : 85 chaînes ajoutées **en fin** d'énumération et des deux tables (aucun identifiant déplacé),
+  319 au total, pluriels à deux formes (`app_plural`) et formats par langue (espace fine insécable U+202F
+  en FR, virgule en EN ; dates et durées). `tools/i18n_audit.py` est branché sur `build.bat check` et
+  refuse toute chaîne visible hors `strings.h` (sauté avec un message si Python manque, pour que le check
+  reste vert sur une machine MSVC nue).
+  `src/app/app_shortcuts.{h,c}` : **26 lignes** (touche, modificateurs, contexte, action, libellé) qui
+  sont research/02 §8.8 recopié, avec **trois lecteurs pour une seule table** : le dispatch de `app.c`,
+  l'aide clavier (`F1`) et les libellés de la barre de statut.
+  Onze clés de prefs nouvelles, lecture tolérante (ADR-012), bornées à l'analyse par les mêmes constantes
+  que le panneau ; `PREFS_VERSION` reste à 1, un fichier d'avant T-072 prend simplement les défauts.
+  Écarts : exe **+27 136 o** au lieu de ± 15 360 (le prix d'un panneau complet + une aide clavier, détail
+  dans la Livraison) ; `accent_fg` sur `accent` en thème sombre à 3,26:1, tenu au 3:1 de WCAG 1.4.11 avec
+  le raisonnement écrit dans le test ; le formatage localisé des nombres n'est appliqué que là où T-072 a
+  le droit d'écrire (`view_library.c` et `view_plan.c` sont tenus par d'autres agents, l'adoption est
+  mécanique). Captures : `captures/T-072-preferences.png`, `T-072-theme-clair.png`,
+  `T-072-aide-clavier.png`.
+
+## KPI — phase 7, T-072 (i7-8550U, 4 cœurs / 8 threads, Windows 11, machine au calme)
+| Métrique | Valeur | Cible | Date |
+|----------|--------|-------|------|
+| Taille exe release | **664 064 o** (636 928 o avant T-072), **+27 136 o** — **hors cible**, cf. écart 1 de la Livraison | ± 15 360 o | 2026-09-08 |
+| Imports | kernel32 + user32 (table d'import lue à la main ; advapi32 et dwmapi chargés dynamiquement) | ces deux-là | 2026-09-08 |
+| Tests | **261 cas, 8 090 checks**, 0 échec (ASan) — +12 cas, +1 242 checks | verts | 2026-09-08 |
+| Cibles `build.bat` | debug, release, test, check (audit i18n compris), analyze, bench **toutes vertes** | vertes | 2026-09-08 |
+| Contraste, thème clair | **toutes** les paires ≥ 4,5:1, minimum **4,75:1** (`danger` sur `control` et sur `panel`) | ≥ 4,5:1 | 2026-09-08 |
+| Contraste, thème sombre | textes ≥ 4,5:1, minimum **4,66:1** (`fg_muted` sur `row_hover`, contre 3,9:1 avant T-072) ; seule exception `accent_fg` sur `accent` à **3,26:1** (blanc sur `#0090FF`, ADR-011 D8), tenu au 3:1 de WCAG 1.4.11, cf. écart 2 | ≥ 4,5:1 | 2026-09-08 |
+| Audit i18n | **16 fichiers** de `src/app/` relus par `build.bat check`, **0** chaîne visible en dur | 0 | 2026-09-08 |
+| Chaînes | **319** identifiants `Str_*` (+85), 2 langues, pluriels à deux formes | ADR-011 D10 | 2026-09-08 |
+| Raccourcis | **26 lignes**, 0 collision de touche par contexte, 3 lecteurs pour 1 table | 0 doublon | 2026-09-08 |
+| CPU au repos, 12 s après 4 s de chauffe | **0 ms**, soit **0,000 %** d'un cœur (le résidu de thread pilote GL de P-005 ne se voit plus machine au calme) | 0 % | 2026-09-08 |
 
 ### Fait en phase 3
 - **2026-09-07, validation sur le vrai MZ-N505** (WinUSB via Zadig, P-001 clos) : énumération → `Ready`,

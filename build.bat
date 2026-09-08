@@ -120,6 +120,8 @@ REM  CRT et tas : interdits hors platform/ et third_party.c
 call :forbid "malloc(" "malloc hors platform/" src\core src\ui src\base
 call :forbid "free(" "free hors platform/" src\core src\ui src\base
 call :forbid "printf" "printf hors platform/" src\core src\ui src\base
+REM  i18n (T-072) : aucune chaine visible par l'utilisateur hors de strings.h.
+call :i18n_audit
 if not "%CHECK_FAIL%"=="0" exit /b 1
 echo   OK
 exit /b 0
@@ -131,6 +133,18 @@ set MESSAGE=%~2
 for %%D in (%3 %4 %5) do (
   if exist "%%~D" call :forbid_dir "%%~D"
 )
+goto :eof
+
+REM  :i18n_audit - tools\i18n_audit.py. Python n'est pas une dependance de build
+REM  (CONVENTIONS.md) : quand il manque, l'audit est saute et le check reste vert.
+:i18n_audit
+where python >nul 2>&1
+if errorlevel 1 (
+  echo   i18n: python introuvable, audit saute
+  goto :eof
+)
+python tools\i18n_audit.py
+if errorlevel 1 set CHECK_FAIL=1
 goto :eof
 
 :forbid_dir

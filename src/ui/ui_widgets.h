@@ -179,6 +179,10 @@ typedef struct UI_ContextMenu {
 // While a menu is open it owns the keyboard: the list and the fields below it
 // stop reading key events, so Enter does not fire twice.
 b32  ui_popup_active(void);
+// An app level modal (the preferences panel of T-072) raises the same flag: it
+// owns the keyboard exactly the way a menu does, and the lists below it must
+// stop reading keys for the same reason.
+void ui_popup_set_active(b32 active);
 void ui_context_menu_open(UI_ContextMenu *menu, V2 pos, u64 payload);
 b32  ui_context_menu_begin(UI_ContextMenu *menu);
 b32  ui_context_menu_item(UI_ContextMenu *menu, String8 label);

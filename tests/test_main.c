@@ -52,6 +52,8 @@
 #include "../src/ui/ui_core.h"
 #include "../src/ui/ui_widgets.h"
 #include "../src/ui/ui_debug_overlay.h"
+#include "../src/app/strings.h"
+#include "../src/app/app_shortcuts.h"
 #include "../src/app/prefs.h"
 #include "../src/app/plan_view.h"
 #include "../src/app/transfer.h"
@@ -123,6 +125,7 @@
 #include "../src/core/codecs/codec_ogg.c"
 #include "../src/core/codecs/codec_mf.c"
 #include "../src/app/prefs.c"
+#include "../src/app/app_shortcuts.c"
 #include "../src/app/plan_view.c"
 #include "../src/app/transfer.c"
 
@@ -190,6 +193,7 @@ static void test_check(b32 condition, const char *expression, i32 line) {
 #include "test_netmd_edit.c"
 #include "test_netmd_secure.c"
 #include "test_transfer.c"
+#include "test_settings.c"
 
 int main(void) {
     os_init();
@@ -218,6 +222,7 @@ int main(void) {
     test_netmd_edit_run_all();
     test_netmd_secure_run_all();
     test_transfer_run_all();
+    test_settings_run_all();
 
     test_report("%llu case(s), %llu check(s), %llu failure(s)\n", test_state.cases,
                 test_state.checks, test_state.failures);

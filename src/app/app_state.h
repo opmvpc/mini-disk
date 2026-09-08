@@ -23,6 +23,7 @@
 #include "../core/plan/plan_model.h"
 #include "../core/netmd/netmd_device.h"
 #include "../ui/ui_widgets.h"
+#include "app_shortcuts.h"
 #include "plan_view.h"
 #include "prefs.h"
 #include "strings.h"
@@ -235,6 +236,19 @@ b32  app_transfer_busy(void);
 b32  app_transfer_can_close(void);
 void app_transfer_close_blocked(void);
 void app_transfer_device_event(const NetmdEvent *event);
+
+// view_settings.c (T-072): the preferences panel, the keyboard help overlay and
+// the two things the rest of the app asks them.
+void app_settings_init(OsWindow window);  // language and theme, before frame 1
+void app_settings_ui(void);               // both overlays, on the popup layer
+void app_settings_open(void);
+void app_settings_close(void);
+void app_settings_toggle(void);
+void app_settings_keys_toggle(void);
+b32  app_settings_overlay_open(void);
+void app_settings_system_theme_changed(void);  // WM_SETTINGCHANGE
+AppShortcutContext app_settings_context(void);
+String8 app_shortcut_status_hint(Arena *arena);
 
 // view_library.c
 void app_library_panel(f32 width);

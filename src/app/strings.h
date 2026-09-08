@@ -10,6 +10,7 @@
 #define APP_STRINGS_H
 
 #include "../base/base.h"
+#include "../base/base_arena.h"
 #include "../base/base_string.h"
 
 typedef enum Str {
@@ -267,6 +268,93 @@ typedef enum Str {
     Str_TransferCache,
     Str_TransferNoEject,
     Str_TransferCloseBlocked,
+
+    // --- T-072: preferences, keyboard help, plurals ------------------------
+    Str_SettingsTitle,
+    Str_SettingsHint,
+    Str_SettingsClose,
+    Str_SettingsGeneral,
+    Str_SettingsLanguage,
+    Str_SettingsLangFr,
+    Str_SettingsLangEn,
+    Str_SettingsTheme,
+    Str_SettingsThemeDark,
+    Str_SettingsThemeLight,
+    Str_SettingsThemeSystem,
+    Str_SettingsAudio,
+    Str_SettingsDefaultMode,
+    Str_SettingsLoudness,
+    Str_SettingsLoudnessValue,
+    Str_SettingsLoudnessHint,
+    Str_SettingsTruePeak,
+    Str_SettingsTruePeakValue,
+    Str_SettingsTruePeakHint,
+    Str_SettingsTrim,
+    Str_SettingsFadeIn,
+    Str_SettingsFadeOut,
+    Str_SettingsGap,
+    Str_SettingsMs,
+    Str_SettingsCaches,
+    Str_SettingsCacheTranscode,
+    Str_SettingsCacheCovers,
+    Str_SettingsMb,
+    Str_SettingsCacheClear,
+    Str_SettingsCacheClearHint,
+    Str_SettingsCacheCleared,
+    Str_SettingsLibrary,
+    Str_SettingsFolders,
+    Str_SettingsFolderAdd,
+    Str_SettingsFolderRemove,
+    Str_SettingsFolderNone,
+    Str_SettingsFolderFull,
+    Str_SettingsThumbnails,
+    Str_SettingsOn,
+    Str_SettingsOff,
+    Str_KeysTitle,
+    Str_KeysHint,
+    Str_KeysContextGlobal,
+    Str_KeysContextLibrary,
+    Str_KeysContextPlan,
+    Str_KeysContextDisc,
+    Str_KeyEnter,
+    Str_KeyEscape,
+    Str_KeyDelete,
+    Str_KeySpace,
+    Str_KeyTab,
+    Str_KeyUp,
+    Str_KeyDown,
+    Str_ModCtrl,
+    Str_ModShift,
+    Str_ModAlt,
+    Str_ActionSettings,
+    Str_ActionKeyboardHelp,
+    Str_ActionSearch,
+    Str_ActionSelectAll,
+    Str_ActionAddToPlan,
+    Str_ActionRemove,
+    Str_ActionRename,
+    Str_ActionMoveUp,
+    Str_ActionMoveDown,
+    Str_ActionGroup,
+    Str_ActionUngroup,
+    Str_ActionModePicker,
+    Str_ActionModeSp,
+    Str_ActionModeMono,
+    Str_ActionModeLp2,
+    Str_ActionModeLp4,
+    Str_ActionUndo,
+    Str_ActionRedo,
+    Str_ActionSavePlan,
+    Str_ActionOpenPlan,
+    Str_ActionErase,
+    Str_ActionCancel,
+    Str_ActionDebugOverlay,
+    Str_TrackCountOne,
+    Str_TrackCountMany,
+    Str_FolderCountOne,
+    Str_FolderCountMany,
+    Str_StatusPlanOne,
+    Str_DeviceUnknownModel,
     Str_COUNT
 } Str;
 
@@ -527,6 +615,93 @@ static const char *app_strings_fr[Str_COUNT] = {
     "Cache : %u réutilisée(s), %u transcodée(s)",
     "Ne pas éjecter : gravure en cours",
     "Gravure en cours : impossible de quitter maintenant",
+
+    // --- T-072 -------------------------------------------------------------
+    "Préférences",
+    "Préférences (Ctrl+,)",
+    "Fermer",
+    "Général",
+    "Langue",
+    "Français",
+    "Anglais",
+    "Thème",
+    "Sombre",
+    "Clair",
+    "Système",
+    "Audio",
+    "Mode MD par défaut",
+    "Cible de loudness",
+    "%S LUFS",
+    "Le niveau visé par la normalisation, en LUFS intégrés",
+    "Plafond true-peak",
+    "%S dBTP",
+    "Le limiteur ne laisse rien passer au-dessus",
+    "Rogner les silences",
+    "Fondu d'entrée",
+    "Fondu de sortie",
+    "Blanc entre les pistes",
+    "%S ms",
+    "Caches",
+    "Cache de transcodage",
+    "Cache de pochettes",
+    "%S Mo",
+    "Vider",
+    "Supprime les fichiers du cache ; ils seront recalculés au besoin",
+    "Cache vidé",
+    "Bibliothèque",
+    "Dossiers surveillés",
+    "Ajouter un dossier…",
+    "Retirer",
+    "Aucun dossier surveillé",
+    "%S au maximum",
+    "Afficher les vignettes",
+    "Activé",
+    "Désactivé",
+    "Aide clavier",
+    "F1 : aide clavier",
+    "Général",
+    "Bibliothèque",
+    "Plan",
+    "Disque",
+    "Entrée",
+    "Échap",
+    "Suppr",
+    "Espace",
+    "Tab",
+    "Haut",
+    "Bas",
+    "Ctrl",
+    "Maj",
+    "Alt",
+    "Ouvrir les préférences",
+    "Afficher l'aide clavier",
+    "Rechercher dans la bibliothèque",
+    "Tout sélectionner",
+    "Ajouter la sélection au plan",
+    "Retirer du plan",
+    "Renommer",
+    "Monter la piste",
+    "Descendre la piste",
+    "Grouper la sélection",
+    "Dissoudre le groupe",
+    "Ouvrir le sélecteur de mode",
+    "Passer la sélection en SP",
+    "Passer la sélection en SP mono",
+    "Passer la sélection en LP2",
+    "Passer la sélection en LP4",
+    "Annuler",
+    "Rétablir",
+    "Enregistrer le plan",
+    "Ouvrir un plan",
+    "Effacer la sélection",
+    "Annuler l'édition, fermer le panneau",
+    "Superposition de diagnostic",
+    "%S piste",
+    "%S pistes",
+    "%S dossier",
+    "%S dossiers",
+    "%u piste · %S / %S",
+    "Baladeur NetMD",
 };
 
 static const char *app_strings_en[Str_COUNT] = {
@@ -776,6 +951,93 @@ static const char *app_strings_en[Str_COUNT] = {
     "Cache: %u reused, %u transcoded",
     "Do not eject: a burn is running",
     "A burn is running: the application cannot close yet",
+
+    // --- T-072 -------------------------------------------------------------
+    "Preferences",
+    "Preferences (Ctrl+,)",
+    "Close",
+    "General",
+    "Language",
+    "French",
+    "English",
+    "Theme",
+    "Dark",
+    "Light",
+    "System",
+    "Audio",
+    "Default MD mode",
+    "Loudness target",
+    "%S LUFS",
+    "The level the normalisation aims for, in integrated LUFS",
+    "True-peak ceiling",
+    "%S dBTP",
+    "The limiter lets nothing through above this",
+    "Trim silence",
+    "Fade in",
+    "Fade out",
+    "Gap between tracks",
+    "%S ms",
+    "Caches",
+    "Transcode cache",
+    "Cover cache",
+    "%S MB",
+    "Clear",
+    "Deletes the cached files; they are computed again when needed",
+    "Cache cleared",
+    "Library",
+    "Watched folders",
+    "Add a folder…",
+    "Remove",
+    "No folder watched",
+    "%S at most",
+    "Show thumbnails",
+    "On",
+    "Off",
+    "Keyboard shortcuts",
+    "F1: keyboard shortcuts",
+    "Global",
+    "Library",
+    "Plan",
+    "Disc",
+    "Enter",
+    "Esc",
+    "Del",
+    "Space",
+    "Tab",
+    "Up",
+    "Down",
+    "Ctrl",
+    "Shift",
+    "Alt",
+    "Open preferences",
+    "Show the keyboard shortcuts",
+    "Search the library",
+    "Select all",
+    "Add the selection to the plan",
+    "Remove from the plan",
+    "Rename",
+    "Move the track up",
+    "Move the track down",
+    "Group the selection",
+    "Dissolve the group",
+    "Open the mode picker",
+    "Switch the selection to SP",
+    "Switch the selection to SP mono",
+    "Switch the selection to LP2",
+    "Switch the selection to LP4",
+    "Undo",
+    "Redo",
+    "Save the plan",
+    "Open a plan",
+    "Erase the selection",
+    "Cancel the edit, close the panel",
+    "Diagnostic overlay",
+    "%S track",
+    "%S tracks",
+    "%S folder",
+    "%S folders",
+    "%u track · %S / %S",
+    "NetMD Walkman",
 };
 
 global StrLang app_lang = APP_LANG_DEFAULT;
@@ -787,5 +1049,85 @@ md_inline const char *app_str_c(Str id) {
 }
 
 md_inline String8 app_str(Str id) { return str8_cstr(app_str_c(id)); }
+
+// --- plurals (T-072) --------------------------------------------------------
+// Two forms and not a "(s)": s12 asks for sentences a human wrote. French puts
+// 0 and 1 in the singular, English only 1 - which is the whole difference
+// between the two languages we ship, and the reason this is a function and not
+// a `n > 1` written at every call site.
+md_inline Str app_plural(Str one, Str many, u64 n) {
+    if (app_lang == StrLang_Fr) { return (n < 2) ? one : many; }
+    return (n == 1) ? one : many;
+}
+md_inline const char *app_plural_c(Str one, Str many, u64 n) {
+    return app_str_c(app_plural(one, many, n));
+}
+
+// --- numbers, durations and dates by language -------------------------------
+// s12: French groups thousands with a narrow no-break space (U+202F) and marks
+// decimals with a comma; English groups with a comma and marks with a dot. The
+// separator is inserted here, once, so no view ever writes one.
+#define APP_THIN_SPACE "\xE2\x80\xAF"
+
+static String8 app_num_u64(Arena *arena, u64 value) {
+    u8 digits[20];
+    u32 count = 0;
+    do {
+        digits[count] = (u8)('0' + (value % 10));
+        value /= 10;
+        count += 1;
+    } while (value != 0 && count < 20);
+    String8 separator = (app_lang == StrLang_Fr) ? str8_lit(APP_THIN_SPACE) : str8_lit(",");
+    // At most 6 groups of 3 in a u64, so 20 digits plus 6 separators of 3 bytes.
+    u8 *out = push_array(arena, u8, 20 + 6 * 3);
+    u64 size = 0;
+    for (u32 i = 0; i < count; i += 1) {
+        u32 remaining = count - i;
+        if (i != 0 && remaining % 3 == 0) {
+            for (u64 j = 0; j < separator.size; j += 1) { out[size + j] = separator.str[j]; }
+            size += separator.size;
+        }
+        out[size] = digits[remaining - 1];
+        size += 1;
+    }
+    return str8(out, size);
+}
+
+// A signed value in tenths, the shape every dB in the preferences has: "-14,0"
+// in French and "-14.0" in English.
+static String8 app_num_tenths(Arena *arena, i32 tenths) {
+    b32 negative = (tenths < 0);
+    u32 magnitude = (u32)(negative ? -tenths : tenths);
+    String8 whole = app_num_u64(arena, magnitude / 10);
+    const char *point = (app_lang == StrLang_Fr) ? "," : ".";
+    return str8f(arena, "%s%S%s%u", negative ? "-" : "", whole, point, magnitude % 10);
+}
+
+// m:ss below an hour, h:mm:ss above it. Identical in both languages - a
+// duration is not a number - but it lives here so a third language can differ.
+static String8 app_duration_locale(Arena *arena, u32 seconds) {
+    u32 hours = seconds / 3600;
+    if (hours != 0) {
+        return str8f(arena, "%u:%02u:%02u", hours, (seconds / 60) % 60, seconds % 60);
+    }
+    return str8f(arena, "%u:%02u", seconds / 60, seconds % 60);
+}
+
+// The log and anything else a human reads a date off: "08/09/2026" in French,
+// "2026-09-08" in English. The file *names* keep the sortable form either way.
+static String8 app_date_locale(Arena *arena, u32 year, u32 month, u32 day) {
+    if (app_lang == StrLang_Fr) { return str8f(arena, "%02u/%02u/%u", day, month, year); }
+    return str8f(arena, "%u-%02u-%02u", year, month, day);
+}
+
+static String8 app_time_locale(Arena *arena, u32 hour, u32 minute, u32 second) {
+    return str8f(arena, "%02u:%02u:%02u", hour, minute, second);
+}
+
+// "%S pistes" with the count already grouped: the two halves of every counter
+// the UI shows, in one call.
+static String8 app_count(Arena *arena, Str one, Str many, u64 n) {
+    return str8f(arena, app_plural_c(one, many, n), app_num_u64(arena, n));
+}
 
 #endif // APP_STRINGS_H

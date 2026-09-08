@@ -26,6 +26,18 @@ static void test_prefs_fill(Prefs *prefs) {
     prefs->window_maximized = 1;
     prefs_add_folder(prefs, str8_lit("C:\\music"));
     prefs_add_folder(prefs, str8_lit("D:\\archives\\flac"));
+    // T-072: the eleven keys the preferences panel writes.
+    prefs->lang = 1;
+    prefs->theme = 1;
+    prefs->default_mode = 2;
+    prefs->loudness_lufs = -165;
+    prefs->true_peak_dbtp = -20;
+    prefs->trim_silence = 1;
+    prefs->fade_in_ms = 250;
+    prefs->fade_out_ms = 400;
+    prefs->gap_ms = 2000;
+    prefs->cache_transcode_mb = 4096;
+    prefs->cache_covers_mb = 512;
 }
 
 static b32 test_prefs_equal(const Prefs *a, const Prefs *b) {
@@ -41,6 +53,15 @@ static b32 test_prefs_equal(const Prefs *a, const Prefs *b) {
     if (a->window_width != b->window_width || a->window_height != b->window_height) { return 0; }
     if ((a->window_placed != 0) != (b->window_placed != 0)) { return 0; }
     if ((a->window_maximized != 0) != (b->window_maximized != 0)) { return 0; }
+    if (a->lang != b->lang || a->theme != b->theme) { return 0; }
+    if (a->default_mode != b->default_mode) { return 0; }
+    if (a->loudness_lufs != b->loudness_lufs) { return 0; }
+    if (a->true_peak_dbtp != b->true_peak_dbtp) { return 0; }
+    if ((a->trim_silence != 0) != (b->trim_silence != 0)) { return 0; }
+    if (a->fade_in_ms != b->fade_in_ms || a->fade_out_ms != b->fade_out_ms) { return 0; }
+    if (a->gap_ms != b->gap_ms) { return 0; }
+    if (a->cache_transcode_mb != b->cache_transcode_mb) { return 0; }
+    if (a->cache_covers_mb != b->cache_covers_mb) { return 0; }
     if (a->folder_count != b->folder_count) { return 0; }
     for (u32 i = 0; i < a->folder_count; i += 1) {
         if (!str8_eq(prefs_folder(a, i), prefs_folder(b, i))) { return 0; }

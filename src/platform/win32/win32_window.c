@@ -9,6 +9,10 @@
 // dwmapi and shell32 stay out of the import table: they are optional polish and
 // loading them by hand keeps the exe's imports down to kernel32 + user32.
 typedef HRESULT(WINAPI *Win32DwmSetWindowAttribute)(HWND, DWORD, const void *, DWORD);
+// advapi32 too: one registry value (the system theme) is not worth an import
+// that shows up in the table of every process that loads us (T-072).
+typedef LSTATUS(WINAPI *Win32RegGetValueW)(HKEY, LPCWSTR, LPCWSTR, DWORD, DWORD *, void *,
+                                           DWORD *);
 typedef void(WINAPI *Win32DragAcceptFiles)(HWND, BOOL);
 typedef UINT(WINAPI *Win32DragQueryFileW)(HANDLE, UINT, WCHAR *, UINT);
 typedef void(WINAPI *Win32DragFinish)(HANDLE);
@@ -101,6 +105,8 @@ typedef struct Win32WindowState {
     OsCursor cursor;
 
     HMODULE dwmapi;
+    HMODULE advapi32;
+    Win32RegGetValueW RegGetValueW_;
     HMODULE shell32;
     HMODULE ole32;
     Win32OleInitialize OleInitialize_;
@@ -717,6 +723,12 @@ static LRESULT CALLBACK win32_window_proc(HWND window, UINT message, WPARAM wpar
 
         case WM_SETTINGCHANGE: {
             SystemParametersInfoW(SPI_GETWHEELSCROLLLINES, 0, &state->wheel_scroll_lines, 0);
+            // "ImmersiveColorSet" is what the theme switch sends; we do not read
+            // lparam, because the locale and the accent colour matter too and
+            // re-reading one registry value costs nothing (T-072).
+            OsEvent event = win32_event_make(OsEvent_SettingChange);
+            win32_event_push(&event);
+            os_request_redraw();
         } break;
 
         default: break;
@@ -731,6 +743,11 @@ static void win32_window_load_optional_modules(Win32WindowState *state) {
     if (state->dwmapi) {
         state->DwmSetWindowAttribute_ = (Win32DwmSetWindowAttribute)GetProcAddress(
                 state->dwmapi, "DwmSetWindowAttribute");
+    }
+    state->advapi32 = LoadLibraryW(L"advapi32.dll");
+    if (state->advapi32) {
+        state->RegGetValueW_ =
+                (Win32RegGetValueW)GetProcAddress(state->advapi32, "RegGetValueW");
     }
     state->ole32 = LoadLibraryW(L"ole32.dll");
     if (state->ole32) {
@@ -795,9 +812,9 @@ static void win32_window_register_drop_target(Win32WindowState *state, HWND wind
 
 // Dark title bar, rounded corners, matching border. Every failure is ignored:
 // on an older Windows we simply get the light title bar.
-static void win32_window_apply_dark_frame(Win32WindowState *state, HWND window) {
+static void win32_window_apply_frame(Win32WindowState *state, HWND window, b32 is_dark) {
     if (!state->DwmSetWindowAttribute_) { return; }
-    BOOL dark = TRUE;
+    BOOL dark = is_dark ? TRUE : FALSE;
     if (state->DwmSetWindowAttribute_(window, WIN32_DWMWA_USE_IMMERSIVE_DARK_MODE, &dark,
                                       sizeof(dark)) != S_OK) {
         state->DwmSetWindowAttribute_(window, WIN32_DWMWA_USE_IMMERSIVE_DARK_MODE_OLD, &dark,
@@ -806,7 +823,8 @@ static void win32_window_apply_dark_frame(Win32WindowState *state, HWND window) 
     DWORD corner = WIN32_DWMWCP_ROUND;
     state->DwmSetWindowAttribute_(window, WIN32_DWMWA_WINDOW_CORNER_PREFERENCE, &corner,
                                   sizeof(corner));
-    COLORREF border = 0x002B2B2B;  // 0x00BBGGRR
+    // The border matches --border-subtle of the theme in force, 0x00BBGGRR.
+    COLORREF border = is_dark ? (COLORREF)0x002B2B2B : (COLORREF)0x00E7E4E4;
     state->DwmSetWindowAttribute_(window, WIN32_DWMWA_BORDER_COLOR, &border, sizeof(border));
 }
 
@@ -878,7 +896,7 @@ OsWindow os_window_create(String8 title, u32 width, u32 height) {
     state->window = window;
 
     state->dpi_scale = (f32)GetDpiForWindow(window) / 96.0f;
-    win32_window_apply_dark_frame(state, window);
+    win32_window_apply_frame(state, window, os_system_theme() == OsSystemTheme_Dark);
     win32_window_register_drop_target(state, window);
     win32_window_register_device_notification(state, window);
 
@@ -968,6 +986,7 @@ void os_window_destroy(OsWindow window) {
         state->RevokeDragDrop_(state->window);
     }
     if (state->dwmapi) { FreeLibrary(state->dwmapi); }
+    if (state->advapi32) { FreeLibrary(state->advapi32); }
     if (state->ole32) { FreeLibrary(state->ole32); }
     if (state->shell32) { FreeLibrary(state->shell32); }
     arena_release(state->arena);
@@ -990,6 +1009,27 @@ void os_window_set_title(OsWindow window, String8 title) {
     // NOLINTNEXTLINE(performance-no-int-to-ptr)
     SetWindowTextW((HWND)window.v, (LPCWSTR)title16.str);
     scratch_end(scratch);
+}
+
+// HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize. The value
+// is absent on Windows 8 and on a fresh profile: dark, our default since T-005.
+OsSystemTheme os_system_theme(void) {
+    Win32WindowState *state = &win32_window_state;
+    if (!state->RegGetValueW_) { return OsSystemTheme_Dark; }
+    DWORD value = 0;
+    DWORD size = sizeof(value);
+    DWORD type = 0;
+    LSTATUS status = state->RegGetValueW_(
+            HKEY_CURRENT_USER,
+            L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+            L"AppsUseLightTheme", RRF_RT_REG_DWORD, &type, &value, &size);
+    if (status != ERROR_SUCCESS) { return OsSystemTheme_Dark; }
+    return value ? OsSystemTheme_Light : OsSystemTheme_Dark;
+}
+
+void os_window_set_dark_frame(OsWindow window, b32 dark) {
+    // NOLINTNEXTLINE(performance-no-int-to-ptr)
+    win32_window_apply_frame(&win32_window_state, (HWND)window.v, dark);
 }
 
 void os_events_pump(b32 blocking, u64 timeout_us) {

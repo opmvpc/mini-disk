@@ -4,6 +4,7 @@
 #include "ui_theme.h"
 
 global UI_Theme ui_theme_current;
+global UI_ThemeChoice ui_theme_choice_current = UI_ThemeChoice_Dark;
 
 static void ui_theme_metrics(UI_Theme *theme) {
     theme->space[UI_Space_2] = 2.0f;
@@ -49,7 +50,9 @@ void ui_theme_dark(UI_Theme *out) {
 
     theme.fg_primary = r_rgb(0xEDEEF0);
     theme.fg_secondary = r_rgb(0xB0B4BA);
-    theme.fg_muted = r_rgb(0x777B84);
+    // s10.9 wants 4,5:1 on every surface; slate 10 (#777B84) only reached 3,9:1
+    // on #1F1F1F, so the muted step moved up two rungs (T-072).
+    theme.fg_muted = r_rgb(0x9096A0);
     theme.fg_disabled = r_rgb(0x696E77);
 
     theme.accent = r_rgb(0x0090FF);
@@ -75,8 +78,11 @@ void ui_theme_dark(UI_Theme *out) {
     mem_copy(out, &theme, sizeof(theme));
 }
 
-// Sketch of research/02 s10.4: enough to prove nothing in the widgets reads a
-// hardcoded colour. The full light theme is phase 7.
+// research/02 s10.4 and 02b, with every background/text pair measured: the
+// greys of the sketch sat between 3,4:1 and 4,4:1 on our panels, and the mode
+// colours between 4,3:1 and 4,5:1, so both scales moved one step down. The
+// hierarchy is tighter than in the dark theme; that is what 4,5:1 on a white
+// surface costs, and test_settings.c is what keeps it true (T-072).
 void ui_theme_light(UI_Theme *out) {
     UI_Theme theme;
     StructZero(&theme);
@@ -97,32 +103,47 @@ void ui_theme_light(UI_Theme *out) {
     theme.border_hover = r_rgb(0x8B8D94);
 
     theme.fg_primary = r_rgb(0x1C1C1E);
-    theme.fg_secondary = r_rgb(0x5A5C63);
-    theme.fg_muted = r_rgb(0x8B8D94);
-    theme.fg_disabled = r_rgb(0xA8AAB0);
+    theme.fg_secondary = r_rgb(0x494B52);
+    theme.fg_muted = r_rgb(0x5F6167);
+    theme.fg_disabled = r_rgb(0xA8AAB0);  // disabled text is exempt (WCAG 1.4.3)
 
     theme.accent = r_rgb(0x0069C2);
     theme.accent_hover = r_rgb(0x0078D4);
     theme.accent_fg = r_rgb(0xFFFFFF);
-    theme.success = r_rgb(0x1A7F37);
-    theme.warning = r_rgb(0x9A6700);
+    theme.success = r_rgb(0x14722F);
+    theme.warning = r_rgb(0x8A5C00);
     theme.danger = r_rgb(0xCF222E);
 
     theme.mode[UI_Mode_SP] = r_rgb(0x0069C2);
-    theme.mode[UI_Mode_Mono] = r_rgb(0x8250DF);
-    theme.mode[UI_Mode_LP2] = r_rgb(0x1A7F37);
-    theme.mode[UI_Mode_LP4] = r_rgb(0x9A6700);
+    theme.mode[UI_Mode_Mono] = r_rgb(0x7A3FD4);
+    theme.mode[UI_Mode_LP2] = r_rgb(0x14722F);
+    theme.mode[UI_Mode_LP4] = r_rgb(0x8A5C00);
 
     theme.focus_ring = r_rgb(0x0069C2);
     theme.focus_halo = r_rgba(0x00, 0x69, 0xC2, 60);
-    theme.shadow = r_rgba(0, 0, 0, 60);
-    theme.selection_bg = r_rgba(0x00, 0x69, 0xC2, 70);
-    theme.scrollbar_thumb = r_rgba(0, 0, 0, 45);
-    theme.scrollbar_thumb_hover = r_rgba(0, 0, 0, 90);
+    // A light surface takes a lighter shadow: the dark one at 45 % reads as a
+    // smear, s10.5 asks for a floating surface and not for a hole.
+    theme.shadow = r_rgba(0, 0, 0, 46);
+    theme.selection_bg = r_rgba(0x00, 0x69, 0xC2, 60);
+    theme.scrollbar_thumb = r_rgba(0, 0, 0, 60);
+    theme.scrollbar_thumb_hover = r_rgba(0, 0, 0, 105);
 
     ui_theme_metrics(&theme);
     mem_copy(out, &theme, sizeof(theme));
 }
+
+b32 ui_theme_apply(UI_ThemeChoice choice) {
+    Assert(choice < UI_ThemeChoice_COUNT);
+    b32 dark = (choice == UI_ThemeChoice_Dark);
+    if (choice == UI_ThemeChoice_System) { dark = (os_system_theme() == OsSystemTheme_Dark); }
+    UI_Theme theme;
+    if (dark) { ui_theme_dark(&theme); } else { ui_theme_light(&theme); }
+    ui_theme_set(&theme);
+    ui_theme_choice_current = choice;
+    return dark;
+}
+
+UI_ThemeChoice ui_theme_choice(void) { return ui_theme_choice_current; }
 
 void ui_theme_set(const UI_Theme *theme) {
     mem_copy(&ui_theme_current, theme, sizeof(ui_theme_current));
