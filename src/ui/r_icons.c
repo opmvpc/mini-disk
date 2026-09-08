@@ -175,11 +175,17 @@ u32 r_hatch_tiles(Rect area, V2 origin, R_HatchTile *out, u32 max) {
     // part of the same pattern instead of restarting it.
     f32 first_x = origin.x + floor_f32((area.min.x - origin.x) / tile) * tile;
     f32 first_y = origin.y + floor_f32((area.min.y - origin.y) / tile) * tile;
+    // Integer counters, float positions: clang-tidy (cert-flp30-c) refuses a
+    // float induction variable, and it is right, the tile count is an integer.
+    u32 rows = (u32)ceil_f32((area.max.y - first_y) / tile);
+    u32 cols = (u32)ceil_f32((area.max.x - first_x) / tile);
     u32 count = 0;
-    for (f32 ty = first_y; ty < area.max.y && count < max; ty += tile) {
+    for (u32 row = 0; row < rows && count < max; row += 1) {
+        f32 ty = first_y + (f32)row * tile;
         f32 y0 = max_f32(ty, area.min.y);
         f32 y1 = min_f32(ty + tile, area.max.y);
-        for (f32 tx = first_x; tx < area.max.x && count < max; tx += tile) {
+        for (u32 col = 0; col < cols && count < max; col += 1) {
+            f32 tx = first_x + (f32)col * tile;
             f32 x0 = max_f32(tx, area.min.x);
             f32 x1 = min_f32(tx + tile, area.max.x);
             R_HatchTile *entry = &out[count];
