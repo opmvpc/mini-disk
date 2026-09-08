@@ -67,6 +67,7 @@ T-053 bit allocation · T-054 psy + gain control · T-055 LP4 joint stereo · T-
 | [T-072](T-072-preferences-theme-clair-i18n-raccourcis.md) | Vue Préférences, thème clair réel (contrastes testés), i18n complète avec audit, table de raccourcis + aide clavier | doing |
 | [T-073](T-073-robustesse-base-et-io.md) | Robustesse : P-010 (arènes/banc/pool), P-009 (sauvegarde hors frame), journal d'erreurs, P-005 re-mesuré, fermeture propre | doing |
 | T-074 | Barre de titre custom (ex T-065) et IDropTarget vérifié (ex T-066) — après T-072 | todo |
+| [T-075](T-075-polish-visuel-espacements.md) | Polish visuel : rangées de boutons (hauteur, gaps, repli), panneaux rognés, textes tronqués, bulle — après T-071 | todo |
 
 ## Phase 8 — Portabilité
 T-070 `platform/linux` · T-071 `platform/macos`.
