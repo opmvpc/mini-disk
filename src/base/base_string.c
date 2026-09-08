@@ -402,3 +402,11 @@ String8 str8f(Arena *arena, const char *fmt, ...) {
     va_end(args);
     return result;
 }
+
+String8 str8f_buf(u8 *buffer, u64 capacity, const char *fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+    u64 size = str8_format_buffer(buffer, capacity, fmt, args);
+    va_end(args);
+    return str8(buffer, Min(size, capacity));
+}

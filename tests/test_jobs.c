@@ -132,6 +132,58 @@ TEST(jobs_pool_lifetime) {
     jobs_shutdown();
 }
 
+// T-073 / P-010: jobs_init on a pool that is still alive. It used to be an
+// Assert in debug and nothing at all in release: the cells were reset under the
+// workers of the previous generation, which went on popping from the ring the
+// new pool was rebuilding - the second hypothesis for a parallel sum that comes
+// back short. It is an explicit jobs_shutdown now, every worker joined, and
+// this is the case that proves it.
+TEST(jobs_pool_reinit) {
+    u64 count = 200000;
+    u32 *values = push_array(arena, u32, count);
+    u64 sequential = 0;
+    for (u64 i = 0; i < count; i += 1) {
+        values[i] = (u32)(hash64_mix(i + 1) & 0xFFFFu);
+        sequential += values[i];
+    }
+
+    // Three generations, each started on top of the previous one without a
+    // shutdown, each with a different worker count so a survivor would show.
+    jobs_init(2);
+    EXPECT(jobs_worker_count() == 2);
+    jobs_init(3);
+    EXPECT(jobs_worker_count() == 3);
+    jobs_init(0);
+    EXPECT(jobs_pending() == 0);
+    EXPECT(jobs_busy() == 0);
+
+    TestJobsSum sum;
+    sum.values = values;
+    sum.total = 0;
+    JobCounter counter;
+    counter.pending = 0;
+    jobs_dispatch(&counter, test_jobs_sum_range, &sum, count);
+    jobs_wait(&counter);
+    EXPECT((u64)sum.total == sequential);
+    EXPECT(counter.pending == 0);
+    EXPECT(jobs_busy() == 0);
+
+    // The same chain the other way round: init/shutdown three times, then the
+    // verified parallel-for on the fourth pool.
+    for (u32 round = 0; round < 3; round += 1) {
+        jobs_init(0);
+        jobs_shutdown();
+    }
+    jobs_init(0);
+    sum.total = 0;
+    counter.pending = 0;
+    jobs_dispatch(&counter, test_jobs_sum_range, &sum, count);
+    jobs_wait(&counter);
+    EXPECT((u64)sum.total == sequential);
+    jobs_shutdown();
+    EXPECT(jobs_worker_count() == 0);
+}
+
 // --- platform primitives ---------------------------------------------------
 static void test_jobs_thread_body(void *data) {
     TestJobsCount *count = (TestJobsCount *)data;
@@ -176,5 +228,6 @@ static void test_jobs_run_all(void) {
     RUN(jobs_parallel_for);
     RUN(jobs_nested);
     RUN(jobs_pool_lifetime);
+    RUN(jobs_pool_reinit);
     RUN(jobs_platform_threads);
 }

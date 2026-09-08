@@ -63,3 +63,51 @@ le budget de layout de 1 000 µs (1 045 µs mesurés). Machine au repos, la mêm
 en bout. Les assertions de perf du bench sont donc des assertions **de machine au repos** ; si le
 bench doit rester une cible de CI, il faudra soit les desserrer, soit ne les armer que quand la
 charge système est basse.
+
+## Résolu en T-073 (2026-09-08)
+
+Les trois pistes du « prochain pas » ont été suivies dans l'ordre, et la première a suffi à trancher.
+
+**1. L'assertion parle.** `base_arena.c` publie désormais, avant de mourir, la taille demandée,
+`GetLastError()`, le réservé, l'engagé et la position de l'arène — formatés dans un tampon de pile par
+`str8f_buf`, sans toucher l'allocateur qui vient de casser, avec un garde de récursion (`os_debug_print`
+pousse lui-même dans une arène scratch). `arena_alloc` fait de même pour la réserve.
+
+**2. C'était bien la mémoire.** `bench_main.c` prenait **une** arène de `GB(1)` et engageait dedans du
+début à la fin sans jamais rendre une page. Elle est remplacée par **sept groupes**, chacun avec son
+arène, relâchée avant le groupe suivant, et chaque fin de groupe imprime ce qu'il avait engagé :
+32 / 0 / 64 / 4 / 0 / 16 / 16 Mo (les deux groupes à 0 travaillent dans leurs propres arènes — le
+`frame_arena` du renderer, les quatre arènes de la bibliothèque de 100 000 pistes — et ne poussent
+quasiment rien dans celle du groupe). Le pic n'est plus la somme des bancs mais le plus gros groupe :
+**64 Mo au lieu du gigaoctet réservé et des ~200 Mo engagés en fin de série**.
+
+**3. Le pool aussi.** `jobs_init` sur un pool encore vivant faisait un `Assert` en debug et *rien du tout*
+en release : les cellules du ring étaient réinitialisées sous les workers de la génération précédente.
+C'est maintenant un `jobs_shutdown` explicite avec jointure de chaque worker, et `test_jobs.c` couvre le
+cas dans les deux sens (trois `jobs_init` empilés sans arrêt, puis trois `jobs_init`/`jobs_shutdown`,
+chaque fois suivis d'un parallel-for vérifié sur 200 000 éléments).
+
+**4. Ce que T-022 avait vu.** Les arrêts sur `ns_per_job < 1000` ou sur le budget de layout n'étaient pas
+de la mémoire : ce sont des **assertions de machine au repos** qui mesurent le voisin. Le banc commence
+maintenant par une sonde qui mesure la machine — dispersion de neuf passes mono-thread, puis le même
+noyau une fois par thread matériel — et **n'arme les budgets de temps que si la machine est à elle**.
+Un budget dépassé sur machine chargée est imprimé (`BUDGET ... (machine chargee, non bloquant)`) et
+n'arrête plus la série. Les assertions de correction, elles, n'ont pas bougé.
+
+Piège de calibration, noté parce qu'il a coûté deux passes : une première version comparait le passage
+parallèle à *une* mesure mono-thread. Sous charge, cette mesure unique tombe parfois dans une fenêtre
+lente, le rapport paraît sain, la machine passe pour libre — et le budget armé tue la série pour les
+raisons du voisin. C'est le **minimum** de neuf passes qui sert de référence, et la **dispersion** qui
+décide, parce que ce qui abîme un banc mono-thread est un voisin sur le même cœur, pas un ralentissement
+uniforme.
+
+Preuve : `build.bat bench` **cinq fois de suite, cinq fois code 0**, pendant qu'une boucle de
+`build.bat release` compilait sans arrêt l'arbre de base à côté, et pendant que **deux autres agents**
+travaillaient dans leurs propres worktrees. La sonde a classé la machine « chargée » aux cinq passes
+(rapport parallèle 2,47 à 5,35 ; dispersion 1,59 à 3,10), ce qui est exactement la situation dans
+laquelle la série s'arrêtait avant. Chiffres détaillés dans la Livraison de T-073.
+
+Un second `bench.exe` avait été envisagé comme charge, essayé, puis écarté pour une raison bête et
+dirimante : le processus tient `build\bench.exe` ouvert, donc le `link` de la passe suivante échoue avec
+`LNK1104` avant même d'avoir lancé un banc. La charge « compilation » est de toute façon la plus proche
+de ce qui a produit le symptôme d'origine.

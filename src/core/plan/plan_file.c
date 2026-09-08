@@ -16,8 +16,7 @@ static void plan_storage_reset(Plan *plan) {
 
 // --- binary: writing ----------------------------------------------------------
 
-PlanFileStatus plan_save(const Plan *plan, String8 path) {
-    ArenaTemp scratch = scratch_begin(0, 0);
+String8 plan_serialize(Arena *arena, const Plan *plan) {
     u64 entry_total = plan_entry_count(plan);
 
     PlanFileHeader header;
@@ -37,7 +36,7 @@ PlanFileStatus plan_save(const Plan *plan, String8 path) {
     header.created_us = os_time_now_us();
     header.file_size = plan_file_align(header.entries_offset + header.entries_size);
 
-    u8 *buffer = push_array_zero(scratch.arena, u8, header.file_size);
+    u8 *buffer = push_array_zero(arena, u8, header.file_size);
     mem_copy(buffer, &header, sizeof(header));
     mem_copy(buffer + header.strings_offset, plan->strings.base, header.strings_size);
 
@@ -71,14 +70,31 @@ PlanFileStatus plan_save(const Plan *plan, String8 path) {
         written += disc->entry_count;
     }
     AssertAlways(written == entry_total);
+    return str8(buffer, header.file_size);
+}
 
+// The atomic write of ADR-010 s9.3: the bytes land in a .tmp, they are on the
+// platter before the rename that publishes them, and a failure leaves the old
+// file exactly as it was. This is the part that costs 7 ms, and the part that
+// runs on a job.
+static PlanFileStatus plan_write_atomic(String8 path, String8 bytes) {
+    ArenaTemp scratch = scratch_begin(0, 0);
     String8 tmp = str8_cat(scratch.arena, path, str8_lit(".tmp"));
     PlanFileStatus status = PlanFile_Ok;
-    if (!os_file_write_all(tmp, str8(buffer, header.file_size)) ||
-        !os_file_move_replace(tmp, path)) {
+    if (!os_file_write_all(tmp, bytes) || !os_file_move_replace(tmp, path)) {
         os_file_delete(tmp);
         status = PlanFile_WriteFailed;
     }
+    scratch_end(scratch);
+    return status;
+}
+
+// The synchronous save: the import/export paths, the tests and the bench. The
+// application goes through the saver instead (plan_save_async).
+PlanFileStatus plan_save(const Plan *plan, String8 path) {
+    ArenaTemp scratch = scratch_begin(0, 0);
+    String8 bytes = plan_serialize(scratch.arena, plan);
+    PlanFileStatus status = plan_write_atomic(path, bytes);
     scratch_end(scratch);
     return status;
 }
@@ -500,11 +516,57 @@ String8 plan_autosave_path(Arena *arena, String8 base_dir) {
     return path;
 }
 
-b32 plan_autosave_tick(Plan *plan, String8 path, u64 now_us) {
+// --- the save job (P-009) -------------------------------------------------
+
+void plan_saver_init(PlanSaver *saver, Arena *arena) {
+    StructZero(saver);
+    saver->arena = arena;
+}
+
+static void plan_save_job(void *data, u64 begin, u64 end) {
+    Unused(begin);
+    Unused(end);
+    PlanSaver *saver = (PlanSaver *)data;
+    u64 start_us = os_time_now_us();
+    PlanFileStatus status = plan_write_atomic(saver->path, saver->bytes);
+    saver->disk_us = os_time_now_us() - start_us;
+    saver->saves += 1;
+    saver->status = (u32)status;
+    // Last, and interlocked: everything above is visible to whoever sees the
+    // new state, which is what lets the view read the verdict without a lock.
+    os_atomic_store_u32(&saver->state,
+                        (status == PlanFile_Ok) ? PlanSave_Done : PlanSave_Failed);
+    // One redraw so the indicator in the header stops saying "en cours". The
+    // loop is asleep by now: this is the only wake-up a save costs.
+    os_request_redraw();
+}
+
+b32 plan_save_async(PlanSaver *saver, const Plan *plan, String8 path) {
+    if (plan_save_state(saver) == PlanSave_Running) { return 0; }
+    u64 start_us = os_time_now_us();
+    // Safe only because nothing is in flight: the arena holds the snapshot the
+    // previous job was reading.
+    arena_clear(saver->arena);
+    saver->path = str8_copy(saver->arena, path);
+    saver->bytes = plan_serialize(saver->arena, plan);
+    os_atomic_store_u32(&saver->state, PlanSave_Running);
+    saver->counter.pending = 0;
+    jobs_push(&saver->counter, plan_save_job, saver);
+    saver->frame_us = os_time_now_us() - start_us;
+    return 1;
+}
+
+void plan_save_wait(PlanSaver *saver) {
+    if (plan_save_state(saver) != PlanSave_Running) { return; }
+    jobs_wait(&saver->counter);
+}
+
+b32 plan_autosave_tick(Plan *plan, PlanSaver *saver, String8 path, u64 now_us) {
     if (!plan->dirty || now_us - plan->dirty_us < PLAN_AUTOSAVE_US) { return 0; }
-    // Best effort, like the library cache: a failed autosave costs the recovery
-    // of the last five seconds and nothing else, and must never stall a frame.
-    if (plan_save(plan, path) != PlanFile_Ok) { return 0; }
+    // Best effort, like the library cache: an autosave that cannot start
+    // because the previous one is still on the disk comes back in five seconds,
+    // and either way the frame does not wait for a platter.
+    if (!plan_save_async(saver, plan, path)) { return 0; }
     plan->dirty = 0;
     plan->dirty_us = now_us;
     return 1;

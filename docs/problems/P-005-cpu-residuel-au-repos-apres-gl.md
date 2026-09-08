@@ -39,3 +39,31 @@ message. Si (a) : documenter comme coût pilote, tester sur la GeForce 930MX.
 ## Leçon
 Mesurer avec `Process.TotalProcessorTime` (delta exact) plutôt qu'avec `Get-Counter` en échantillons
 d'une seconde, qui produit des pics trompeurs.
+
+## Re-mesure en T-073 (2026-09-08) — protocole STATUS, version actuelle
+
+Le ticket demandait la re-mesure parce que le nombre de threads et de timers a changé depuis la phase 1 :
+le pool de jobs, le thread device, et en T-073 le job de vidage du journal. Même protocole que T-032
+(`Process.TotalProcessorTime` en delta exact, 12 s de repos après une chauffe, plus le delta par thread
+via `Process.Threads[].TotalProcessorTime`) :
+
+| Mesure | T-030 | T-032 | **T-073** |
+|--------|-------|-------|-----------|
+| CPU sur 12 s de repos | 46,9 à 78,1 ms | 31,25 ms | **31,25 ms** |
+| Part d'un cœur | 0,4 à 0,65 % | 0,26 % | **0,26 %** |
+| Threads dans le process | 14 | — | **18** |
+| Threads qui consomment | 1 (le dernier créé) | 1 | **1 (le n° 17, le dernier créé)** |
+
+Verdict inchangé, et c'est le résultat intéressant : **rien de ce qui a été ajouté depuis la phase 1 ne
+réveille quoi que ce soit au repos**. Les 31,25 ms sont, à la milliseconde près, ceux de T-032, et ils
+sont intégralement sur le dernier thread créé du process — un thread du pilote Intel, créé à
+`os_gl_init`, après tous les nôtres. Le thread principal est à 0 ms, les workers du pool à 0 ms, le
+thread device à 0 ms.
+
+Le journal d'erreurs de T-073 a été conçu pour que cela reste vrai : **aucun thread de timer** derrière
+lui. `os_log_tick` est appelé par la boucle de frame, qui n'est éveillée que lorsque quelque chose s'est
+passé ; un ring vide sort immédiatement de la fonction. Un thread qui se réveillerait chaque seconde pour
+regarder un ring vide serait précisément le résidu que ce problème a passé une phase à traquer.
+
+Sous le seuil de 0,5 % du ticket, donc rien à éteindre. **Clos de notre côté** : ce qui reste n'est pas
+notre code et ne peut pas l'être. À re-mesurer si un jour un pilote GPU différent entre en jeu.

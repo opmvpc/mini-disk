@@ -361,14 +361,32 @@ static void app_run(void) {
         arena_clear(frame_arena);
     }
 
+    // --- the shutdown order (T-073) -----------------------------------------
+    // It is an order, not a list: each step is where it is because the next one
+    // depends on what it leaves behind.
+    //  0. the transfer refuses the close while it still holds a TOC the disc
+    //     does not have - that is the OsEvent_Close branch above, so by this
+    //     line nothing is being burnt any more;
+    //  1. the placement is read while the window still exists, into the prefs;
+    //  2. the device thread is joined: no event can arrive from it after this;
+    //  3. the plan and the preferences are written - the plan through the same
+    //     save job as the autosave, and this is the one place that waits on it;
+    //  4. the pool is stopped and every worker joined: past this line no job of
+    //     ours is alive, the save and the log flush included;
+    //  5. the log ring is emptied by this thread, since no worker is left;
+    //  6. the fonts, the renderer, the GL context, the window, the arenas - and
+    //     the log is closed last of all, after one more flush, so that whatever
+    //     step 6 has to say about itself is in the file too.
     app_save_placement(window);
     app_device_shutdown();
     app_shutdown();
     jobs_shutdown();
+    os_log_flush();
     os_font_shutdown();
     r_shutdown();
     os_gl_shutdown();
     os_window_destroy(window);
     arena_release(frame_arena);
     arena_release(permanent);
+    os_log_shutdown();  // one last flush, then the file is closed
 }

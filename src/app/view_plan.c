@@ -980,7 +980,7 @@ static void app_plan_save_file(b32 pick) {
         scratch_end(scratch);
     }
     if (app.plan_path.size == 0) { return; }
-    if (plan_save(&app.plan, app.plan_path) == PlanFile_Ok) { app.plan.dirty = 0; }
+    if (app_plan_save_to(app.plan_path)) { app.plan.dirty = 0; }  // T-073: off the frame thread
 }
 
 // --- the keyboard (research/02 s8.8) ------------------------------------------------
@@ -1232,7 +1232,7 @@ static void app_plan_header(void) {
                 UI_PrefWidth(ui_px(ui_dp(6.0f), 1.0f))
                 UI_PrefHeight(ui_px(ui_dp(6.0f), 1.0f))
                 UI_CornerRadius(ui_dp(3.0f))
-                UI_BgColor(plan->dirty ? theme->warning : theme->success) {
+                UI_BgColor(app_plan_save_color(theme)) {  // T-073: en cours / a jour / echec
                     UI_Box *dot = ui_build_box(UI_FloatingY | UI_DrawBackground,
                                                str8_lit("###dirty"));
                     ui_tooltip_box(dot, app_str(plan->dirty ? Str_PlanUnsavedHint

@@ -6,11 +6,36 @@
 
 thread_var Arena *tls_scratch[SCRATCH_COUNT];
 
+// P-010: `build.bat bench` used to stop dead with code 3 at a different bench
+// every run, and nothing said why - a silent AssertAlways on a commit. An
+// allocation that fails now says what it asked for, what the OS answered and
+// where the arena stood. It formats into a stack buffer, because the one thing
+// it must not do here is allocate.
+//
+// The recursion guard is not defensive programming: os_debug_print pushes into
+// a scratch arena, so a machine that has genuinely run out of memory would
+// re-enter this function forever without it.
+thread_var b32 tls_arena_reporting;
+
+static void arena_report(const char *what, u64 requested, u64 reserved, u64 committed, u64 pos) {
+    if (tls_arena_reporting) { return; }
+    tls_arena_reporting = 1;
+    u8 buffer[256];
+    os_debug_print(str8f_buf(buffer, sizeof(buffer),
+                               "arena: %s de %llu octet(s) refuse (GetLastError %u) ; "
+                               "reserve %llu, engage %llu, pos %llu\n",
+                               what, requested, os_last_error(), reserved, committed, pos));
+    tls_arena_reporting = 0;
+}
+
 Arena *arena_alloc(u64 reserve_size) {
     u64 reserved = AlignPow2(reserve_size, ARENA_COMMIT_CHUNK);
     u8 *base = (u8 *)os_memory_reserve(reserved);
+    if (base == 0) { arena_report("reserve", reserved, reserved, 0, 0); }
     AssertAlways(base != 0);
-    AssertAlways(os_memory_commit(base, ARENA_COMMIT_CHUNK));
+    b32 first_commit = os_memory_commit(base, ARENA_COMMIT_CHUNK);
+    if (!first_commit) { arena_report("commit", ARENA_COMMIT_CHUNK, reserved, 0, 0); }
+    AssertAlways(first_commit);
     Arena *arena = (Arena *)base;
     arena->reserved = reserved;
     arena->committed = ARENA_COMMIT_CHUNK;
@@ -32,7 +57,10 @@ void *arena_push(Arena *arena, u64 size, u64 align) {
     if (next > arena->committed) {
         u64 target = AlignPow2(next, ARENA_COMMIT_CHUNK);
         if (target > arena->reserved) { target = arena->reserved; }
-        AssertAlways(os_memory_commit((u8 *)arena + arena->committed, target - arena->committed));
+        u64 wanted = target - arena->committed;
+        b32 ok = os_memory_commit((u8 *)arena + arena->committed, wanted);
+        if (!ok) { arena_report("commit", wanted, arena->reserved, arena->committed, arena->pos); }
+        AssertAlways(ok);
         arena->committed = target;
     }
     arena->pos = next;
