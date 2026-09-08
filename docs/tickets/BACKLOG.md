@@ -62,12 +62,12 @@ T-053 bit allocation · T-054 psy + gain control · T-055 LP4 joint stereo · T-
 
 | Ticket | Titre | Statut |
 |--------|-------|--------|
-| [T-070](T-070-regime-de-taille.md) | Régime de taille : mesure par module (`/MAP`), `/O1` sur le froid, retrait de `/INCLUDE`, chaînes dédupliquées, objectif < 500 KB | doing |
-| [T-071](T-071-coherence-ui-et-defauts.md) | Cohérence UI : état unique du panneau Disque, durée du plan en équivalent disque, hachures diagonales, liste Disque défilable, P-014, petits défauts | doing |
-| [T-072](T-072-preferences-theme-clair-i18n-raccourcis.md) | Vue Préférences, thème clair réel (contrastes testés), i18n complète avec audit, table de raccourcis + aide clavier | doing |
-| [T-073](T-073-robustesse-base-et-io.md) | Robustesse : P-010 (arènes/banc/pool), P-009 (sauvegarde hors frame), journal d'erreurs, P-005 re-mesuré, fermeture propre | doing |
+| [T-070](T-070-regime-de-taille.md) | Régime de taille : mesure par module (`/MAP`), `/O1` sur le froid, retrait de `/INCLUDE`, chaînes dédupliquées, objectif < 500 KB | fait |
+| [T-071](T-071-coherence-ui-et-defauts.md) | Cohérence UI : état unique du panneau Disque, durée du plan en équivalent disque, hachures diagonales, liste Disque défilable, P-014, petits défauts | fait |
+| [T-072](T-072-preferences-theme-clair-i18n-raccourcis.md) | Vue Préférences, thème clair réel (contrastes testés), i18n complète avec audit, table de raccourcis + aide clavier | fait |
+| [T-073](T-073-robustesse-base-et-io.md) | Robustesse : P-010 (arènes/banc/pool), P-009 (sauvegarde hors frame), journal d'erreurs, P-005 re-mesuré, fermeture propre | fait |
 | T-074 | Barre de titre custom (ex T-065) et IDropTarget vérifié (ex T-066) — après T-072 | todo |
-| [T-075](T-075-polish-visuel-espacements.md) | Polish visuel : rangées de boutons (hauteur, gaps, repli), panneaux rognés, textes tronqués, bulle — après T-071 | todo |
+| [T-075](T-075-polish-visuel-espacements.md) | Polish visuel : rangées de boutons (hauteur, gaps, repli), panneaux rognés, textes tronqués, bulle — après T-071 | fait |
 
 ## Phase 8 — Portabilité
 T-070 `platform/linux` · T-071 `platform/macos`.

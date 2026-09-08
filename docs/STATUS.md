@@ -2,7 +2,7 @@
 
 Dernière mise à jour : 2026-09-08
 
-## Phase actuelle : 7 · Polish — T-070 (taille), T-071 (cohérence UI), T-072 (prefs/thème clair/i18n), T-073 (robustesse) en parallèle
+## Phase actuelle : 7 · Polish — T-070, T-071, T-072, T-073, T-075 mergés dans main ; reste T-074 (barre de titre custom, IDropTarget) et le tag `v0.7.0-phase7`
 ## Phase actuelle (historique) : 3 + 5 en parallèle — T-020, T-021, T-040, T-041 mergés dans main ; T-042 fait et **validé sur le vrai MZ-N505** (le pilote WinUSB est lié, P-001 levé), T-022 en cours
 
 ### Fait en phase 7
